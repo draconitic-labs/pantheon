@@ -104,18 +104,13 @@ pub struct BuildIn<'a> {
 
 // ------------------------------------------------------------ object model
 
-/// Deterministic local basis for an exoplanet system: the sky plane at the
-/// host (perpendicular to the Sun→host sight line). Orbit orientation is
-/// unknown for most systems; this choice is marked illustrative in cards.
-pub fn exo_plane(u: &Universe, ei: usize) -> (DVec3, DVec3) {
-    let n = u.exos[ei].pos.normalize_or_zero();
-    let mut e1 = n.cross(DVec3::Z);
-    if e1.length_squared() < 1e-6 {
-        e1 = n.cross(DVec3::Y);
-    }
-    let e1 = e1.normalize();
-    let e2 = n.cross(e1);
-    (e1, e2)
+/// Deterministic local basis for an exoplanet system: the ecliptic plane at
+/// the host, so systems read face-on in the top-down atlas projection. True
+/// orbital orientation is unknown for most systems; this convention is marked
+/// illustrative in cards and will be replaced when node/inclination data or a
+/// real frame graph lands.
+pub fn exo_plane(_u: &Universe, _ei: usize) -> (DVec3, DVec3) {
+    (DVec3::X, DVec3::Y)
 }
 
 /// World-space offset of an exoplanet from its host (AUDIT FND-005: planets
