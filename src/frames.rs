@@ -90,9 +90,18 @@ pub struct CamAnim {
     pub bump: f64, // extra log10-mpp lift at midpoint for long lateral hops
 }
 
+/// FRAMEGRAPH-003: the camera is attached to a frame. `center` is a LOCAL
+/// offset from `frame_origin` (root coords of the attached frame's origin).
+/// With the default root attachment (`frame_origin == 0`) everything behaves
+/// exactly as before; inside an exoplanet pocket the origin rebases to the
+/// host, so pan/zoom precision is that of local ~AU-scale numbers instead of
+/// 1e17 m absolutes (which quantize at ~80 m).
 #[derive(Clone)]
 pub struct Camera {
+    /// LOCAL center within the attached frame
     pub center: DVec3,
+    /// root-frame origin of the attached frame
+    pub frame_origin: DVec3,
     pub mpp: f64,
     pub tilt: f64,
     pub anim: Option<CamAnim>,
@@ -103,25 +112,52 @@ pub const MPP_MAX: f64 = 2.0e22; // ~ 1e25 m across a 1600 px window
 
 impl Camera {
     pub fn new() -> Self {
-        Self { center: DVec3::ZERO, mpp: 2.0e9, tilt: 0.0, anim: None }
+        Self {
+            center: DVec3::ZERO,
+            frame_origin: DVec3::ZERO,
+            mpp: 2.0e9,
+            tilt: 0.0,
+            anim: None,
+        }
+    }
+
+    /// Absolute (root-frame) camera center, for coarse logic — distance
+    /// checks, history, serialization. Interaction math stays local.
+    pub fn center_root(&self) -> DVec3 {
+        self.frame_origin + self.center
+    }
+
+    /// Attach to a new frame origin, preserving the absolute viewpoint.
+    /// A one-time ~ulp(1e17) rounding is accepted here; all *subsequent*
+    /// interaction happens in local coordinates at full precision.
+    pub fn rebase(&mut self, new_origin: DVec3) {
+        let delta = self.frame_origin - new_origin;
+        self.center += delta;
+        if let Some(a) = &mut self.anim {
+            a.c0 += delta;
+            a.c1 += delta;
+        }
+        self.frame_origin = new_origin;
     }
 
     pub fn log_width(&self, screen_w: f64) -> f64 {
         (self.mpp * screen_w).log10()
     }
 
-    /// Fly to a target; `screen_w` px used to decide the mid-zoom-out bump.
+    /// Fly to an absolute (root-frame) target; `screen_w` px decides the
+    /// mid-zoom-out bump. The animation itself runs in local coordinates.
     pub fn fly_to(&mut self, center: DVec3, mpp: f64, screen_w: f64, dur: f64) {
+        let target_local = center - self.frame_origin;
         let lm0 = self.mpp.log10();
         let lm1 = mpp.clamp(MPP_MIN, MPP_MAX).log10();
-        let dist = (center - self.center).length();
+        let dist = (target_local - self.center).length();
         let need = (dist / (0.30 * screen_w)).max(1e-30).log10();
         let bump = (need - lm0.max(lm1)).max(0.0);
         self.anim = Some(CamAnim {
             t: 0.0,
             dur: dur.max(0.05),
             c0: self.center,
-            c1: center,
+            c1: target_local,
             lm0,
             lm1,
             bump,
@@ -147,12 +183,15 @@ impl Camera {
     }
 }
 
-/// A resolved projection for one frame: world (root, m) → screen px.
+/// A resolved projection: world (root, m) or frame-local (m) → screen px.
 pub struct Proj {
     pub right: DVec3,
     pub up: DVec3,
     pub out: DVec3,
+    /// LOCAL camera center within the attached frame
     pub center: DVec3,
+    /// root origin of the attached frame
+    pub origin: DVec3,
     pub mpp: f64,
     pub w: f64,
     pub h: f64,
@@ -181,11 +220,21 @@ impl Proj {
             up = rot * up;
             out = rot * out;
         }
-        Self { right, up, out, center: cam.center, mpp: cam.mpp, w, h }
+        Self {
+            right,
+            up,
+            out,
+            center: cam.center,
+            origin: cam.frame_origin,
+            mpp: cam.mpp,
+            w,
+            h,
+        }
     }
 
     pub fn screen(&self, world: DVec3) -> [f64; 3] {
-        let rel = world - self.center;
+        // subtract the frame origin first: near content cancels cleanly
+        let rel = (world - self.origin) - self.center;
         let vx = rel.dot(self.right);
         let vy = rel.dot(self.up);
         let vz = rel.dot(self.out);
@@ -197,8 +246,29 @@ impl Proj {
         [s[0] as f32, s[1] as f32]
     }
 
-    /// World position of a screen point on the camera plane (depth 0).
+    /// Frame-local position → screen px at FULL precision (never touches
+    /// root-magnitude numbers). Layers living in the camera's frame use this.
+    pub fn px_local(&self, local: DVec3) -> [f32; 2] {
+        let rel = local - self.center;
+        let vx = rel.dot(self.right);
+        let vy = rel.dot(self.up);
+        [
+            (self.w * 0.5 + vx / self.mpp) as f32,
+            (self.h * 0.5 - vy / self.mpp) as f32,
+        ]
+    }
+
+    pub fn screen_local_z(&self, local: DVec3) -> f64 {
+        (local - self.center).dot(self.out)
+    }
+
+    /// Root-frame world position of a screen point on the camera plane.
     pub fn unproject(&self, sx: f64, sy: f64) -> DVec3 {
+        self.origin + self.unproject_local(sx, sy)
+    }
+
+    /// Frame-local position of a screen point (full local precision).
+    pub fn unproject_local(&self, sx: f64, sy: f64) -> DVec3 {
         self.center
             + self.right * ((sx - self.w * 0.5) * self.mpp)
             + self.up * ((self.h * 0.5 - sy) * self.mpp)
@@ -284,6 +354,30 @@ mod tests {
         let v = radec_to_ecl(192.859_508, 27.128_336, 1.0);
         let (_, lat) = ecl_lonlat(v);
         assert!((lat - 29.81).abs() < 0.2, "lat = {lat}");
+    }
+
+    #[test]
+    fn local_frame_projection_survives_cosmic_origins() {
+        // FRAMEGRAPH-003: camera attached to a frame ~12 pc from the root.
+        // Local-path projection must keep centimeter precision where a
+        // root-space subtraction quantizes at ~2^-52 · 1e17 ≈ 30 m.
+        let mut cam = Camera::new();
+        cam.frame_origin = DVec3::new(3.7e17, -1.2e17, 5.0e16);
+        cam.center = DVec3::new(1.0e11, 2.0e10, 0.0);
+        cam.mpp = 0.01; // 1 cm per pixel
+        let gal = galactic_frame();
+        let proj = Proj::new(&cam, 1600.0, 950.0, &gal);
+        let p = cam.center + DVec3::new(0.05, 0.0, 0.0); // 5 cm to the right
+        let px = proj.px_local(p);
+        assert!((px[0] as f64 - 805.0).abs() < 1e-3, "px = {}", px[0]);
+        // absolute round trip stays consistent at coarse precision
+        let root = proj.unproject(800.0, 475.0);
+        assert!((root - cam.center_root()).length() < 100.0);
+        // rebase preserves the absolute viewpoint
+        let before = cam.center_root();
+        cam.rebase(DVec3::ZERO);
+        assert!((cam.center_root() - before).length() < 100.0);
+        assert!(cam.frame_origin.length() < 1e-9);
     }
 
     #[test]

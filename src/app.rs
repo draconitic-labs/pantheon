@@ -138,7 +138,7 @@ impl Pantheon {
 
     /// Remember the current viewpoint before a jump (dive, ladder, home).
     fn push_history(&mut self) {
-        self.history.push((self.cam.center, self.cam.mpp, self.cam.tilt));
+        self.history.push((self.cam.center_root(), self.cam.mpp, self.cam.tilt));
         if self.history.len() > 32 {
             self.history.remove(0);
         }
@@ -205,8 +205,18 @@ impl Pantheon {
         if self.cam.anim.is_none() {
             if let Some((obj, off)) = self.follow {
                 let p = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref());
-                self.cam.center = p + off;
+                self.cam.center = (p + off) - self.cam.frame_origin;
             }
+        }
+        // camera frame attachment (FRAMEGRAPH-003): inside an exoplanet
+        // pocket the camera rebases to the host's frame so local precision
+        // is AU-scale, not 1e17-scale
+        let want_origin = self
+            .scene_exo
+            .map(|ei| self.u.exos[ei].pos)
+            .unwrap_or(DVec3::ZERO);
+        if (want_origin - self.cam.frame_origin).length() > 1e-3 {
+            self.cam.rebase(want_origin);
         }
 
         // N-body island stepping
@@ -252,7 +262,7 @@ impl Pantheon {
         // exoplanet pocket persists until the camera actually leaves it
         if let Some(ei) = self.scene_exo {
             let lw = self.cam.log_width(1600.0);
-            let d = (self.cam.center - self.u.exos[ei].pos).length();
+            let d = (self.cam.center_root() - self.u.exos[ei].pos).length();
             if lw > 15.8 || d > crate::frames::PC {
                 self.scene_exo = None;
             }
@@ -447,7 +457,8 @@ impl Pantheon {
             if let Some(p) = pointer {
                 let sx = (p.x - rect.left()) as f64;
                 let sy = (p.y - rect.top()) as f64;
-                let mut world = proj.unproject(sx, sy);
+                // local anchor math: full precision inside attached frames
+                let mut world = proj.unproject_local(sx, sy);
                 // guided zoom ("zoom gravity"): when diving in, the anchor
                 // leans toward the nearest point of interest near the cursor,
                 // so repeated scrolling converges on it instead of demanding
@@ -463,7 +474,8 @@ impl Pantheon {
                         }
                     }
                     if let Some((d, obj)) = best {
-                        let poi = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref());
+                        let poi = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref())
+                            - proj.origin;
                         // stronger pull the closer the cursor already is
                         let k = (0.45 * (1.0 - (d as f64 / 150.0))).clamp(0.0, 0.45);
                         world = world + (poi - world) * k;
@@ -583,7 +595,7 @@ impl Pantheon {
     fn sync_follow(&mut self) {
         if let Some((obj, _)) = self.follow {
             let p = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref());
-            let off = self.cam.center - p;
+            let off = self.cam.center_root() - p;
             // release once the subject is far outside the view
             if off.length() > 12.0 * self.cam.mpp * 1600.0 {
                 self.follow = None;
@@ -1034,7 +1046,7 @@ impl Pantheon {
                             let lwv = (lo + (r.bottom() - pos.y) / r.height() * (hi - lo)) as f64;
                             let mpp = 10f64.powf(lwv) / rect.width() as f64;
                             let anchor = if lwv < 16.0 {
-                                self.cam.center // stay with the current subject
+                                self.cam.center_root() // stay with the current subject
                             } else if lwv < 20.0 {
                                 DVec3::ZERO // the Sun anchors stellar scales
                             } else if lwv < 22.4 {
@@ -1176,8 +1188,9 @@ impl Pantheon {
                                 }
                                 _ => None,
                             };
+                            let c = self.cam.center_root();
                             self.capture.push(PathKey {
-                                center: [self.cam.center.x, self.cam.center.y, self.cam.center.z],
+                                center: [c.x, c.y, c.z],
                                 mpp: self.cam.mpp,
                                 tilt: self.cam.tilt,
                                 jd: self.clock.jd,

@@ -1350,7 +1350,7 @@ fn exo_active_system(inp: &BuildIn) -> Option<usize> {
         return None;
     }
     // only while the camera is actually near the host
-    let d = (inp.cam.center - inp.u.exos[ei].pos).length();
+    let d = (inp.cam.center_root() - inp.u.exos[ei].pos).length();
     if d > 0.5 * PC {
         return None;
     }
@@ -1361,7 +1361,25 @@ fn exo_layer(inp: &BuildIn, proj: &Proj, lw: f64, ei: usize, dl: &mut DrawList, 
     let (u, cam, jd, truth) = (inp.u, inp.cam, inp.clock.jd, inp.modes.truth);
     let s = &u.exos[ei];
     let host = s.pos;
-    let host_px = proj.px(host);
+    // FRAMEGRAPH-003: when the camera is attached to this host's frame, all
+    // pocket geometry projects through frame-local coordinates — deep zoom
+    // precision is AU-scale f64, never 1e17-scale
+    let framed = (inp.cam.frame_origin - host).length() < 1.0;
+    let to_px = |local: DVec3| -> [f32; 2] {
+        if framed {
+            proj.px_local(local)
+        } else {
+            proj.px(host + local)
+        }
+    };
+    let local_z = |local: DVec3| -> f64 {
+        if framed {
+            proj.screen_local_z(local)
+        } else {
+            proj.screen(host + local)[2]
+        }
+    };
+    let host_px = to_px(DVec3::ZERO);
     let w = band(lw, 6.0, 15.2, 0.5);
 
     // schematic radius remapping for System View
@@ -1402,7 +1420,7 @@ fn exo_layer(inp: &BuildIn, proj: &Proj, lw: f64, ei: usize, dl: &mut DrawList, 
     // gets an explicitly schematic glyph (AUDIT FND-020: never silently render
     // a default 1 R☉ as if measured).
     let rgb = s.st_teff.map(crate::data::teff_rgb).unwrap_or([1.0, 0.85, 0.6]);
-    let host_z = zmap(proj.screen(host)[2], cam.mpp * inp.w);
+    let host_z = zmap(local_z(DVec3::ZERO), cam.mpp * inp.w);
     let r_px = match s.st_rad {
         Some(rad) => {
             let r_px = (rad * R_SUN_M / cam.mpp) as f32;
@@ -1458,7 +1476,7 @@ fn exo_layer(inp: &BuildIn, proj: &Proj, lw: f64, ei: usize, dl: &mut DrawList, 
         let pts: Vec<[f32; 2]> = (0..n)
             .map(|i| {
                 let ea = i as f64 / n as f64 * std::f64::consts::TAU;
-                proj.px(host + e1 * (a_m * (ea.cos() - ecc)) + e2 * (b_m * ea.sin()))
+                to_px(e1 * (a_m * (ea.cos() - ecc)) + e2 * (b_m * ea.sin()))
             })
             .collect();
         let mut st = StrokeStyle::new(
@@ -1473,13 +1491,12 @@ fn exo_layer(inp: &BuildIn, proj: &Proj, lw: f64, ei: usize, dl: &mut DrawList, 
 
         // marker: same conic, schematic-scaled when System View is active
         let rel = exo_planet_rel(u, ei, k, jd).unwrap_or(DVec3::ZERO) * (a_draw / a_au);
-        let world = host + rel;
-        let ppx = proj.px(world);
+        let ppx = to_px(rel);
         let pr_px = p.rade.map(|r| (r * R_EARTH_M / cam.mpp) as f32).unwrap_or(0.0);
         let rocky = p.rade.map(|r| r < 1.8).unwrap_or(true);
         if pr_px > 1.8 {
             let sun_dir = view_dir(proj, (-rel).normalize_or_zero());
-            let zd = zmap(proj.screen(world)[2], cam.mpp * inp.w);
+            let zd = zmap(local_z(rel), cam.mpp * inp.w);
             dl.disc_z.push(zd);
             dl.discs.push(DiscInst {
                 center: ppx,
