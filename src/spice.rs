@@ -17,6 +17,111 @@ use glam::DVec3;
 
 pub const J2000_JD: f64 = 2_451_545.0;
 
+// ------------------------------------------------------------------ mmap
+
+/// Read-only memory mapping (Windows kernel32 FFI, no dependencies): the
+/// kernel set is ~2 GB on disk — pages fault in on demand instead of being
+/// read into RAM at startup.
+#[cfg(windows)]
+mod mapped {
+    use std::os::windows::io::AsRawHandle;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn CreateFileMappingW(
+            file: isize,
+            attrs: *const core::ffi::c_void,
+            protect: u32,
+            size_hi: u32,
+            size_lo: u32,
+            name: *const u16,
+        ) -> isize;
+        fn MapViewOfFile(map: isize, access: u32, off_hi: u32, off_lo: u32, size: usize)
+            -> *const u8;
+        fn UnmapViewOfFile(ptr: *const u8) -> i32;
+        fn CloseHandle(h: isize) -> i32;
+    }
+    const PAGE_READONLY: u32 = 0x02;
+    const FILE_MAP_READ: u32 = 0x0004;
+
+    pub struct Mmap {
+        ptr: *const u8,
+        len: usize,
+        map: isize,
+    }
+    // read-only view over an immutable file
+    unsafe impl Send for Mmap {}
+    unsafe impl Sync for Mmap {}
+
+    impl Mmap {
+        pub fn open(path: &std::path::Path) -> std::io::Result<Mmap> {
+            let f = std::fs::File::open(path)?;
+            let len = f.metadata()?.len() as usize;
+            if len == 0 {
+                return Err(std::io::Error::other("empty file"));
+            }
+            unsafe {
+                let map = CreateFileMappingW(
+                    f.as_raw_handle() as isize,
+                    std::ptr::null(),
+                    PAGE_READONLY,
+                    0,
+                    0,
+                    std::ptr::null(),
+                );
+                if map == 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                let ptr = MapViewOfFile(map, FILE_MAP_READ, 0, 0, 0);
+                if ptr.is_null() {
+                    CloseHandle(map);
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(Mmap { ptr, len, map })
+            }
+            // the File handle may close: the mapping keeps its own reference
+        }
+        pub fn as_slice(&self) -> &[u8] {
+            unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+        }
+    }
+
+    impl Drop for Mmap {
+        fn drop(&mut self) {
+            unsafe {
+                UnmapViewOfFile(self.ptr);
+                CloseHandle(self.map);
+            }
+        }
+    }
+}
+
+/// Kernel bytes: memory-mapped on Windows, heap-read elsewhere.
+enum Buffer {
+    Heap(Vec<u8>),
+    #[cfg(windows)]
+    Map(mapped::Mmap),
+}
+
+impl Buffer {
+    fn open(path: &Path) -> Result<Buffer, String> {
+        #[cfg(windows)]
+        {
+            if let Ok(m) = mapped::Mmap::open(path) {
+                return Ok(Buffer::Map(m));
+            }
+        }
+        std::fs::read(path).map(Buffer::Heap).map_err(|e| format!("read {}: {e}", path.display()))
+    }
+    fn as_slice(&self) -> &[u8] {
+        match self {
+            Buffer::Heap(v) => v,
+            #[cfg(windows)]
+            Buffer::Map(m) => m.as_slice(),
+        }
+    }
+}
+
 // ------------------------------------------------------------------ SPK/DAF
 
 struct Segment {
@@ -33,7 +138,7 @@ struct Segment {
 }
 
 pub struct SpkFile {
-    buf: Vec<u8>,
+    buf: Buffer,
     segments: Vec<Segment>,
 }
 
@@ -48,7 +153,8 @@ fn i32_at_byte(buf: &[u8], off: usize) -> i32 {
 
 impl SpkFile {
     pub fn load(path: &Path) -> Result<SpkFile, String> {
-        let buf = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        let buffer = Buffer::open(path)?;
+        let buf = buffer.as_slice();
         if buf.len() < 1024 || &buf[0..8] != b"DAF/SPK " {
             return Err("not a DAF/SPK file".into());
         }
@@ -72,20 +178,20 @@ impl SpkFile {
                 let s = base + 24 + k * ss * 8;
                 let t0 = f64::from_le_bytes(buf[s..s + 8].try_into().unwrap());
                 let t1 = f64::from_le_bytes(buf[s + 8..s + 16].try_into().unwrap());
-                let target = i32_at_byte(&buf, s + 16);
-                let center = i32_at_byte(&buf, s + 20);
-                let _frame = i32_at_byte(&buf, s + 24);
-                let dtype = i32_at_byte(&buf, s + 28);
-                let begin_word = i32_at_byte(&buf, s + 32) as usize;
-                let end_word = i32_at_byte(&buf, s + 36) as usize;
+                let target = i32_at_byte(buf, s + 16);
+                let center = i32_at_byte(buf, s + 20);
+                let _frame = i32_at_byte(buf, s + 24);
+                let dtype = i32_at_byte(buf, s + 28);
+                let begin_word = i32_at_byte(buf, s + 32) as usize;
+                let end_word = i32_at_byte(buf, s + 36) as usize;
                 if dtype != 2 && dtype != 3 {
                     continue; // planetary DE kernels are Type 2/3
                 }
                 // segment trailer: INIT, INTLEN, RSIZE, N
-                let init = f64_at(&buf, end_word - 3);
-                let intlen = f64_at(&buf, end_word - 2);
-                let rsize = f64_at(&buf, end_word - 1) as usize;
-                let n = f64_at(&buf, end_word) as usize;
+                let init = f64_at(buf, end_word - 3);
+                let intlen = f64_at(buf, end_word - 2);
+                let rsize = f64_at(buf, end_word - 1) as usize;
+                let n = f64_at(buf, end_word) as usize;
                 segments.push(Segment {
                     target,
                     center,
@@ -104,7 +210,7 @@ impl SpkFile {
         if segments.is_empty() {
             return Err("no Type 2/3 segments found".into());
         }
-        Ok(SpkFile { buf, segments })
+        Ok(SpkFile { buf: buffer, segments })
     }
 
     pub fn segment_count(&self) -> usize {
@@ -125,10 +231,11 @@ impl SpkFile {
     /// Position of `target` relative to `center` (its DAF center) in km,
     /// J2000 equatorial frame — one segment, Chebyshev evaluated.
     fn eval_segment(&self, seg: &Segment, et: f64) -> DVec3 {
+        let buf = self.buf.as_slice();
         let idx = (((et - seg.init) / seg.intlen) as usize).min(seg.n - 1);
         let rec = seg.begin_word + idx * seg.rsize;
-        let mid = f64_at(&self.buf, rec);
-        let radius = f64_at(&self.buf, rec + 1);
+        let mid = f64_at(buf, rec);
+        let radius = f64_at(buf, rec + 1);
         let sets = if seg.dtype == 2 { 3 } else { 6 };
         let ncoef = (seg.rsize - 2) / sets;
         let tau = ((et - mid) / radius).clamp(-1.0, 1.0);
@@ -137,13 +244,13 @@ impl SpkFile {
             let base = rec + 2 + c * ncoef;
             // Chebyshev recurrence
             let (mut t0, mut t1) = (1.0f64, tau);
-            let mut acc = f64_at(&self.buf, base);
+            let mut acc = f64_at(buf, base);
             if ncoef > 1 {
-                acc += f64_at(&self.buf, base + 1) * t1;
+                acc += f64_at(buf, base + 1) * t1;
             }
             for k in 2..ncoef {
                 let t2 = 2.0 * tau * t1 - t0;
-                acc += f64_at(&self.buf, base + k) * t2;
+                acc += f64_at(buf, base + k) * t2;
                 t0 = t1;
                 t1 = t2;
             }
@@ -383,26 +490,33 @@ mod tests {
         assert!(s.helio_ecl_m(399, J2000 - 220_000.0).is_none());
     }
 
-    /// Satellite-kernel gate: jup365 must reproduce an independently fetched
-    /// jovicentric Io arc from Horizons. Skips when the kernel isn't present.
+    /// Satellite-kernel gates: each loaded kernel must reproduce an
+    /// independently fetched planetocentric Horizons arc. Skips per-kernel
+    /// when absent.
     #[test]
-    fn jup365_matches_horizons_io() {
+    fn satellite_kernels_match_horizons() {
         let Some(s) = spice() else { return };
-        if !s.has(501, J2000 + 9_650.0) {
-            eprintln!("jup365 not loaded — satellite gate skipped");
-            return;
-        }
         let root = crate::data::asset_root();
-        let track = crate::data::load_horizons_pub(
-            &root.join("data/spacecraft/io_gate.txt"),
-            "Jupiter",
-        )
-        .expect("io gate arc");
-        for k in [0usize, 7, 19] {
-            let (jd, rel, _) = track.samples[k];
-            let spk = s.rel_ecl_m(501, 599, jd).expect("io state");
-            let err_km = (spk - rel).length() / 1e3;
-            assert!(err_km < 10.0, "io sample {k}: {err_km} km");
+        for (moon_id, planet_id, file, center) in [
+            (501, 599, "io_gate.txt", "Jupiter"),
+            (606, 699, "titan_gate.txt", "Saturn"),
+        ] {
+            if !s.has(moon_id, J2000 + 9_650.0) {
+                eprintln!("kernel for {moon_id} not loaded — gate skipped");
+                continue;
+            }
+            let track = crate::data::load_horizons_pub(
+                &root.join("data/spacecraft").join(file),
+                center,
+            )
+            .unwrap_or_else(|e| panic!("{file}: {e}"));
+            let last = track.samples.len() - 1;
+            for k in [0usize, last / 2, last] {
+                let (jd, rel, _) = track.samples[k];
+                let spk = s.rel_ecl_m(moon_id, planet_id, jd).expect("state");
+                let err_km = (spk - rel).length() / 1e3;
+                assert!(err_km < 10.0, "{file} sample {k}: {err_km} km");
+            }
         }
     }
 }

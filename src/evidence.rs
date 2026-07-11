@@ -35,6 +35,7 @@ pub enum Ev {
     MoonPhase,
     ProperMotion,
     WebProcedural,
+    GalaxyFog,
 }
 
 pub struct EvidenceRec {
@@ -240,6 +241,14 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "from Gaia PM + RV, epoch J2016",
             frame: "ICRS → ecliptic",
             note: "no perspective acceleration or binary motion",
+            fetched: false,
+        },
+        Ev::GalaxyFog => EvidenceRec {
+            class: Procedural,
+            source: "procedural galactic fog, arms, and stellar sparkle",
+            citation: "log-spiral arm model + fBm; pitch/scale stylized",
+            frame: "galactocentric plane (Sgr A* position measured)",
+            note: "an artistic engraving of the Galaxy, not survey data",
             fetched: false,
         },
         Ev::WebProcedural => EvidenceRec {

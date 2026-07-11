@@ -87,6 +87,16 @@ pub struct FrameOut {
     pub picks: Vec<Pickable>,
     pub band_name: String,
     pub scale_text: String,
+    /// TRUTH-001: evidence actually drawn this frame (layer-granular) —
+    /// the truth legend is generated from this, never from a static list
+    pub evidence: Vec<(crate::evidence::Ev, &'static str)>,
+}
+
+/// Record that a layer drew content backed by this evidence.
+fn seen(out: &mut FrameOut, e: crate::evidence::Ev, what: &'static str) {
+    if !out.evidence.iter().any(|(a, b)| *a == e && *b == what) {
+        out.evidence.push((e, what));
+    }
 }
 
 pub struct BuildIn<'a> {
@@ -320,6 +330,7 @@ pub fn build(inp: &BuildIn, dl: &mut DrawList) -> FrameOut {
             fmt_len(cam.mpp),
             fmt_len(cam.mpp * inp.w)
         ),
+        evidence: Vec::new(),
     };
     out.uni.size = [inp.w as f32, inp.h as f32, inp.anim_t as f32, 0.0];
     // deep field never fully dies (real sky is full of stars behind planets);
@@ -497,6 +508,16 @@ fn solar_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
     }
     let jd_ok = (1800.0..=2050.0).contains(&jd_year(jd));
     let orbit_prov = if jd_ok { Prov::Modeled } else { Prov::Inferred };
+    use crate::evidence::Ev;
+    seen(
+        out,
+        if sim::eph_is_spice(jd) { Ev::De440 } else { Ev::ApproxElements },
+        "planet states",
+    );
+    seen(out, Ev::ApproxElements, "orbit engravings");
+    if inp.modes.trails && lw < 13.8 {
+        seen(out, Ev::HorizonsVectors, "ephemeris trails");
+    }
 
     // Sun
     let sun_px = proj.px(DVec3::ZERO);
@@ -599,7 +620,7 @@ fn solar_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             continue;
         }
         if r_px > 1.7 {
-            draw_planet_disc(inp, proj, i, pos, px, r_px, dl);
+            draw_planet_disc(inp, proj, i, pos, px, r_px, dl, out);
         } else {
             let s = (2.2 + 0.9 * (1.0 - (i as f32 / 9.0))).min(3.2);
             let c = ink(p.color, 0.95, truth, Prov::Modeled);
@@ -632,6 +653,7 @@ fn draw_planet_disc(
     px: [f32; 2],
     r_px: f32,
     dl: &mut DrawList,
+    out: &mut FrameOut,
 ) {
     let p = &PLANETS[i];
     let jd = inp.clock.jd;
@@ -689,7 +711,7 @@ fn draw_planet_disc(
     }
     // Earth: vector coastlines + graticule (measured, Natural Earth)
     if p.kind == 4.0 && r_px > 26.0 {
-        earth_vector_layer(inp, proj, pos, r_px, dl);
+        earth_vector_layer(inp, proj, pos, r_px, dl, out);
     }
 }
 
@@ -738,7 +760,15 @@ fn draw_rings(
     }
 }
 
-fn earth_vector_layer(inp: &BuildIn, proj: &Proj, pos: DVec3, r_px: f32, dl: &mut DrawList) {
+fn earth_vector_layer(
+    inp: &BuildIn,
+    proj: &Proj,
+    pos: DVec3,
+    r_px: f32,
+    dl: &mut DrawList,
+    out: &mut FrameOut,
+) {
+    seen(out, crate::evidence::Ev::Coastlines, "Earth coastlines");
     dl.set_over(true);
     let jd = inp.clock.jd;
     let truth = inp.modes.truth;
@@ -798,6 +828,7 @@ fn earth_vector_layer(inp: &BuildIn, proj: &Proj, pos: DVec3, r_px: f32, dl: &mu
     // S5: settlement lights on the night hemisphere (land mask measured,
     // placement illustrative), fading in across the terminator
     if r_px > 60.0 && !inp.u.night_lights.is_empty() {
+        seen(out, crate::evidence::Ev::LandLights, "night lights");
         let zd = zmap(proj.screen(pos)[2], inp.cam.mpp * inp.w) - 0.0008;
         let sun = (-pos).normalize_or_zero();
         let scale = (r_px / 600.0).clamp(0.6, 1.6);
@@ -824,6 +855,8 @@ fn moons_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
     if lw > 11.4 {
         return;
     }
+    let mut any_spice = false;
+    let mut any_mean = false;
     for mi in 0..MOONS.len() {
         let m = &MOONS[mi];
         let a_px = (m.a_km * 1e3 / cam.mpp) as f32;
@@ -838,6 +871,11 @@ fn moons_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
         let ppx = proj.px(ppos);
         if !on_screen(ppx, inp.w, inp.h, a_px + 200.0) {
             continue;
+        }
+        if sim::moon_is_spice(mi, jd) {
+            any_spice = true;
+        } else {
+            any_mean = true;
         }
         let mpos = if let Some(isl) = inp.island {
             obj_pos(u, ObjectRef::Moon(mi), jd, Some(isl))
@@ -932,6 +970,12 @@ fn moons_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             });
         }
     }
+    if any_spice {
+        seen(out, crate::evidence::Ev::SatelliteSpk, "moon states");
+    }
+    if any_mean {
+        seen(out, crate::evidence::Ev::MoonMeanElements, "moon states (no kernel)");
+    }
 }
 
 // ------------------------------------------------------- heliosphere layer
@@ -942,6 +986,7 @@ fn heliosphere_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out
     if w <= 0.01 {
         return;
     }
+    seen(out, crate::evidence::Ev::GlyphIllustrative, "heliosphere engravings");
     let sun_px = proj.px(DVec3::ZERO);
     // Kuiper belt stipple 39..48 AU
     let kw = band(lw, 12.2, 14.9, 0.5);
@@ -1017,6 +1062,7 @@ fn craft_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
     if w <= 0.01 {
         return;
     }
+    seen(out, crate::evidence::Ev::HorizonsVectors, "spacecraft trajectories");
     for (ci, c) in u.craft.iter().enumerate() {
         let (jd0, jd1) = c.track.span();
         if inp.modes.trails {
@@ -1079,6 +1125,7 @@ fn stars_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
     if w <= 0.005 {
         return;
     }
+    seen(out, crate::evidence::Ev::GaiaDr3, "star field");
     let margin = 24.0f32;
     for (si, s) in u.stars.iter().enumerate() {
         let pos = s.pos_at(inp.clock.jd); // one epoch-aware provider (FND-014)
@@ -1134,6 +1181,7 @@ fn stars_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
     // multi-planet systems first, then proximity to the view center
     let pw = band(lw, 15.6, 18.8, 0.6);
     if pw > 0.02 {
+        seen(out, crate::evidence::Ev::ExoArchive, "exoplanet portals");
         let (cx, cy) = (inp.w as f32 * 0.5, inp.h as f32 * 0.5);
         let mut cands: Vec<(f32, usize, [f32; 2])> = Vec::new();
         for (ei, e) in u.exos.iter().enumerate() {
@@ -1177,6 +1225,7 @@ fn galaxy_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mu
     if w <= 0.01 {
         return;
     }
+    seen(out, crate::evidence::Ev::GalaxyFog, "galactic fog & arms");
     let gc_px = proj.px(u.gal.center);
     // arm centerline engravings (procedural, matching the fog)
     let pitch = 0.2217f64;
@@ -1276,6 +1325,8 @@ fn localgroup_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out:
     if w <= 0.02 {
         return;
     }
+    seen(out, crate::evidence::Ev::CompiledCatalog, "Local Group positions");
+    seen(out, crate::evidence::Ev::GlyphIllustrative, "galaxy glyphs");
     for (gi, g) in u.galaxies.iter().enumerate() {
         // nearby satellites belong to the galaxy band's own fade window too
         let gw = if g.dist_kpc <= 500.0 { w } else { band(lw, 21.4, 24.6, 0.6) };
@@ -1335,6 +1386,8 @@ fn cosmic_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mu
     if w <= 0.02 {
         return;
     }
+    seen(out, crate::evidence::Ev::CompiledCatalog, "cluster catalog");
+    seen(out, crate::evidence::Ev::WebProcedural, "filament field");
     for (ni, n) in u.nodes.iter().enumerate() {
         let px = proj.px(n.pos);
         if !on_screen(px, inp.w, inp.h, 60.0) {
@@ -1406,6 +1459,9 @@ fn exo_layer(inp: &BuildIn, proj: &Proj, lw: f64, ei: usize, dl: &mut DrawList, 
     };
     let host_px = to_px(DVec3::ZERO);
     let w = band(lw, 6.0, 15.2, 0.5);
+    seen(out, crate::evidence::Ev::ExoArchive, "system parameters");
+    seen(out, crate::evidence::Ev::ExoGeometry, "orbit orientation");
+    seen(out, crate::evidence::Ev::ExoPhase, "orbital phases");
 
     // schematic radius remapping for System View
     let a_list: Vec<Option<(f64, Prov)>> = s.planets.iter().map(|p| s.a_au_of(p)).collect();
@@ -1640,6 +1696,7 @@ fn gravity_layer(inp: &BuildIn, proj: &Proj, dl: &mut DrawList, out: &mut FrameO
         _ => None,
     };
     let Some((pa, gm1, pb, gm2, a_m)) = pair else { return };
+    seen(out, crate::evidence::Ev::GravityModel, "gravity view");
     let apx = proj.px(pa);
     let bpx = proj.px(pb);
     let sep = ((bpx[0] - apx[0]).powi(2) + (bpx[1] - apx[1]).powi(2)).sqrt();

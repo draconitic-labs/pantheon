@@ -1152,6 +1152,13 @@ impl Pantheon {
                             .size(12.0)
                             .color(theme::GOLD),
                     );
+                    // TRUTH-001: generated from what this frame actually drew;
+                    // absent classes never appear. Hover an entry for its record.
+                    let drawn: Vec<(crate::evidence::Ev, &'static str)> = self
+                        .fo
+                        .as_ref()
+                        .map(|f| f.evidence.clone())
+                        .unwrap_or_default();
                     for p in [
                         Prov::Measured,
                         Prov::Modeled,
@@ -1160,12 +1167,34 @@ impl Pantheon {
                         Prov::Illustrative,
                         Prov::Unknown,
                     ] {
+                        let here: Vec<_> = drawn
+                            .iter()
+                            .filter(|(e, _)| crate::evidence::rec(*e).class == p)
+                            .collect();
+                        if here.is_empty() {
+                            continue;
+                        }
                         ui.horizontal(|ui| {
                             let (rc, _) =
                                 ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
                             ui.painter().circle_filled(rc.center(), 4.0, theme::col32(p.rgb(), 1.0));
                             ui.label(egui::RichText::new(p.label()).size(11.5));
                         });
+                        for (e, what) in here {
+                            let r = crate::evidence::rec(*e);
+                            ui.horizontal(|ui| {
+                                ui.add_space(16.0);
+                                ui.label(
+                                    egui::RichText::new(*what)
+                                        .size(10.5)
+                                        .color(theme::TEXT_DIM),
+                                )
+                                .on_hover_text(format!(
+                                    "{}\n{}\nframe: {}\n{}",
+                                    r.source, r.citation, r.frame, r.note
+                                ));
+                            });
+                        }
                     }
                     ui.label(
                         egui::RichText::new(format!("data retrieved {}", self.u.retrieved))

@@ -100,3 +100,7 @@ Fetch "spice_lsk" "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/lsk/naif00
 Fetch "spice_mar099" "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satellites/mar099.bsp" (Join-Path $data "spice\mar099.bsp") @()
 Fetch "spice_jup365" "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satellites/jup365.bsp" (Join-Path $data "spice\jup365.bsp") @()
 # optional (large): sat441.bsp, ura111.bsp, nep095.bsp, plu058.bsp from the same directory
+Fetch "spice_sat441" "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satellites/sat441.bsp" (Join-Path $data "spice\sat441.bsp") @()
+Fetch "spice_nep097" "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satellites/nep097.bsp" (Join-Path $data "spice\nep097.bsp") @()
+Fetch "spice_plu060" "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satellites/plu060.bsp" (Join-Path $data "spice\plu060.bsp") @()
+# Uranus kernels skipped: ura111xl-70x / ura184 parts are 1-2 GB EACH (4-6 GB total); Uranian moons use mean elements
