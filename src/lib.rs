@@ -8,6 +8,7 @@ pub mod audio;
 pub mod cli;
 pub mod data;
 pub mod engine;
+pub mod entity;
 pub mod frames;
 pub mod sim;
 pub mod theme;

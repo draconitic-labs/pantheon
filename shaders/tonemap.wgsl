@@ -4,6 +4,7 @@
 
 @group(0) @binding(0) var hdr_tex: texture_2d<f32>;
 @group(0) @binding(1) var hdr_smp: sampler;
+@group(0) @binding(2) var bloom_tex: texture_2d<f32>;
 
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
@@ -31,6 +32,14 @@ fn aces(x: vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4<f32> {
-    let c = textureSample(hdr_tex, hdr_smp, in.uv).rgb * 1.12; // exposure
-    return vec4<f32>(aces(c), 1.0);
+    var c = textureSample(hdr_tex, hdr_smp, in.uv).rgb * 1.12; // exposure
+    c = c + textureSample(bloom_tex, hdr_smp, in.uv).rgb * 0.85;
+    var col = aces(c);
+    // gentle vignette keeps the eye in the chart
+    let r = length(in.uv - vec2<f32>(0.5)) * 1.4142;
+    col = col * (1.0 - 0.13 * smoothstep(0.55, 1.05, r));
+    // fine static grain breaks banding on the deep gradients
+    let g = fract(sin(dot(in.uv, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+    col = col + vec3<f32>((g - 0.5) * 0.012);
+    return vec4<f32>(clamp(col, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
 }

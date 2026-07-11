@@ -136,6 +136,21 @@ impl DrawList {
     /// Tessellate a polyline (screen px). Each segment becomes a quad expanded
     /// by half-width + glow reach; fragment AA uses the signed perp distance.
     pub fn polyline(&mut self, pts: &[[f32; 2]], closed: bool, st: StrokeStyle) {
+        self.polyline_impl(pts, closed, st, None);
+    }
+
+    /// Polyline with per-point alpha multipliers (orbit motion grading).
+    pub fn polyline_alpha(&mut self, pts: &[[f32; 2]], closed: bool, st: StrokeStyle, alphas: &[f32]) {
+        self.polyline_impl(pts, closed, st, Some(alphas));
+    }
+
+    fn polyline_impl(
+        &mut self,
+        pts: &[[f32; 2]],
+        closed: bool,
+        st: StrokeStyle,
+        alphas: Option<&[f32]>,
+    ) {
         let n = pts.len();
         if n < 2 {
             return;
@@ -170,6 +185,10 @@ impl DrawList {
                 arc += len;
                 continue;
             }
+            let mut col = st.color;
+            if let Some(al) = alphas {
+                col[3] *= al[i.min(al.len() - 1)];
+            }
             let ux = dx / len;
             let uy = dy / len;
             let px = -uy * reach;
@@ -181,25 +200,25 @@ impl DrawList {
             verts.push(StrokeVertex {
                 pos: [a[0] - ex + px, a[1] - ey + py],
                 da: [reach, arc],
-                color: st.color,
+                color: col,
                 params,
             });
             verts.push(StrokeVertex {
                 pos: [a[0] - ex - px, a[1] - ey - py],
                 da: [-reach, arc],
-                color: st.color,
+                color: col,
                 params,
             });
             verts.push(StrokeVertex {
                 pos: [b[0] + ex + px, b[1] + ey + py],
                 da: [reach, arc + len],
-                color: st.color,
+                color: col,
                 params,
             });
             verts.push(StrokeVertex {
                 pos: [b[0] + ex - px, b[1] + ey - py],
                 da: [-reach, arc + len],
-                color: st.color,
+                color: col,
                 params,
             });
             idx.extend_from_slice(&[base, base + 1, base + 2, base + 2, base + 1, base + 3]);
@@ -282,6 +301,7 @@ pub struct Pipelines {
     discs: wgpu::RenderPipeline,
     points: wgpu::RenderPipeline,
     tonemap: wgpu::RenderPipeline,
+    bloom: wgpu::RenderPipeline,
     tm_bgl: wgpu::BindGroupLayout,
     tm_sampler: wgpu::Sampler,
     vb_strokes: GrowBuffer,
@@ -439,6 +459,16 @@ impl Pipelines {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let tm_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -475,6 +505,35 @@ impl Pipelines {
             multiview: None,
             cache: None,
         });
+        let sm_bloom = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("bloom"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/bloom.wgsl").into()),
+        });
+        let bloom = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("bloom"),
+            layout: Some(&tm_layout),
+            vertex: wgpu::VertexState {
+                module: &sm_bloom,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &sm_bloom,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: FORMAT_HDR,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
         let tm_sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("tonemap-sampler"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -488,6 +547,7 @@ impl Pipelines {
             discs: pipeline(&sm_discs, &[disc_layout], "discs", true, true),
             points: pipeline(&sm_points, &[point_layout], "points", false, true),
             tonemap,
+            bloom,
             tm_bgl,
             tm_sampler,
             vb_strokes: GrowBuffer::new(gpu, "vb-strokes", wgpu::BufferUsages::VERTEX),
@@ -547,39 +607,56 @@ impl Pipelines {
                 pass.draw(0..6, 0..dl.points.len() as u32);
             }
         }
-        // HDR → sRGB tonemap into the display texture
-        if let Some(hdr_view) = &target.hdr_resolve_view {
-            let bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("tonemap-bg"),
-                layout: &self.tm_bgl,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(hdr_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&self.tm_sampler),
-                    },
-                ],
-            });
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("tonemap-pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &target.resolve_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            pass.set_pipeline(&self.tonemap);
-            pass.set_bind_group(0, &bg, &[]);
-            pass.draw(0..3, 0..1);
+        // HDR → bloom (half res) → ACES tonemap into the display texture
+        if let (Some(hdr_view), Some(bloom_view)) =
+            (&target.hdr_resolve_view, &target.bloom_view)
+        {
+            let make_bg = |b2: &wgpu::TextureView| {
+                gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("post-bg"),
+                    layout: &self.tm_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(hdr_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.tm_sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(b2),
+                        },
+                    ],
+                })
+            };
+            let fullscreen = |encoder: &mut wgpu::CommandEncoder,
+                              view: &wgpu::TextureView,
+                              pipeline: &wgpu::RenderPipeline,
+                              bg: &wgpu::BindGroup| {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("post-pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, bg, &[]);
+                pass.draw(0..3, 0..1);
+            };
+            let bg_bloom = make_bg(hdr_view); // binding 2 unused by bloom.wgsl
+            fullscreen(&mut encoder, bloom_view, &self.bloom, &bg_bloom);
+            let bg_tm = make_bg(bloom_view);
+            fullscreen(&mut encoder, &target.resolve_view, &self.tonemap, &bg_tm);
         }
         gpu.queue.submit([encoder.finish()]);
     }

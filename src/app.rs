@@ -447,7 +447,28 @@ impl Pantheon {
             if let Some(p) = pointer {
                 let sx = (p.x - rect.left()) as f64;
                 let sy = (p.y - rect.top()) as f64;
-                let world = proj.unproject(sx, sy);
+                let mut world = proj.unproject(sx, sy);
+                // guided zoom ("zoom gravity"): when diving in, the anchor
+                // leans toward the nearest point of interest near the cursor,
+                // so repeated scrolling converges on it instead of demanding
+                // pixel-perfect aim across 19 orders of magnitude
+                if new < self.cam.mpp {
+                    let mut best: Option<(f32, ObjectRef)> = None;
+                    for pk in &self.picks {
+                        let d = ((pk.pos[0] - sx as f32).powi(2)
+                            + (pk.pos[1] - sy as f32).powi(2))
+                        .sqrt();
+                        if d < 150.0 && best.map(|(b, _)| d < b).unwrap_or(true) {
+                            best = Some((d, pk.obj));
+                        }
+                    }
+                    if let Some((d, obj)) = best {
+                        let poi = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref());
+                        // stronger pull the closer the cursor already is
+                        let k = (0.45 * (1.0 - (d as f64 / 150.0))).clamp(0.0, 0.45);
+                        world = world + (poi - world) * k;
+                    }
+                }
                 self.cam.mpp = new;
                 let proj2 = crate::frames::Proj::new(
                     &self.cam,

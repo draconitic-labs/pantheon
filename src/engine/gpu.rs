@@ -63,8 +63,10 @@ pub struct ViewTarget {
     pub resolve: wgpu::Texture,
     pub resolve_view: wgpu::TextureView,
     pub depth_view: wgpu::TextureView,
-    /// HDR resolve, input to the tonemap pass (hdr targets only)
+    /// HDR resolve, input to the bloom/tonemap passes (hdr targets only)
     pub hdr_resolve_view: Option<wgpu::TextureView>,
+    /// half-res bloom accumulation (hdr targets only)
+    pub bloom_view: Option<wgpu::TextureView>,
 }
 
 impl ViewTarget {
@@ -107,6 +109,26 @@ impl ViewTarget {
         } else {
             None
         };
+        let bloom_view = if hdr {
+            let t = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("view-bloom"),
+                size: wgpu::Extent3d {
+                    width: (width / 2).max(4),
+                    height: (height / 2).max(4),
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: FORMAT_HDR,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            Some(t.create_view(&Default::default()))
+        } else {
+            None
+        };
         let resolve = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("view-resolve"),
             size,
@@ -137,6 +159,7 @@ impl ViewTarget {
             resolve,
             depth_view: depth.create_view(&Default::default()),
             hdr_resolve_view,
+            bloom_view,
         }
     }
 

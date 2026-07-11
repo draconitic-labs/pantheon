@@ -138,25 +138,26 @@ pub fn exo_planet_rel(u: &Universe, ei: usize, k: usize, jd: f64) -> Option<DVec
     Some(e1 * x + e2 * y)
 }
 
+/// Position resolution now routes through the frame graph (ENTITY-001):
+/// hierarchical composition instead of special-case formulas, with a
+/// parity test in entity.rs guarding equivalence. Simulation islands
+/// still override their members.
 pub fn obj_pos(u: &Universe, obj: ObjectRef, jd: f64, island: Option<&Island>) -> DVec3 {
     if let Some(isl) = island {
         if let Some(k) = isl.ids.iter().position(|o| *o == obj) {
             return isl.sim.pos[k];
         }
     }
+    use crate::entity::Provider;
+    let g = u.graph();
     match obj {
         ObjectRef::Sun => DVec3::ZERO,
-        ObjectRef::Planet(i) => sim::body_pos(i, jd),
-        ObjectRef::Moon(mi) => sim::body_pos(MOONS[mi].planet, jd) + moon_rel(mi, jd),
-        ObjectRef::Craft(i) => u.craft[i]
-            .track
-            .pos_at(jd)
-            .unwrap_or_else(|| u.craft[i].track.samples.last().map(|s| s.1).unwrap_or(DVec3::ZERO)),
-        ObjectRef::Star(i) => u.stars[i].pos_at(jd),
-        ObjectRef::ExoHost(i) => u.exos[i].pos,
-        ObjectRef::ExoPlanet(i, k) => {
-            u.exos[i].pos + exo_planet_rel(u, i, k, jd).unwrap_or(DVec3::ZERO)
-        }
+        ObjectRef::Planet(i) => g.origin_in_root(u, g.planet(i), jd),
+        ObjectRef::Moon(mi) => g.origin_in_root(u, g.moon(mi), jd),
+        ObjectRef::Craft(i) => g.origin_in_root(u, g.craft_frame(i), jd),
+        ObjectRef::Star(i) => g.leaf_in_root(u, Provider::Star(i), jd),
+        ObjectRef::ExoHost(i) => g.leaf_in_root(u, Provider::ExoHost(i), jd),
+        ObjectRef::ExoPlanet(i, k) => g.leaf_in_root(u, Provider::ExoPlanetOrbit(i, k), jd),
         ObjectRef::Galaxy(i) => u.galaxies[i].pos,
         ObjectRef::Node(i) => u.nodes[i].pos,
     }
@@ -511,20 +512,38 @@ fn solar_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
         let pos = obj_pos(u, ObjectRef::Planet(i), jd, inp.island);
         let a_px = (p.el[0] * AU / cam.mpp) as f32;
         let px = proj.px(pos);
-        // orbit engraving
+        // orbit engraving, motion-graded: brightest at the planet, fading
+        // around the arc behind it — the ink itself shows direction of travel
         if a_px > 7.0 && a_px < 60_000.0 {
             let fade = (1.0 - (7.0 / a_px)).min(1.0) * ((3_000.0 / a_px).min(1.0)).max(0.12);
             let n = if a_px > 600.0 { 340 } else { 180 };
             let pts = project_poly(proj, &planet_orbit(i, jd, n));
             let mut st = StrokeStyle::new(
-                ink(theme::INK_GOLD, 0.42 * fade * w_solar as f32, truth, orbit_prov),
+                ink(theme::INK_GOLD, 0.5 * fade * w_solar as f32, truth, orbit_prov),
                 1.0,
             )
             .glow(1.4);
             if !jd_ok {
                 st = st.dashed(14.0, 0.55);
             }
-            dl.polyline(&pts, true, st);
+            let head = pts
+                .iter()
+                .enumerate()
+                .min_by(|a, b| {
+                    let da = (a.1[0] - px[0]).powi(2) + (a.1[1] - px[1]).powi(2);
+                    let db = (b.1[0] - px[0]).powi(2) + (b.1[1] - px[1]).powi(2);
+                    da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|(k, _)| k)
+                .unwrap_or(0);
+            let nn = pts.len();
+            let alphas: Vec<f32> = (0..nn)
+                .map(|k| {
+                    let behind = ((head + nn - k) % nn) as f32 / nn as f32;
+                    0.22 + 0.78 * (1.0 - behind) * (1.0 - behind)
+                })
+                .collect();
+            dl.polyline_alpha(&pts, true, st, &alphas);
         }
         // ephemeris truth trail (measured arc from Horizons cache) — drawn
         // only when the clock is inside the cached coverage (AUDIT SCI-017)
@@ -625,7 +644,17 @@ fn draw_planet_disc(
         axis: [axis[0], axis[1], axis[2], sim::body_w(i, jd) as f32],
         ca: [p.color[0], p.color[1], p.color[2], cap],
         cb: [p.color2[0], p.color2[1], p.color2[2], det],
-        rim: [p.rim[0], p.rim[1], p.rim[2], if p.rim == [0.0, 0.0, 0.0] { 0.0 } else { 0.55 }],
+        rim: [
+            p.rim[0],
+            p.rim[1],
+            p.rim[2],
+            match p.name {
+                "Earth" => 0.85, // HDR lets the atmosphere ring truly glow
+                "Venus" => 0.7,
+                _ if p.rim == [0.0, 0.0, 0.0] => 0.0,
+                _ => 0.55,
+            },
+        ],
         depth: zd,
     });
     // mask the point→disc transition with a fading glow (UX B1)
@@ -791,17 +820,35 @@ fn moons_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             ppos + moon_rel(mi, jd)
         };
         let mpx = proj.px(mpos);
-        // orbit
+        // orbit, motion-graded toward the moon's position
         let is_luna = m.name == "Moon";
         if orbit_visible {
             let fade = ((a_px - 5.0) / 30.0).clamp(0.1, 1.0);
             let pts: Vec<[f32; 2]> =
                 moon_orbit(mi, jd, 160).iter().map(|r| proj.px(ppos + *r)).collect();
-            dl.polyline(
+            let head = pts
+                .iter()
+                .enumerate()
+                .min_by(|a, b| {
+                    let da = (a.1[0] - mpx[0]).powi(2) + (a.1[1] - mpx[1]).powi(2);
+                    let db = (b.1[0] - mpx[0]).powi(2) + (b.1[1] - mpx[1]).powi(2);
+                    da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|(k, _)| k)
+                .unwrap_or(0);
+            let nn = pts.len();
+            let alphas: Vec<f32> = (0..nn)
+                .map(|k| {
+                    let behind = ((head + nn - k) % nn) as f32 / nn as f32;
+                    0.25 + 0.75 * (1.0 - behind) * (1.0 - behind)
+                })
+                .collect();
+            dl.polyline_alpha(
                 &pts,
                 true,
-                StrokeStyle::new(ink(theme::INK_GOLD_DIM, 0.4 * fade, truth, Prov::Modeled), 0.9)
+                StrokeStyle::new(ink(theme::INK_GOLD_DIM, 0.48 * fade, truth, Prov::Modeled), 0.9)
                     .glow(1.0),
+                &alphas,
             );
         }
         // measured Moon arc from Horizons (geocentric) — only within coverage

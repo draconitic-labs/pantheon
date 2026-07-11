@@ -598,6 +598,15 @@ pub struct Universe {
     pub galaxies: Vec<GalaxyDef>,
     pub nodes: Vec<CosmicNode>,
     pub retrieved: String,
+    graph: std::sync::OnceLock<crate::entity::FrameGraph>,
+}
+
+impl Universe {
+    /// The frame graph (ENTITY-001) — built lazily from the loaded catalogs;
+    /// the single authority for object positions via `atlas::obj_pos`.
+    pub fn graph(&self) -> &crate::entity::FrameGraph {
+        self.graph.get_or_init(|| crate::entity::FrameGraph::build(self))
+    }
 }
 
 pub struct DataHealth {
@@ -726,6 +735,7 @@ impl Universe {
                 galaxies,
                 nodes,
                 retrieved,
+                graph: std::sync::OnceLock::new(),
             },
             DataHealth { lines: health },
         )
