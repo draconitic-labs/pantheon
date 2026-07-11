@@ -613,6 +613,36 @@ pub struct NBody {
 }
 
 impl NBody {
+    /// Total mechanical energy scaled by G (valid for drift ratios only).
+    pub fn energy_scaled(&self) -> f64 {
+        let n = self.pos.len();
+        let mut e = 0.0;
+        for i in 0..n {
+            e += 0.5 * self.gm[i] * self.vel[i].length_squared();
+            for j in (i + 1)..n {
+                e -= self.gm[i] * self.gm[j] / (self.pos[j] - self.pos[i]).length().max(1.0);
+            }
+        }
+        e
+    }
+
+    /// Remove the total momentum so the island barycenter stays put
+    /// (AUDIT SIM-002).
+    pub fn zero_momentum(&mut self) {
+        let gm_total: f64 = self.gm.iter().sum();
+        if gm_total <= 0.0 {
+            return;
+        }
+        let mut p = DVec3::ZERO;
+        for i in 0..self.pos.len() {
+            p += self.vel[i] * self.gm[i];
+        }
+        let v_com = p / gm_total;
+        for v in &mut self.vel {
+            *v -= v_com;
+        }
+    }
+
     /// Leapfrog (kick-drift-kick); dt seconds, substeps chosen by caller.
     pub fn step(&mut self, dt: f64) {
         let n = self.pos.len();

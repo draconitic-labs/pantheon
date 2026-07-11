@@ -279,8 +279,13 @@ fn load_stars(root: &std::path::Path) -> Vec<Star> {
             if s.name.is_some() {
                 continue;
             }
+            // tightened crossmatch (AUDIT DATA-012): ~0.11° cone, distance
+            // within ~40%, magnitude within 2.5 (G vs V tolerance)
             let d = s.pos.normalize_or_zero().dot(dir);
-            if d > 0.999_95 && (s.dist_pc / dist).ln().abs() < 0.35 {
+            if d > 0.999_998
+                && (s.dist_pc / dist).ln().abs() < 0.35
+                && (s.gmag - vmag).abs() < 2.5
+            {
                 let score = 1.0 - d;
                 if best.map(|(_, b)| score < b).unwrap_or(true) {
                     best = Some((i, score));
@@ -712,10 +717,15 @@ impl Universe {
         if let Some(&i) = self.exo_by_host.get(name) {
             return Some(i);
         }
-        let prefix = format!("{name} ");
+        // case-insensitive host, then planet-name prefix (AUDIT UI-009)
+        let lower = name.to_lowercase();
+        if let Some(i) = self.exos.iter().position(|s| s.host.to_lowercase() == lower) {
+            return Some(i);
+        }
+        let prefix = format!("{lower} ");
         self.exos
             .iter()
-            .position(|s| s.planets.iter().any(|p| p.name.starts_with(&prefix)))
+            .position(|s| s.planets.iter().any(|p| p.name.to_lowercase().starts_with(&prefix)))
     }
 
     /// Model-vs-Horizons residual for a planet at jd, if truth data covers it.

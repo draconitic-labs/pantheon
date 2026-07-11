@@ -63,6 +63,8 @@ pub struct Island {
     pub anchor: ObjectRef,
     pub trails: Vec<Vec<DVec3>>,
     pub jd: f64,
+    /// initial scaled energy, for the drift diagnostic (AUDIT SIM-004)
+    pub e0: f64,
 }
 
 pub struct Label {

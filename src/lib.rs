@@ -3,6 +3,8 @@
 
 pub mod app;
 pub mod atlas;
+#[cfg(windows)]
+pub mod audio;
 pub mod cli;
 pub mod data;
 pub mod engine;

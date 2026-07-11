@@ -58,3 +58,12 @@ current behavior).
 - **UI-020** [Med] Path keys jump time/tilt rather than interpolating.
 - **UI-019/PATH-001** [Med] Path schema unversioned, partial state snapshot.
 - **UI-011** [Low] Fixed panel anchors can collide at small window sizes.
+
+## Fixed in the follow-up session (2026-07-11)
+- UI-007 help overlay; UI-009 case-insensitive lookup; UI-020 path time/tilt glide;
+  UI-026 timestamped capture saves w/ error surfacing; SIM-002/004 island momentum
+  zeroing + energy-drift diagnostic (card row, ppm); DATA-012 crossmatch tightened
+  (0.11°, distance + magnitude gates); REND-006 partial (4 px chords, 1024-seg cap);
+  REND-024 partial (char-count label widths). Plus: window/taskbar/shortcut icon
+  (assets/icon.ico via tools/make_icon.ps1) and a dependency-free generative
+  ambience engine (src/audio.rs, winmm waveOut; GUI-only, rail toggle + volume).

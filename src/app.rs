@@ -70,6 +70,11 @@ pub struct Pantheon {
     /// set by shot setups that could not resolve their subject
     pub setup_error: Option<String>,
     pub status: Option<(String, f64)>,
+    // ambience controls (the engine itself lives in the GUI shell)
+    pub ambience_on: bool,
+    pub ambience_vol: f32,
+    /// glide the clock during path playback instead of jumping (AUDIT UI-020)
+    pub jd_glide: Option<(f64, f64)>,
 }
 
 impl Pantheon {
@@ -115,6 +120,9 @@ impl Pantheon {
             status: problems
                 .first()
                 .map(|p| (format!("⚠ degraded data — {p}"), 10.0)),
+            ambience_on: true,
+            ambience_vol: 0.5,
+            jd_glide: None,
         }
     }
 
@@ -140,6 +148,22 @@ impl Pantheon {
                         self.play = None;
                         self.note("path finished");
                     }
+                }
+            }
+        }
+        // path glides: ease clock + tilt alongside the camera animation
+        if let Some((jd1, tilt1)) = self.jd_glide {
+            match &self.cam.anim {
+                Some(a) => {
+                    let s = (a.t / a.dur).clamp(0.0, 1.0);
+                    let e = s * s * (3.0 - 2.0 * s);
+                    self.clock.jd += (jd1 - self.clock.jd) * e.max(0.02);
+                    self.cam.tilt += (tilt1 - self.cam.tilt) * e.max(0.02);
+                }
+                None => {
+                    self.clock.jd = jd1;
+                    self.cam.tilt = tilt1;
+                    self.jd_glide = None;
                 }
             }
         }
@@ -244,8 +268,8 @@ impl Pantheon {
             }
         }
         self.follow = None;
-        self.clock.jd = key.jd;
-        self.cam.tilt = key.tilt;
+        // glide time and tilt with the camera instead of jumping (AUDIT UI-020)
+        self.jd_glide = Some((key.jd, key.tilt));
         let mut center = DVec3::new(key.center[0], key.center[1], key.center[2]);
         if let Some(name) = &key.at {
             if let Some(obj) = self.find_object(name) {
@@ -323,12 +347,16 @@ impl Pantheon {
             });
         }
         let n = ids.len();
+        let mut sim = NBody { gm, pos, vel, label: format!("{} system", PLANETS[pi].name) };
+        sim.zero_momentum();
+        let e0 = sim.energy_scaled();
         self.island = Some(Island {
-            sim: NBody { gm, pos, vel, label: format!("{} system", PLANETS[pi].name) },
+            sim,
             ids,
             anchor: ObjectRef::Planet(pi),
             trails: vec![Vec::new(); n],
             jd,
+            e0,
         });
         self.modes.living = true;
         self.clock.playing = true;
@@ -491,7 +519,7 @@ impl Pantheon {
         for i in order {
             let l = &fo.labels[i];
             let pos = egui::pos2(rect.left() + l.pos[0], rect.top() + l.pos[1]);
-            let w = l.text.len() as f32 * l.size * 0.52 + 6.0;
+            let w = l.text.chars().count() as f32 * l.size * 0.52 + 6.0;
             let r = Rect::from_center_size(pos, egui::vec2(w, l.size + 5.0));
             if !rect.intersects(r) || placed.iter().any(|p| p.intersects(r)) {
                 continue;
@@ -557,6 +585,51 @@ impl Pantheon {
         }
         if self.show_capture {
             self.capture_panel(ctx, rect);
+        }
+        if self.show_help {
+            egui::Area::new(egui::Id::new("help"))
+                .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    egui::Frame::window(&ctx.style()).show(ui, |ui| {
+                        ui.set_width(340.0);
+                        ui.label(
+                            egui::RichText::new("CONTROLS")
+                                .font(FontId::new(17.0, FontFamily::Name("heading".into())))
+                                .color(theme::GOLD),
+                        );
+                        for (k, v) in [
+                            ("wheel", "infinite zoom at the cursor"),
+                            ("left drag", "pan"),
+                            ("right drag ↕", "tilt the atlas plane"),
+                            ("click / double-click", "select / dive"),
+                            ("L", "Living Orbits (time animation)"),
+                            ("T", "Truth mode — ink by evidence"),
+                            ("G", "Gravity view (L-points, Hill, Roche)"),
+                            ("Y", "System View (log-spaced schematic)"),
+                            ("H", "home (Earth)"),
+                            ("Esc", "release selection"),
+                        ] {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(k).size(12.0).color(theme::GOLD),
+                                );
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(
+                                            egui::RichText::new(v)
+                                                .size(11.5)
+                                                .color(theme::TEXT_DIM),
+                                        );
+                                    },
+                                );
+                            });
+                        }
+                        if ui.button("close").clicked() {
+                            self.show_help = false;
+                        }
+                    });
+                });
         }
         if let Some((msg, _)) = &self.status {
             let msg = msg.clone();
@@ -624,6 +697,15 @@ impl Pantheon {
                     b(ui, &mut self.modes.system_view, "☰ System View");
                     b(ui, &mut self.modes.ladder, "☷ Ladder");
                     b(ui, &mut self.show_capture, "✧ Capture");
+                    ui.separator();
+                    b(ui, &mut self.ambience_on, "♪ Ambience");
+                    if self.ambience_on {
+                        ui.add(
+                            egui::Slider::new(&mut self.ambience_vol, 0.0..=1.0)
+                                .show_value(false),
+                        );
+                    }
+                    b(ui, &mut self.show_help, "? Help");
                     ui.separator();
                     if ui.selectable_label(false, "⌂ Home (Earth)").clicked() {
                         let jd = self.clock.jd;
@@ -852,11 +934,16 @@ impl Pantheon {
                         }
                         if ui.button("save path").clicked() {
                             let dir = std::path::PathBuf::from("exports/paths");
-                            let _ = std::fs::create_dir_all(&dir);
-                            let path = dir.join("path.json");
-                            if let Ok(js) = serde_json::to_string_pretty(&self.capture) {
-                                let _ = std::fs::write(&path, js);
-                                self.note(format!("saved {}", path.display()));
+                            let stamp = crate::sim::fmt_jd(crate::sim::jd_now())
+                                .replace([' ', ':'], "-");
+                            let path = dir.join(format!("path_{stamp}.json"));
+                            match std::fs::create_dir_all(&dir)
+                                .map_err(anyhow::Error::from)
+                                .and_then(|_| Ok(serde_json::to_string_pretty(&self.capture)?))
+                                .and_then(|js| Ok(std::fs::write(&path, js)?))
+                            {
+                                Ok(()) => self.note(format!("saved {}", path.display())),
+                                Err(e) => self.note(format!("save failed: {e}")),
                             }
                         }
                     });
@@ -978,8 +1065,14 @@ impl Pantheon {
                 rows.push(("radius".into(), format!("{:.0} km", p.radius_km)));
                 rows.push(("day length".into(), format!("{:.2} h", p.rot_hours.abs())));
                 if let Some(res) = u.planet_residual_km(i, jd) {
-                    rows.push(("Kepler vs JPL now".into(), format!("{res:.0} km")));
+                    rows.push(("model vs JPL now".into(), format!("{res:.0} km")));
                     provs.push(("JPL Horizons cross-check".into(), Prov::Measured));
+                }
+                if let Some(isl) = &self.island {
+                    let e = isl.sim.energy_scaled();
+                    let drift = if isl.e0.abs() > 0.0 { (e - isl.e0) / isl.e0.abs() } else { 0.0 };
+                    rows.push(("island energy drift".into(), format!("{:.2} ppm", drift * 1e6)));
+                    provs.push(("leapfrog island diagnostics".into(), Prov::Modeled));
                 }
                 provs.push(("orbit: JPL approx. elements 1800–2050".into(), Prov::Modeled));
                 provs.push(("surface pattern".into(), Prov::Procedural));
@@ -1137,6 +1230,8 @@ pub struct GuiApp {
     rs: eframe::egui_wgpu::RenderState,
     canvas: Option<(ViewTarget, egui::TextureId)>,
     last: Instant,
+    #[cfg(windows)]
+    ambience: Option<crate::audio::Ambience>,
 }
 
 impl GuiApp {
@@ -1145,7 +1240,21 @@ impl GuiApp {
         let gpu = GpuContext::from_eframe(&rs);
         theme::install_fonts(&cc.egui_ctx);
         theme::apply(&cc.egui_ctx);
-        Self { app: Pantheon::new(gpu), rs, canvas: None, last: Instant::now() }
+        let app = Pantheon::new(gpu);
+        #[cfg(windows)]
+        let ambience = crate::audio::Ambience::start(if app.ambience_on {
+            app.ambience_vol
+        } else {
+            0.0
+        });
+        Self {
+            app,
+            rs,
+            canvas: None,
+            last: Instant::now(),
+            #[cfg(windows)]
+            ambience,
+        }
     }
 }
 
@@ -1153,6 +1262,10 @@ impl eframe::App for GuiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let dt = self.last.elapsed().as_secs_f64().min(0.1);
         self.last = Instant::now();
+        #[cfg(windows)]
+        if let Some(a) = &self.ambience {
+            a.set_gain(if self.app.ambience_on { self.app.ambience_vol } else { 0.0 });
+        }
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(Color32::BLACK))
             .show(ctx, |ui| {
@@ -1196,11 +1309,23 @@ impl eframe::App for GuiApp {
 }
 
 pub fn run_gui() -> anyhow::Result<()> {
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([1680.0, 980.0])
+        .with_title("Pantheon — An Infinite Vector Atlas of the Living Universe");
+    // window/taskbar icon from the generated atlas emblem
+    let icon_path = crate::data::asset_root().join("icon.png");
+    if let Ok(img) = image::open(&icon_path) {
+        let rgba = img.to_rgba8();
+        let (w, h) = rgba.dimensions();
+        viewport = viewport.with_icon(std::sync::Arc::new(egui::IconData {
+            rgba: rgba.into_raw(),
+            width: w,
+            height: h,
+        }));
+    }
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1680.0, 980.0])
-            .with_title("Pantheon — An Infinite Vector Atlas of the Living Universe"),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(
