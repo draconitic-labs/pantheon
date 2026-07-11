@@ -1,0 +1,11 @@
+//! Pantheon library crate — shared by the GUI binary (windows subsystem) and
+//! the console CLI binary, and by the test harness.
+
+pub mod app;
+pub mod atlas;
+pub mod cli;
+pub mod data;
+pub mod engine;
+pub mod frames;
+pub mod sim;
+pub mod theme;

@@ -1,0 +1,4 @@
+/target/
+/exports/
+!/exports/paths/
+/assets/data/spacecraft/*.txt

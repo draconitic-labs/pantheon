@@ -1,0 +1,10 @@
+﻿{
+  "retrieved": "2026-07-11",
+  "sources": {
+    "gaia_nearby.csv":  { "source": "ESA Gaia DR3 (gaiadr3.gaia_source), ESA Gaia Archive TAP", "query": "nearest 12000 sources, parallax>12mas, parallax_over_error>10, G<16", "frame": "ICRS epoch J2016.0", "status": "measured", "citation": "Gaia Collaboration et al. 2023, A&A 674, A1" },
+    "gaia_bright.csv":  { "source": "ESA Gaia DR3 (gaiadr3.gaia_source), ESA Gaia Archive TAP", "query": "all sources G<6.0", "frame": "ICRS epoch J2016.0", "status": "measured", "citation": "Gaia Collaboration et al. 2023, A&A 674, A1" },
+    "exoplanets.csv":   { "source": "NASA Exoplanet Archive, Planetary Systems (ps) table, default_flag=1", "frame": "ICRS; orbital elements heterogeneous per publication", "status": "measured/derived per-column", "citation": "NASA Exoplanet Archive, IPAC/Caltech" },
+    "ne_110m_coastline.geojson": { "source": "Natural Earth 1:110m physical vectors v5", "frame": "WGS84 lon/lat", "status": "measured (generalized cartography)", "citation": "naturalearthdata.com, public domain" },
+    "spacecraft/*.txt": { "source": "NASA/JPL Horizons System API", "frame": "heliocentric ecliptic J2000 (Moon: geocentric)", "status": "measured (reconstructed/predicted trajectory solutions)", "citation": "Giorgini et al., JPL Horizons" }
+  }
+}

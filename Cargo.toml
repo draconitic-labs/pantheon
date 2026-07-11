@@ -1,0 +1,39 @@
+[package]
+name = "pantheon"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.80"
+description = "Pantheon — An Infinite Vector Atlas of the Living Universe"
+license = "MIT"
+
+[lib]
+name = "pantheon"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pantheon"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "0.32", default-features = false, features = ["wgpu", "default_fonts"] }
+egui = "0.32"
+wgpu = "25"
+glam = { version = "0.30", features = ["bytemuck"] }
+bytemuck = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+image = { version = "0.25", default-features = false, features = ["png"] }
+anyhow = "1"
+pollster = "0.4"
+log = "0.4"
+env_logger = "0.11"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
