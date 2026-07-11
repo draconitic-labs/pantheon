@@ -366,25 +366,78 @@ pub const MOONS: [MoonDef; 21] = [
     MoonDef { planet: 6, name: "Umbriel", a_km: 266_000.0, period_d: 4.144_177, radius_km: 584.7, e: 0.0039, m0_deg: 190.0, color: [0.5, 0.52, 0.55], color2: [0.35, 0.37, 0.4], kind: 5.0 },
     MoonDef { planet: 6, name: "Titania", a_km: 436_300.0, period_d: 8.705_872, radius_km: 788.9, e: 0.0011, m0_deg: 280.0, color: [0.65, 0.67, 0.7], color2: [0.48, 0.5, 0.52], kind: 5.0 },
     MoonDef { planet: 6, name: "Oberon", a_km: 583_500.0, period_d: 13.463_239, radius_km: 761.4, e: 0.0014, m0_deg: 340.0, color: [0.6, 0.6, 0.62], color2: [0.44, 0.44, 0.46], kind: 5.0 },
-    MoonDef { planet: 7, name: "Triton", a_km: 354_759.0, period_d: -5.876_854, radius_km: 1_353.4, e: 0.000_02, m0_deg: 50.0, color: [0.78, 0.8, 0.85], color2: [0.6, 0.62, 0.68], kind: 5.0 },
+    // retrograde motion is encoded by the 156.9° inclination in MOON_INCL,
+    // NOT by a negative period (audit SCI-026: never encode it twice)
+    MoonDef { planet: 7, name: "Triton", a_km: 354_759.0, period_d: 5.876_854, radius_km: 1_353.4, e: 0.000_02, m0_deg: 50.0, color: [0.78, 0.8, 0.85], color2: [0.6, 0.62, 0.68], kind: 5.0 },
     MoonDef { planet: 8, name: "Charon", a_km: 19_591.0, period_d: 6.387_23, radius_km: 606.0, e: 0.0002, m0_deg: 220.0, color: [0.6, 0.58, 0.56], color2: [0.42, 0.4, 0.38], kind: 5.0 },
 ];
 
-/// Orientation of a planet's equatorial plane in the root frame — approximated
-/// by tilting about the planet's orbital node line by its obliquity.
-pub fn planet_equator(pi: usize) -> DMat3 {
-    let p = &PLANETS[pi];
-    let node = p.el[5].to_radians();
-    let tilt = p.obliquity_deg.to_radians();
-    DMat3::from_rotation_z(node) * DMat3::from_rotation_x(tilt) * DMat3::from_rotation_z(-node)
+/// IAU 2015 rotation elements per planet (aligned with [`PLANETS`]):
+/// pole α0 (deg), α̇ (deg/cy), δ0 (deg), δ̇ (deg/cy), W0 (deg), Ẇ (deg/day).
+/// Small trigonometric series (Neptune's pole nutation, lunar libration) are
+/// omitted — documented approximation, status=modeled.
+pub const IAU_ROT: [[f64; 6]; 9] = [
+    [281.010_3, -0.032_8, 61.415_5, -0.004_9, 329.598_8, 6.138_510_8], // Mercury
+    [272.76, 0.0, 67.16, 0.0, 160.20, -1.481_368_8],                   // Venus (retrograde)
+    [0.0, -0.641, 90.0, -0.557, 190.147, 360.985_623_5],               // Earth
+    [317.269_202, -0.109_275, 54.432_516, -0.058_271, 176.049_863, 350.891_982_443], // Mars
+    [268.056_595, -0.006_499, 64.495_303, 0.002_413, 284.95, 870.536], // Jupiter (Sys III)
+    [40.589, -0.036, 83.537, -0.004, 38.90, 810.793_902_4],            // Saturn
+    [257.311, 0.0, -15.175, 0.0, 203.81, -501.160_092_8],              // Uranus (retrograde)
+    [299.36, 0.0, 43.46, 0.0, 249.978, 541.139_775_7],                 // Neptune
+    [132.993, 0.0, -6.163, 0.0, 302.695, 56.362_522_5],                // Pluto
+];
+
+/// Body equatorial basis in the root frame at jd (S3): columns are the node
+/// direction Q (body equator × ICRS equator), Q rotated 90° in the equator,
+/// and the IAU pole. Moon orbits and rings live in this plane.
+pub fn body_equator(pi: usize, jd: f64) -> DMat3 {
+    let r = &IAU_ROT[pi];
+    let t = (jd - J2000) / 36_525.0;
+    let alpha = (r[0] + r[1] * t).to_radians();
+    let delta = (r[2] + r[3] * t).to_radians();
+    let m = crate::frames::ecl_from_icrs();
+    let pole = m * DVec3::new(delta.cos() * alpha.cos(), delta.cos() * alpha.sin(), delta.sin());
+    let z_icrs = m * DVec3::Z;
+    let mut q = z_icrs.cross(pole);
+    if q.length_squared() < 1e-12 {
+        q = DVec3::X;
+    }
+    let q = q.normalize();
+    DMat3::from_cols(q, pole.cross(q), pole)
+}
+
+/// Full body-fixed basis: x = prime meridian direction (node rotated by the
+/// IAU angle W along the equator), z = pole. Surfaces (coastlines) use this.
+pub fn body_basis(pi: usize, jd: f64) -> DMat3 {
+    let eq = body_equator(pi, jd);
+    let w = body_w(pi, jd);
+    let (q, y, pole) = (eq.col(0), eq.col(1), eq.col(2));
+    let x = q * w.cos() + y * w.sin();
+    DMat3::from_cols(x, pole.cross(x), pole)
+}
+
+/// IAU prime-meridian angle W (radians) at jd.
+pub fn body_w(pi: usize, jd: f64) -> f64 {
+    let r = &IAU_ROT[pi];
+    (r[4] + r[5] * (jd - J2000)).to_radians()
 }
 
 /// Spin axis unit vector in the root frame.
-pub fn planet_axis(pi: usize) -> DVec3 {
-    planet_equator(pi) * DVec3::Z
+pub fn planet_axis(pi: usize, jd: f64) -> DVec3 {
+    body_equator(pi, jd).col(2)
 }
 
-/// Moon position relative to its planet (m, root frame).
+/// Inclination of each moon's orbit to its parent's equator (deg), aligned
+/// with [`MOONS`]. Node longitudes are approximate (0 in the equator frame).
+/// Triton's retrograde 157° is the one that matters most (S4).
+pub const MOON_INCL: [f64; 21] = [
+    0.0, 1.1, 1.8, 0.04, 0.47, 0.2, 0.2, 1.57, 0.01, 1.1, 0.03, 0.35, 0.35, 15.47, 4.34, 0.04,
+    0.13, 0.08, 0.07, 156.9, 0.08,
+];
+
+/// Moon position relative to its planet (m, root frame): Kepler ellipse in
+/// the parent's IAU equator, tilted by the moon's own inclination.
 pub fn moon_rel(mi: usize, jd: f64) -> DVec3 {
     let m = &MOONS[mi];
     if m.name == "Moon" {
@@ -395,7 +448,7 @@ pub fn moon_rel(mi: usize, jd: f64) -> DVec3 {
     let ea = kepler_solve(ma % std::f64::consts::TAU, m.e);
     let a = m.a_km * 1e3;
     let local = DVec3::new(a * (ea.cos() - m.e), a * (1.0 - m.e * m.e).sqrt() * ea.sin(), 0.0);
-    planet_equator(m.planet) * local
+    body_equator(m.planet, jd) * (DMat3::from_rotation_x(MOON_INCL[mi].to_radians()) * local)
 }
 
 /// Sampled moon orbit relative to planet. The Moon samples the same
@@ -407,7 +460,7 @@ pub fn moon_orbit(mi: usize, jd: f64, n: usize) -> Vec<DVec3> {
         return (0..n).map(|k| luna_rel(jd + p * k as f64 / n as f64)).collect();
     }
     let a = m.a_km * 1e3;
-    let rot = planet_equator(m.planet);
+    let rot = body_equator(m.planet, jd) * DMat3::from_rotation_x(MOON_INCL[mi].to_radians());
     (0..n)
         .map(|k| {
             let ea = k as f64 / n as f64 * std::f64::consts::TAU;
@@ -457,11 +510,38 @@ pub fn luna_rel(jd: f64) -> DVec3 {
     perifocal_to_ecl(node, inc, argp) * local
 }
 
-/// Sidereal rotation phase (radians) of a planet at jd.
-pub fn planet_spin(pi: usize, jd: f64) -> f64 {
-    let p = &PLANETS[pi];
-    let hours = (jd - J2000) * 24.0;
-    (hours / p.rot_hours) * std::f64::consts::TAU
+#[cfg(test)]
+mod iau_tests {
+    use super::*;
+
+    #[test]
+    fn earth_subsolar_longitude_near_zero_at_utc_noon() {
+        // At 12:00 UTC the subsolar point sits near Greenwich (± equation of
+        // time, ~4°). This pins pole + prime meridian + time scales together.
+        let jd = tdb_from_utc_jd(cal_to_jd(2026, 7, 11.5));
+        let s = (-earth_center(jd)).normalize();
+        let b = body_basis(2, jd);
+        let lon = s.dot(b.col(1)).atan2(s.dot(b.col(0))).to_degrees();
+        assert!(lon.abs() < 7.0, "subsolar longitude {lon}°");
+    }
+
+    #[test]
+    fn earth_pole_matches_obliquity() {
+        let pole = planet_axis(2, J2000);
+        let lat = pole.z.asin().to_degrees();
+        assert!((lat - 66.56).abs() < 0.1, "pole ecliptic latitude {lat}°");
+    }
+
+    #[test]
+    fn triton_orbit_is_retrograde_in_neptune_frame() {
+        let jd = J2000 + 5_000.0;
+        let ti = MOONS.iter().position(|m| m.name == "Triton").unwrap();
+        let r0 = moon_rel(ti, jd);
+        let r1 = moon_rel(ti, jd + 0.01);
+        let pole = planet_axis(7, jd);
+        // angular momentum opposes the planet's spin pole
+        assert!(r0.cross(r1).dot(pole) < 0.0);
+    }
 }
 
 // -------------------------------------------------------- ring systems

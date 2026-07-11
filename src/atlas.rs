@@ -12,7 +12,7 @@ use crate::engine::draw::CanvasUniforms;
 use crate::frames::{band, fmt_len, Camera, Proj, AU, KPC, MPC, PC};
 use crate::sim::{
     self, hill_radius, lagrange_points, moon_orbit, moon_rel, planet_axis, planet_orbit,
-    planet_pos, planet_spin, Clock, NBody, GM_SUN, J2000, MOONS, PLANETS, RINGS,
+    planet_pos, Clock, NBody, GM_SUN, J2000, MOONS, PLANETS, RINGS,
     SUN_RADIUS_KM,
 };
 use crate::theme;
@@ -592,7 +592,7 @@ fn draw_planet_disc(
     let p = &PLANETS[i];
     let jd = inp.clock.jd;
     let sun_dir = view_dir(proj, (-pos).normalize_or_zero());
-    let axis = view_dir(proj, planet_axis(i));
+    let axis = view_dir(proj, planet_axis(i, jd));
     let seed = match p.name {
         "Jupiter" => 0.72,
         "Saturn" => 0.31,
@@ -622,7 +622,7 @@ fn draw_planet_disc(
         center: px,
         pr: [r_px, p.flatten, p.kind, seed],
         sun: [sun_dir[0], sun_dir[1], sun_dir[2], 0.05],
-        axis: [axis[0], axis[1], axis[2], planet_spin(i, jd) as f32],
+        axis: [axis[0], axis[1], axis[2], sim::body_w(i, jd) as f32],
         ca: [p.color[0], p.color[1], p.color[2], cap],
         cb: [p.color2[0], p.color2[1], p.color2[2], det],
         rim: [p.rim[0], p.rim[1], p.rim[2], if p.rim == [0.0, 0.0, 0.0] { 0.0 } else { 0.55 }],
@@ -647,7 +647,7 @@ fn draw_rings(
     ring: &sim::RingDef,
     dl: &mut DrawList,
 ) {
-    let eq = sim::planet_equator(pi);
+    let eq = sim::body_equator(pi, inp.clock.jd);
     let truth = inp.modes.truth;
     for (r0, r1, dens) in ring.zones {
         let width_px = ((r1 - r0) * 1e3 / inp.cam.mpp) as f32;
@@ -688,13 +688,16 @@ fn earth_vector_layer(inp: &BuildIn, proj: &Proj, pos: DVec3, _r_px: f32, dl: &m
     dl.set_over(true);
     let jd = inp.clock.jd;
     let truth = inp.modes.truth;
-    let eq = sim::planet_equator(2);
-    let spin = planet_spin(2, jd) + 3.9; // longitude alignment (approximate)
+    // IAU body-fixed basis: x = prime meridian — geographic longitude is exact
+    // now (S3), no alignment fudge
+    let b = sim::body_basis(2, jd);
     let r_m = PLANETS[2].radius_km * 1e3 * 1.001;
     let to_world = |lon: f64, lat: f64| -> DVec3 {
-        let (lo, la) = (lon.to_radians() + spin, lat.to_radians());
-        let local = DVec3::new(la.cos() * lo.cos(), la.cos() * lo.sin(), la.sin()) * r_m;
-        pos + eq * local
+        let (lo, la) = (lon.to_radians(), lat.to_radians());
+        let local = b.col(0) * (la.cos() * lo.cos())
+            + b.col(1) * (la.cos() * lo.sin())
+            + b.col(2) * la.sin();
+        pos + local * r_m
     };
     let front = |w: DVec3| -> bool { (w - pos).dot(proj.out) > 0.0 };
     let c = ink([0.55, 0.85, 0.62], 0.85, truth, Prov::Measured);
@@ -798,7 +801,7 @@ fn moons_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
         let r_px = (m.radius_km * 1e3 / cam.mpp) as f32;
         if r_px > 1.7 {
             let sun_dir = view_dir(proj, (-mpos).normalize_or_zero());
-            let axis = view_dir(proj, planet_axis(m.planet));
+            let axis = view_dir(proj, planet_axis(m.planet, jd));
             let mdet = match m.name {
                 "Moon" => 1.6,
                 "Io" => 1.4,

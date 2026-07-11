@@ -1295,8 +1295,14 @@ impl Pantheon {
                 rows.push(("period".into(), format!("{:.3} d", m.period_d.abs())));
                 rows.push(("radius".into(), format!("{:.0} km", m.radius_km)));
                 rows.push(("eccentricity".into(), format!("{:.4}", m.e)));
-                if m.period_d < 0.0 {
+                if sim::MOON_INCL[mi] > 90.0 {
                     rows.push(("orbit".into(), "retrograde".into()));
+                }
+                if sim::MOON_INCL[mi] > 0.5 {
+                    rows.push((
+                        "inclination to equator".into(),
+                        format!("{:.1}°", sim::MOON_INCL[mi]),
+                    ));
                 }
                 let prov_orbit = if m.name == "Moon" {
                     "precessing-ellipse model"
