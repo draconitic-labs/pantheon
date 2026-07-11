@@ -262,6 +262,44 @@ fn seeded(i: usize, k: usize) -> f64 {
     (x & 0xFFFF_FFFF) as f64 / 4_294_967_296.0
 }
 
+// --------------------------------------------------------- layer registry
+
+/// ARCH-013 / LAYER-001: layers declare their scale window and gate instead
+/// of living as a hardcoded call sequence. `lw` is log10(view width in m);
+/// windows here are coarse skips — each layer still feathers internally.
+pub struct LayerDef {
+    pub name: &'static str,
+    pub lw: (f64, f64),
+    pub gate: fn(&BuildIn) -> bool,
+    pub run: fn(&BuildIn, &Proj, f64, &mut DrawList, &mut FrameOut),
+}
+
+fn gate_always(_: &BuildIn) -> bool {
+    true
+}
+/// solar-system layers yield to an active exoplanet pocket
+fn gate_no_exo(i: &BuildIn) -> bool {
+    exo_active_system(i).is_none()
+}
+fn gate_gravity(i: &BuildIn) -> bool {
+    i.modes.gravity
+}
+fn gravity_run(inp: &BuildIn, proj: &Proj, _lw: f64, dl: &mut DrawList, out: &mut FrameOut) {
+    gravity_layer(inp, proj, dl, out);
+}
+
+pub const LAYERS: &[LayerDef] = &[
+    LayerDef { name: "scale rulers", lw: (f64::MIN, f64::MAX), gate: gate_always, run: ruler_layer },
+    LayerDef { name: "solar system", lw: (5.0, 17.5), gate: gate_no_exo, run: solar_layer },
+    LayerDef { name: "moon systems", lw: (f64::MIN, 11.4), gate: gate_no_exo, run: moons_layer },
+    LayerDef { name: "heliosphere", lw: (11.8, 17.1), gate: gate_no_exo, run: heliosphere_layer },
+    LayerDef { name: "star field", lw: (14.0, 20.1), gate: gate_always, run: stars_layer },
+    LayerDef { name: "galaxy", lw: (18.0, 23.0), gate: gate_always, run: galaxy_layer },
+    LayerDef { name: "local group", lw: (19.8, 24.9), gate: gate_always, run: localgroup_layer },
+    LayerDef { name: "cosmic web", lw: (22.5, 26.2), gate: gate_always, run: cosmic_layer },
+    LayerDef { name: "gravity view", lw: (f64::MIN, f64::MAX), gate: gate_gravity, run: gravity_run },
+];
+
 // ------------------------------------------------------------------ build
 
 pub fn build(inp: &BuildIn, dl: &mut DrawList) -> FrameOut {
@@ -314,30 +352,17 @@ pub fn build(inp: &BuildIn, dl: &mut DrawList) -> FrameOut {
         }
     }
 
-    // ---- ruler rings: the physical log-scale ruler
-    ruler_layer(inp, &proj, lw, dl, &mut out);
-
-    // ---- exosystem pocket (worlds within worlds)
-    let exo_active = exo_active_system(inp);
-    if let Some(ei) = exo_active {
+    // ---- exosystem pocket (worlds within worlds; scene-gated, not scale-gated)
+    if let Some(ei) = exo_active_system(inp) {
         exo_layer(inp, &proj, lw, ei, dl, &mut out);
         out.band_name = format!("Exoplanet System — {}", u.exos[ei].host);
     }
 
-    // ---- solar system band
-    if exo_active.is_none() {
-        solar_layer(inp, &proj, lw, dl, &mut out);
-        moons_layer(inp, &proj, lw, dl, &mut out);
-        heliosphere_layer(inp, &proj, lw, dl, &mut out);
-    }
-    stars_layer(inp, &proj, lw, dl, &mut out);
-    galaxy_layer(inp, &proj, lw, dl, &mut out);
-    localgroup_layer(inp, &proj, lw, dl, &mut out);
-    cosmic_layer(inp, &proj, lw, dl, &mut out);
-
-    // ---- gravity view
-    if inp.modes.gravity {
-        gravity_layer(inp, &proj, dl, &mut out);
+    // ---- registered layers (ARCH-013): declared scale windows + gates
+    for layer in LAYERS {
+        if lw >= layer.lw.0 && lw <= layer.lw.1 && (layer.gate)(inp) {
+            (layer.run)(inp, &proj, lw, dl, &mut out);
+        }
     }
 
     // ---- island trails

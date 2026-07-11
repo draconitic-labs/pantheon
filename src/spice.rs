@@ -152,18 +152,8 @@ impl SpkFile {
         DVec3::new(out[0], out[1], out[2])
     }
 
-    /// Position of `target` relative to the solar-system barycenter (km,
-    /// J2000 equatorial), chaining segment centers like CSPICE SPKGPS.
-    pub fn pos_ssb(&self, target: i32, et: f64) -> Option<DVec3> {
-        if target == 0 {
-            return Some(DVec3::ZERO);
-        }
-        let seg = self
-            .segments
-            .iter()
-            .find(|s| s.target == target && et >= s.t0 && et <= s.t1)?;
-        let rel = self.eval_segment(seg, et);
-        Some(rel + self.pos_ssb(seg.center, et)?)
+    fn find(&self, target: i32, et: f64) -> Option<&Segment> {
+        self.segments.iter().find(|s| s.target == target && et >= s.t0 && et <= s.t1)
     }
 }
 
@@ -237,20 +227,41 @@ impl Lsk {
 // ---------------------------------------------------------------- provider
 
 pub struct SpiceSet {
-    pub spk: SpkFile,
+    /// every .bsp in the kernel directory: (file name, parsed DAF)
+    pub spks: Vec<(String, SpkFile)>,
     pub lsk: Option<Lsk>,
-    /// planetary coverage as TDB julian dates
+    /// planetary (de440s) coverage as TDB julian dates
     pub jd0: f64,
     pub jd1: f64,
 }
 
 impl SpiceSet {
     pub fn load(dir: &Path) -> Result<SpiceSet, String> {
-        let spk = SpkFile::load(&dir.join("de440s.bsp"))?;
+        let mut spks: Vec<(String, SpkFile)> = Vec::new();
+        let mut planetary: Option<(f64, f64)> = None;
+        let entries = std::fs::read_dir(dir).map_err(|e| format!("{e}"))?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+            if !name.ends_with(".bsp") {
+                continue;
+            }
+            match SpkFile::load(&path) {
+                Ok(spk) => {
+                    if name.starts_with("de440") {
+                        planetary = Some(spk.coverage_et());
+                    }
+                    spks.push((name, spk));
+                }
+                Err(e) => log::warn!("spice: skipping {name}: {e}"),
+            }
+        }
+        let (et0, et1) = planetary.ok_or("de440s.bsp missing (planetary states)")?;
+        // planetary kernel first so common lookups resolve in one probe
+        spks.sort_by_key(|(n, _)| !n.starts_with("de440") as u8);
         let lsk = Lsk::load(&dir.join("naif0012.tls")).ok();
-        let (et0, et1) = spk.coverage_et();
         Ok(SpiceSet {
-            spk,
+            spks,
             lsk,
             jd0: J2000_JD + et0 / 86_400.0,
             jd1: J2000_JD + et1 / 86_400.0,
@@ -261,26 +272,50 @@ impl SpiceSet {
         jd_tdb >= self.jd0 && jd_tdb <= self.jd1
     }
 
+    /// Whether any loaded kernel carries `target` at this epoch.
+    pub fn has(&self, target: i32, jd_tdb: f64) -> bool {
+        let et = (jd_tdb - J2000_JD) * 86_400.0;
+        self.spks.iter().any(|(_, s)| s.find(target, et).is_some())
+    }
+
+    /// Position of `target` relative to the solar-system barycenter (km,
+    /// J2000 equatorial), chaining centers across ALL loaded kernels — a
+    /// Galilean resolves moon→jupiter-barycenter (jup365) →SSB (de440s).
+    fn pos_ssb(&self, target: i32, et: f64) -> Option<DVec3> {
+        if target == 0 {
+            return Some(DVec3::ZERO);
+        }
+        for (_, spk) in &self.spks {
+            if let Some(seg) = spk.find(target, et) {
+                let rel = spk.eval_segment(seg, et);
+                return Some(rel + self.pos_ssb(seg.center, et)?);
+            }
+        }
+        None
+    }
+
     /// Heliocentric ecliptic-J2000 position in meters (the app root frame).
     pub fn helio_ecl_m(&self, naif_id: i32, jd_tdb: f64) -> Option<DVec3> {
-        if !self.covers(jd_tdb) {
-            return None;
-        }
         let et = (jd_tdb - J2000_JD) * 86_400.0;
-        let t = self.spk.pos_ssb(naif_id, et)?;
-        let sun = self.spk.pos_ssb(10, et)?;
+        let t = self.pos_ssb(naif_id, et)?;
+        let sun = self.pos_ssb(10, et)?;
         Some(crate::frames::ecl_from_icrs() * ((t - sun) * 1_000.0))
     }
 
     /// Position of `target` relative to `center` (both NAIF ids), ecliptic m.
     pub fn rel_ecl_m(&self, target: i32, center: i32, jd_tdb: f64) -> Option<DVec3> {
-        if !self.covers(jd_tdb) {
-            return None;
-        }
         let et = (jd_tdb - J2000_JD) * 86_400.0;
-        let t = self.spk.pos_ssb(target, et)?;
-        let c = self.spk.pos_ssb(center, et)?;
+        let t = self.pos_ssb(target, et)?;
+        let c = self.pos_ssb(center, et)?;
         Some(crate::frames::ecl_from_icrs() * ((t - c) * 1_000.0))
+    }
+
+    pub fn kernel_summary(&self) -> String {
+        self.spks
+            .iter()
+            .map(|(n, s)| format!("{n} ({} seg)", s.segment_count()))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -294,12 +329,7 @@ pub fn spice() -> Option<&'static SpiceSet> {
             let dir = crate::data::asset_root().join("data/spice");
             match SpiceSet::load(&dir) {
                 Ok(s) => {
-                    log::info!(
-                        "spice: de440s loaded, {} segments, JD {:.1}–{:.1}",
-                        s.spk.segment_count(),
-                        s.jd0,
-                        s.jd1
-                    );
+                    log::info!("spice: loaded {} · JD {:.1}–{:.1}", s.kernel_summary(), s.jd0, s.jd1);
                     Some(s)
                 }
                 Err(e) => {
@@ -348,7 +378,31 @@ mod tests {
             let err_km = (spk - rel).length() / 1e3;
             assert!(err_km < 2.0, "moon sample {k}: {err_km} km");
         }
-        // refuses outside coverage
-        assert!(s.helio_ecl_m(399, J2000 - 80_000.0).is_none());
+        // refuses outside ALL kernel coverage (jup365 reaches back to 1600,
+        // so probe the 14th century)
+        assert!(s.helio_ecl_m(399, J2000 - 220_000.0).is_none());
+    }
+
+    /// Satellite-kernel gate: jup365 must reproduce an independently fetched
+    /// jovicentric Io arc from Horizons. Skips when the kernel isn't present.
+    #[test]
+    fn jup365_matches_horizons_io() {
+        let Some(s) = spice() else { return };
+        if !s.has(501, J2000 + 9_650.0) {
+            eprintln!("jup365 not loaded — satellite gate skipped");
+            return;
+        }
+        let root = crate::data::asset_root();
+        let track = crate::data::load_horizons_pub(
+            &root.join("data/spacecraft/io_gate.txt"),
+            "Jupiter",
+        )
+        .expect("io gate arc");
+        for k in [0usize, 7, 19] {
+            let (jd, rel, _) = track.samples[k];
+            let spk = s.rel_ecl_m(501, 599, jd).expect("io state");
+            let err_km = (spk - rel).length() / 1e3;
+            assert!(err_km < 10.0, "io sample {k}: {err_km} km");
+        }
     }
 }

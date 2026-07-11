@@ -157,13 +157,19 @@ fn doctor() -> anyhow::Result<()> {
                 2000.0 + (s.jd1 - 2_451_545.0) / 365.25,
             );
             println!(
-                "spice:    OK — de440s.bsp ({} segments, {y0:.0}–{y1:.0}), leap seconds {}",
-                s.spk.segment_count(),
+                "spice:    OK — {} · planetary {y0:.0}–{y1:.0} · leap seconds {}",
+                s.kernel_summary(),
                 s.lsk.as_ref().map(|l| l.entries.len().to_string()).unwrap_or("MISSING".into())
             );
         }
         None => println!("spice:    not loaded — analytic elements only (optional)"),
     }
+    // layer registry
+    println!(
+        "layers:   {} registered — {}",
+        crate::atlas::LAYERS.len(),
+        crate::atlas::LAYERS.iter().map(|l| l.name).collect::<Vec<_>>().join(", ")
+    );
     // ffmpeg
     let ff = std::process::Command::new("ffmpeg").arg("-version").output();
     match ff {

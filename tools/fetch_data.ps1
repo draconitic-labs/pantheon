@@ -97,3 +97,6 @@ $prov | Out-File (Join-Path $data "provenance.json") -Encoding utf8
 New-Item -ItemType Directory -Force (Join-Path $data "spice") | Out-Null
 Fetch "spice_de440s" "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de440s.bsp" (Join-Path $data "spice\de440s.bsp") @()
 Fetch "spice_lsk" "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/lsk/naif0012.tls" (Join-Path $data "spice\naif0012.tls") @()
+Fetch "spice_mar099" "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satellites/mar099.bsp" (Join-Path $data "spice\mar099.bsp") @()
+Fetch "spice_jup365" "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satellites/jup365.bsp" (Join-Path $data "spice\jup365.bsp") @()
+# optional (large): sat441.bsp, ura111.bsp, nep095.bsp, plu058.bsp from the same directory

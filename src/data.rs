@@ -461,6 +461,11 @@ impl Track {
     }
 }
 
+/// Test-visible wrapper (kernel gate arcs live outside the Universe set).
+pub fn load_horizons_pub(path: &std::path::Path, expect_center: &str) -> Result<Track, String> {
+    load_horizons(path, expect_center)
+}
+
 /// Parse a cached Horizons vector file, validating center and reference frame
 /// from the header (AUDIT SCI-016) and requiring monotonic finite samples.
 fn load_horizons(path: &std::path::Path, expect_center: &str) -> Result<Track, String> {

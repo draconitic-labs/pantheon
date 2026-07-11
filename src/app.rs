@@ -1,4 +1,4 @@
-﻿//! Application shell shared by the interactive window and headless export:
+//! Application shell shared by the interactive window and headless export:
 //! one code path builds the atlas frame, renders the canvas, and lays the
 //! glass UI (cards, ladder, time bar, truth legend, capture) over it.
 
@@ -52,7 +52,7 @@ pub struct Pantheon {
     pub clock: Clock,
     pub modes: Modes,
     pub focus: Option<ObjectRef>,
-    /// active exoplanet pocket â€” persists independently of selection
+    /// active exoplanet pocket — persists independently of selection
     pub scene_exo: Option<usize>,
     pub follow: Option<(ObjectRef, DVec3)>,
     pub island: Option<Island>,
@@ -77,7 +77,7 @@ pub struct Pantheon {
     pub jd_glide: Option<(f64, f64)>,
     pub search_open: bool,
     pub search_q: String,
-    /// labels placed last frame â€” hysteresis so labels don't flicker (UX B3)
+    /// labels placed last frame — hysteresis so labels don't flicker (UX B3)
     sticky: std::collections::HashSet<String>,
     /// camera back-stack for dives/jumps (S6): center, mpp, tilt
     history: Vec<(DVec3, f64, f64)>,
@@ -125,7 +125,7 @@ impl Pantheon {
             setup_error: None,
             status: problems
                 .first()
-                .map(|p| (format!("âš  degraded data â€” {p}"), 10.0)),
+                .map(|p| (format!("⚠ degraded data — {p}"), 10.0)),
             ambience_on: true,
             ambience_vol: 0.5,
             jd_glide: None,
@@ -144,7 +144,7 @@ impl Pantheon {
         }
     }
 
-    /// Fly back to the previous viewpoint (Backspace / âŸµ).
+    /// Fly back to the previous viewpoint (Backspace / ⟵).
     pub fn go_back(&mut self, w: f64) {
         if let Some((center, mpp, tilt)) = self.history.pop() {
             self.follow = None;
@@ -333,7 +333,7 @@ impl Pantheon {
         self.push_history();
         if let ObjectRef::ExoHost(ei) | ObjectRef::ExoPlanet(ei, _) = obj {
             if self.u.exos[ei].dist_pc.is_none() {
-                self.note("distance unknown â€” this system cannot be charted");
+                self.note("distance unknown — this system cannot be charted");
                 return;
             }
             self.scene_exo = Some(ei);
@@ -346,7 +346,7 @@ impl Pantheon {
         let d_log = (self.cam.mpp / mpp).abs().log10().abs();
         self.cam.fly_to(pos, mpp, w, (0.9 + 0.35 * d_log).clamp(0.9, 4.2));
         let name = obj_name(&self.u, obj);
-        self.note(format!("â†’ {name}"));
+        self.note(format!("→ {name}"));
     }
 
     pub fn awaken(&mut self) {
@@ -404,7 +404,7 @@ impl Pantheon {
         self.clock.playing = true;
         // a legible default rate: moons visibly orbit, nothing teleports (UX C6)
         self.clock.rate = 3_600.0;
-        self.note(format!("{} system awakened â€” local N-body live", PLANETS[pi].name));
+        self.note(format!("{} system awakened — local N-body live", PLANETS[pi].name));
     }
 
     // ------------------------------------------------------ frame build
@@ -427,10 +427,8 @@ impl Pantheon {
             if let Some(obj) = self.focus {
                 let p = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref());
                 eprintln!(
-                    "cam-obj {:.0} m | follow {:?} | anim {} | jd {:.6}",
+                    "cam-obj {:.0} m | jd {:.6}",
                     (self.cam.center_root() - p).length(),
-                    self.follow.map(|(_, o)| o.length()),
-                    self.cam.anim.is_some(),
                     self.clock.jd
                 );
             }
@@ -461,7 +459,7 @@ impl Pantheon {
             rect.height() as f64,
             &self.u.gal,
         );
-        // wheel zoom anchored at the cursor â€” solved against the NEW basis,
+        // wheel zoom anchored at the cursor — solved against the NEW basis,
         // which can rotate with scale (AUDIT FND-022)
         if scroll.abs() > 0.01 && resp.hovered() {
             let f = (-scroll as f64 * 0.0022).exp();
@@ -565,7 +563,7 @@ impl Pantheon {
                 }
             }
         }
-        // keys â€” suppressed while a text field is focused
+        // keys — suppressed while a text field is focused
         let typing = ctx.memory(|m| m.focused().is_some());
         if typing {
             return;
@@ -693,26 +691,26 @@ impl Pantheon {
         let mut out: Vec<(String, ObjectRef)> = Vec::new();
         for (i, p) in PLANETS.iter().enumerate() {
             if p.name.to_lowercase().contains(&q) {
-                out.push((format!("{} â€” planet", p.name), ObjectRef::Planet(i)));
+                out.push((format!("{} — planet", p.name), ObjectRef::Planet(i)));
             }
         }
         for (i, m) in MOONS.iter().enumerate() {
             if m.name.to_lowercase().contains(&q) {
                 out.push((
-                    format!("{} â€” moon of {}", m.name, PLANETS[m.planet].name),
+                    format!("{} — moon of {}", m.name, PLANETS[m.planet].name),
                     ObjectRef::Moon(i),
                 ));
             }
         }
         for (i, c) in self.u.craft.iter().enumerate() {
             if c.name.to_lowercase().contains(&q) {
-                out.push((format!("{} â€” spacecraft", c.name), ObjectRef::Craft(i)));
+                out.push((format!("{} — spacecraft", c.name), ObjectRef::Craft(i)));
             }
         }
         for (i, s) in self.u.stars.iter().enumerate() {
             if let Some(n) = s.name {
                 if n.to_lowercase().contains(&q) {
-                    out.push((format!("{n} â€” star, {:.1} pc", s.dist_pc), ObjectRef::Star(i)));
+                    out.push((format!("{n} — star, {:.1} pc", s.dist_pc), ObjectRef::Star(i)));
                 }
             }
         }
@@ -720,7 +718,7 @@ impl Pantheon {
         for (i, e) in self.u.exos.iter().enumerate() {
             if e.dist_pc.is_some() && e.host.to_lowercase().contains(&q) {
                 out.push((
-                    format!("{} â€” {} planets", e.host, e.planets.len()),
+                    format!("{} — {} planets", e.host, e.planets.len()),
                     ObjectRef::ExoHost(i),
                 ));
                 ex += 1;
@@ -743,14 +741,14 @@ impl Pantheon {
                 egui::Frame::window(&ctx.style()).show(ui, |ui| {
                     ui.set_width(330.0);
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("âŒ•").size(15.0).color(theme::GOLD));
+                        ui.label(egui::RichText::new("⌕").size(15.0).color(theme::GOLD));
                         let te = ui.add(
                             egui::TextEdit::singleline(&mut self.search_q)
-                                .hint_text("planet, moon, star, craft, exo systemâ€¦")
+                                .hint_text("planet, moon, star, craft, exo system…")
                                 .desired_width(260.0),
                         );
                         te.request_focus();
-                        if ui.button("âœ•").clicked() {
+                        if ui.button("✕").clicked() {
                             close = true;
                         }
                     });
@@ -793,7 +791,7 @@ impl Pantheon {
             .show(ctx, |ui| {
                 ui.label(
                     egui::RichText::new(
-                        "scroll zoom Â· drag pan Â· double-click dive Â· right-drag tilt Â· / search",
+                        "scroll zoom · drag pan · double-click dive · right-drag tilt · / search",
                     )
                     .size(10.5)
                     .color(theme::col32(theme::INK_FAINT, 1.0)),
@@ -827,10 +825,10 @@ impl Pantheon {
                         for (k, v) in [
                             ("wheel", "infinite zoom at the cursor"),
                             ("left drag", "pan"),
-                            ("right drag â†•", "tilt the atlas plane"),
+                            ("right drag ↕", "tilt the atlas plane"),
                             ("click / double-click", "select / dive"),
                             ("L", "Living Orbits (time animation)"),
-                            ("T", "Truth mode â€” ink by evidence"),
+                            ("T", "Truth mode — ink by evidence"),
                             ("G", "Gravity view (L-points, Hill, Roche)"),
                             ("Y", "System View (log-spaced schematic)"),
                             ("H", "home (Earth)"),
@@ -892,17 +890,17 @@ impl Pantheon {
                         );
                     });
                     ui.label(egui::RichText::new(&scale).size(11.5).color(theme::TEXT_DIM));
-                    // active projection frame â€” the reorientation is deliberate,
+                    // active projection frame — the reorientation is deliberate,
                     // so say so instead of feeling like a glitch (UX B4)
                     let lw = self.cam.log_width(1600.0);
                     let frame = if lw < 18.3 {
                         "ecliptic frame"
                     } else if lw < 19.3 {
-                        "reorienting â†’ galactic"
+                        "reorienting → galactic"
                     } else if lw < 22.3 {
                         "galactic frame"
                     } else if lw < 23.2 {
-                        "reorienting â†’ supergalactic"
+                        "reorienting → supergalactic"
                     } else {
                         "supergalactic frame"
                     };
@@ -913,7 +911,7 @@ impl Pantheon {
                                 .color(theme::col32(theme::INK_BLUE, 0.9)),
                         );
                         ui.label(
-                            egui::RichText::new(format!("Â· {frame}"))
+                            egui::RichText::new(format!("· {frame}"))
                                 .size(10.5)
                                 .color(theme::TEXT_DIM),
                         );
@@ -934,9 +932,9 @@ impl Pantheon {
                         }
                     };
                     let mut playing = self.clock.playing;
-                    b(ui, &mut playing, "âŸ³ Living Orbits");
+                    b(ui, &mut playing, "⟳ Living Orbits");
                     self.clock.playing = playing;
-                    b(ui, &mut self.modes.trails, "âˆ¿ Trails");
+                    b(ui, &mut self.modes.trails, "∿ Trails");
                     // capability-aware: disabled with a reason, never silent (UX C4)
                     let grav_ok = matches!(
                         self.focus,
@@ -945,28 +943,28 @@ impl Pantheon {
                     let r = ui
                         .add_enabled(
                             grav_ok,
-                            egui::SelectableLabel::new(self.modes.gravity, "â—‰ Gravity"),
+                            egui::SelectableLabel::new(self.modes.gravity, "◉ Gravity"),
                         )
                         .on_disabled_hover_text("select a planet or moon first");
                     if r.clicked() {
                         self.modes.gravity = !self.modes.gravity;
                     }
-                    b(ui, &mut self.modes.truth, "â—ˆ Truth");
+                    b(ui, &mut self.modes.truth, "◈ Truth");
                     let sys_ok = self.scene_exo.is_some();
                     let r = ui
                         .add_enabled(
                             sys_ok,
-                            egui::SelectableLabel::new(self.modes.system_view, "â˜° System View"),
+                            egui::SelectableLabel::new(self.modes.system_view, "☰ System View"),
                         )
                         .on_disabled_hover_text("enter an exoplanet system first");
                     if r.clicked() {
                         self.modes.system_view = !self.modes.system_view;
                     }
-                    b(ui, &mut self.modes.ladder, "â˜· Ladder");
-                    b(ui, &mut self.show_capture, "âœ§ Capture");
-                    b(ui, &mut self.search_open, "âŒ• Search");
+                    b(ui, &mut self.modes.ladder, "☷ Ladder");
+                    b(ui, &mut self.show_capture, "✧ Capture");
+                    b(ui, &mut self.search_open, "⌕ Search");
                     ui.separator();
-                    b(ui, &mut self.ambience_on, "â™ª Ambience");
+                    b(ui, &mut self.ambience_on, "♪ Ambience");
                     if self.ambience_on {
                         ui.add(
                             egui::Slider::new(&mut self.ambience_vol, 0.0..=1.0)
@@ -977,13 +975,13 @@ impl Pantheon {
                     ui.separator();
                     let back_ok = !self.history.is_empty();
                     let r = ui
-                        .add_enabled(back_ok, egui::SelectableLabel::new(false, "âŸµ Back"))
+                        .add_enabled(back_ok, egui::SelectableLabel::new(false, "⟵ Back"))
                         .on_disabled_hover_text("no earlier viewpoint")
                         .on_hover_text("Backspace");
                     if r.clicked() {
                         self.go_back(1600.0);
                     }
-                    if ui.selectable_label(false, "âŒ‚ Home (Earth)").clicked() {
+                    if ui.selectable_label(false, "⌂ Home (Earth)").clicked() {
                         let jd = self.clock.jd;
                         self.push_history();
                         self.focus = Some(ObjectRef::Planet(2));
@@ -1051,7 +1049,7 @@ impl Pantheon {
                         5.0,
                         egui::Stroke::new(1.4, theme::GOLD),
                     );
-                    // click to jump â€” rungs carry semantic destinations, not
+                    // click to jump — rungs carry semantic destinations, not
                     // just a scale (AUDIT FND-021)
                     if resp.clicked() {
                         if let Some(pos) = resp.interact_pointer_pos() {
@@ -1072,7 +1070,7 @@ impl Pantheon {
                         }
                     }
                     ui.label(
-                        egui::RichText::new("SCALE LADDER Â· logâ‚â‚€ view width (m)")
+                        egui::RichText::new("SCALE LADDER · log₁₀ view width (m)")
                             .size(10.0)
                             .color(theme::TEXT_DIM),
                     );
@@ -1086,7 +1084,7 @@ impl Pantheon {
             .show(ctx, |ui| {
                 egui::Frame::window(&ctx.style()).show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        let play_label = if self.clock.playing { "â¸" } else { "â–¶" };
+                        let play_label = if self.clock.playing { "⏸" } else { "▶" };
                         if ui.button(play_label).clicked() {
                             self.clock.playing = !self.clock.playing;
                             if self.clock.playing {
@@ -1113,7 +1111,7 @@ impl Pantheon {
                             }
                         }
                         ui.separator();
-                        // time machine scrub Â±centuries; write back only on real
+                        // time machine scrub ±centuries; write back only on real
                         // interaction (Slider display-rounding must never move time)
                         let mut yr = 2000.0 + (self.clock.jd - J2000) / 365.25;
                         let resp = ui.add(
@@ -1150,7 +1148,7 @@ impl Pantheon {
             .show(ctx, |ui| {
                 egui::Frame::window(&ctx.style()).show(ui, |ui| {
                     ui.label(
-                        egui::RichText::new("TRUTH MODE â€” ink by evidence")
+                        egui::RichText::new("TRUTH MODE — ink by evidence")
                             .size(12.0)
                             .color(theme::GOLD),
                     );
@@ -1217,7 +1215,7 @@ impl Pantheon {
                         }
                     });
                     ui.horizontal(|ui| {
-                        if ui.button("â–¶ play").clicked() && !self.capture.is_empty() {
+                        if ui.button("▶ play").clicked() && !self.capture.is_empty() {
                             let keys = self.capture.clone();
                             self.apply_key(&keys[0]);
                             self.play = Some(PathPlay { keys, k: 0, t: 0.0 });
@@ -1279,25 +1277,38 @@ impl Pantheon {
                         });
                     }
                     ui.add_space(3.0);
-                    for (what, p) in &provs {
+                    for (what, e) in &provs {
+                        // PROV-003: chips resolve evidence records — hover for
+                        // source, citation, frame, and retrieval date
+                        let r = crate::evidence::rec(*e);
                         ui.horizontal(|ui| {
                             let (rc, _) = ui
                                 .allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
-                            ui.painter().circle_filled(rc.center(), 3.4, theme::col32(p.rgb(), 1.0));
+                            ui.painter()
+                                .circle_filled(rc.center(), 3.4, theme::col32(r.class.rgb(), 1.0));
+                            let retrieved = if r.fetched {
+                                format!("\nretrieved: {}", self.u.retrieved)
+                            } else {
+                                String::new()
+                            };
                             ui.label(
-                                egui::RichText::new(format!("{} â€” {}", p.label(), what))
+                                egui::RichText::new(format!("{} — {}", r.class.label(), what))
                                     .size(10.5)
                                     .color(theme::TEXT_DIM),
-                            );
+                            )
+                            .on_hover_text(format!(
+                                "{}\n{}\nframe: {}\n{}{}",
+                                r.source, r.citation, r.frame, r.note, retrieved
+                            ));
                         });
                     }
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
-                        if ui.button("â—Ž dive").clicked() {
+                        if ui.button("◎ dive").clicked() {
                             dive = Some(obj);
                         }
                         if can_awaken {
-                            let lbl = if self.island.is_some() { "â˜½ sleep" } else { "â˜€ awaken" };
+                            let lbl = if self.island.is_some() { "☽ sleep" } else { "☀ awaken" };
                             if ui.button(lbl).clicked() {
                                 if self.island.is_some() {
                                     self.island = None;
@@ -1306,14 +1317,14 @@ impl Pantheon {
                                 }
                             }
                         }
-                        if ui.button("âœ•").clicked() {
+                        if ui.button("✕").clicked() {
                             self.focus = None;
                             self.follow = None;
                         }
                     });
                     if self.island_paused {
                         ui.label(
-                            egui::RichText::new("island paused â€” time rate too high for N-body")
+                            egui::RichText::new("island paused — time rate too high for N-body")
                                 .size(10.0)
                                 .color(theme::col32(Prov::Inferred.rgb(), 1.0)),
                         );
@@ -1328,25 +1339,26 @@ impl Pantheon {
     fn card_data(
         &self,
         obj: ObjectRef,
-    ) -> (String, String, Vec<(String, String)>, Vec<(String, Prov)>, bool) {
+    ) -> (String, String, Vec<(String, String)>, Vec<(String, crate::evidence::Ev)>, bool) {
+        use crate::evidence::Ev;
         let u = &self.u;
         let jd = self.clock.jd;
         let mut rows: Vec<(String, String)> = Vec::new();
-        let mut provs: Vec<(String, Prov)> = Vec::new();
+        let mut provs: Vec<(String, Ev)> = Vec::new();
         let mut can_awaken = false;
         let title = obj_name(u, obj);
         let subtitle;
         match obj {
             ObjectRef::Sun => {
-                subtitle = "G2V star Â· the anchor of the atlas".into();
+                subtitle = "G2V star · the anchor of the atlas".into();
                 rows.push(("radius".into(), "695,700 km".into()));
-                rows.push(("GM".into(), "1.327e20 mÂ³/sÂ²".into()));
-                provs.push(("physical constants (IAU)".into(), Prov::Measured));
-                provs.push(("surface granulation".into(), Prov::Procedural));
+                rows.push(("GM".into(), "1.327e20 m³/s²".into()));
+                provs.push(("physical constants".into(), Ev::PhysicalConstants));
+                provs.push(("surface granulation".into(), Ev::ProceduralSurface));
             }
             ObjectRef::Planet(i) => {
                 let p = &PLANETS[i];
-                subtitle = "planet Â· Sol system".into();
+                subtitle = "planet · Sol system".into();
                 let pos = obj_pos(u, obj, jd, self.island.as_ref());
                 rows.push(("distance from Sun".into(), fmt_len(pos.length())));
                 rows.push(("semi-major axis".into(), format!("{:.3} AU", p.el[0])));
@@ -1357,23 +1369,26 @@ impl Pantheon {
                 if let Some(res) = u.planet_residual_km(i, jd) {
                     let txt = if res < 10.0 { format!("{res:.2} km") } else { format!("{res:.0} km") };
                     rows.push(("state vs Horizons now".into(), txt));
-                    provs.push(("JPL Horizons cross-check".into(), Prov::Measured));
-                }
-                if sim::eph_is_spice(jd) {
-                    provs.push(("state: JPL DE440s kernel (SPICE SPK)".into(), Prov::Measured));
-                    provs.push(("orbit engraving: approx. elements".into(), Prov::Modeled));
+                    provs.push(("Horizons cross-check".into(), Ev::HorizonsVectors));
+                    provs.push(("residual interpolation".into(), Ev::HorizonsInterp));
                 }
                 if let Some(isl) = &self.island {
                     let e = isl.sim.energy_scaled();
                     let drift = if isl.e0.abs() > 0.0 { (e - isl.e0) / isl.e0.abs() } else { 0.0 };
                     rows.push(("island energy drift".into(), format!("{:.2} ppm", drift * 1e6)));
-                    provs.push(("leapfrog island diagnostics".into(), Prov::Modeled));
+                    provs.push(("island diagnostics".into(), Ev::NBodyIsland));
                 }
-                provs.push(("orbit: JPL approx. elements 1800â€“2050".into(), Prov::Modeled));
-                provs.push(("surface pattern".into(), Prov::Procedural));
+                if sim::eph_is_spice(jd) {
+                    provs.push(("state".into(), Ev::De440));
+                    provs.push(("orbit engraving".into(), Ev::ApproxElements));
+                } else {
+                    provs.push(("state + orbit".into(), Ev::ApproxElements));
+                }
+                provs.push(("surface pattern".into(), Ev::ProceduralSurface));
+                provs.push(("orientation".into(), Ev::IauRotation));
                 if i == 2 {
-                    provs.push(("coastlines: Natural Earth 110m".into(), Prov::Measured));
-                    provs.push(("night lights: land-masked, placement".into(), Prov::Illustrative));
+                    provs.push(("coastlines".into(), Ev::Coastlines));
+                    provs.push(("night lights".into(), Ev::LandLights));
                 }
                 can_awaken = true;
             }
@@ -1390,67 +1405,64 @@ impl Pantheon {
                 if sim::MOON_INCL[mi] > 0.5 {
                     rows.push((
                         "inclination to equator".into(),
-                        format!("{:.1}Â°", sim::MOON_INCL[mi]),
+                        format!("{:.1}°", sim::MOON_INCL[mi]),
                     ));
                 }
-                if m.name == "Moon" && sim::eph_is_spice(jd) {
-                    provs.push(("state: JPL DE440s kernel (SPICE SPK)".into(), Prov::Measured));
+                if sim::moon_is_spice(mi, jd) {
+                    provs.push((
+                        "state".into(),
+                        if m.name == "Moon" { Ev::De440 } else { Ev::SatelliteSpk },
+                    ));
+                } else if m.name == "Moon" {
+                    provs.push(("state".into(), Ev::LunaModel));
+                    provs.push(("orbital phase".into(), Ev::MoonPhase));
                 } else {
-                    let prov_orbit = if m.name == "Moon" {
-                        "precessing-ellipse model"
-                    } else {
-                        "mean elements, equatorial approx."
-                    };
-                    provs.push((prov_orbit.into(), Prov::Modeled));
+                    provs.push(("state".into(), Ev::MoonMeanElements));
+                    provs.push(("orbital phase".into(), Ev::MoonPhase));
                 }
                 if m.name == "Moon" && u.moon_truth.is_some() {
-                    provs.push(("JPL Horizons arc shown dashed".into(), Prov::Measured));
+                    provs.push(("dashed arc".into(), Ev::HorizonsVectors));
                 }
-                provs.push(("orbital phase".into(), if m.name == "Moon" { Prov::Modeled } else { Prov::Illustrative }));
                 can_awaken = true;
             }
             ObjectRef::Craft(ci) => {
                 let c = &u.craft[ci];
-                subtitle = format!("spacecraft Â· {}", c.note);
+                subtitle = format!("spacecraft · {}", c.note);
                 let pos = obj_pos(u, obj, jd, None);
                 rows.push(("distance from Sun".into(), fmt_len(pos.length())));
                 rows.push(("".into(), format!("{:.2} AU", pos.length() / AU)));
                 let (jd0, jd1) = c.track.span();
-                rows.push(("trajectory arc".into(), format!("{} â†’ {}", &fmt_jd(jd0)[..11], &fmt_jd(jd1)[..11])));
-                provs.push((format!("JPL Horizons, retrieved {}", u.retrieved), Prov::Measured));
-                provs.push(("position between samples".into(), Prov::Inferred));
+                rows.push(("trajectory arc".into(), format!("{} → {}", &fmt_jd(jd0)[..11], &fmt_jd(jd1)[..11])));
+                provs.push(("trajectory".into(), Ev::HorizonsVectors));
+                provs.push(("between samples".into(), Ev::HorizonsInterp));
             }
             ObjectRef::Star(si) => {
                 let s = &u.stars[si];
                 subtitle = if s.compiled {
-                    "star Â· compiled catalog".into()
+                    "star · compiled catalog".into()
                 } else {
-                    "star Â· Gaia DR3".into()
+                    "star · Gaia DR3".into()
                 };
                 let dist = if s.dist_err_pc > 0.0 {
-                    format!("{:.2} Â± {:.2} pc", s.dist_pc, s.dist_err_pc)
+                    format!("{:.2} ± {:.2} pc", s.dist_pc, s.dist_err_pc)
                 } else {
                     format!("{:.2} pc  ({:.1} ly)", s.dist_pc, s.dist_pc * 3.2616)
                 };
                 rows.push(("distance".into(), dist));
                 rows.push(("G magnitude".into(), format!("{:.2}", s.gmag)));
                 rows.push(("absolute mag".into(), format!("{:.2}", s.absmag)));
-                rows.push(("BPâ€“RP colour".into(), format!("{:.2}", s.bp_rp)));
-                let kms = s.drift.length() / 3.155_76e10; // m/yr â†’ km/s
+                rows.push(("BP–RP colour".into(), format!("{:.2}", s.bp_rp)));
+                let kms = s.drift.length() / 3.155_76e10; // m/yr → km/s
                 rows.push(("space motion".into(), format!("{kms:.1} km/s")));
                 provs.push((
-                    if s.compiled {
-                        "Hipparcos-era compilation".into()
-                    } else {
-                        format!("Gaia DR3, retrieved {}", u.retrieved)
-                    },
-                    Prov::Measured,
+                    "astrometry".into(),
+                    if s.compiled { Ev::GaiaCompiled } else { Ev::GaiaDr3 },
                 ));
-                provs.push(("positions propagated by proper motion".into(), Prov::Modeled));
+                provs.push(("position at this epoch".into(), Ev::ProperMotion));
             }
             ObjectRef::ExoHost(ei) => {
                 let s = &u.exos[ei];
-                subtitle = format!("exoplanet host Â· {} planets", s.planets.len());
+                subtitle = format!("exoplanet host · {} planets", s.planets.len());
                 if let Some(d) = s.dist_pc {
                     rows.push(("distance".into(), format!("{d:.1} pc")));
                 }
@@ -1458,24 +1470,24 @@ impl Pantheon {
                     rows.push(("T_eff".into(), format!("{t:.0} K")));
                 }
                 if let Some(r) = s.st_rad {
-                    rows.push(("radius".into(), format!("{r:.2} Râ˜‰")));
+                    rows.push(("radius".into(), format!("{r:.2} R☉")));
                 }
                 if let Some(m) = s.st_mass {
-                    rows.push(("mass".into(), format!("{m:.2} Mâ˜‰")));
+                    rows.push(("mass".into(), format!("{m:.2} M☉")));
                 }
                 if !s.spec.is_empty() {
                     rows.push(("spectral type".into(), s.spec.clone()));
                 }
-                provs.push((format!("NASA Exoplanet Archive, retrieved {}", u.retrieved), Prov::Measured));
-                provs.push(("orbit geometry (nodes unknown)".into(), Prov::Illustrative));
+                provs.push(("stellar parameters".into(), Ev::ExoArchive));
+                provs.push(("orbit geometry".into(), Ev::ExoGeometry));
             }
             ObjectRef::ExoPlanet(ei, k) => {
                 let s = &u.exos[ei];
                 let p = &s.planets[k];
-                subtitle = format!("exoplanet Â· {} ({})", p.method, p.year.map(|y| y.to_string()).unwrap_or_default());
+                subtitle = format!("exoplanet · {} ({})", p.method, p.year.map(|y| y.to_string()).unwrap_or_default());
                 if let Some(per) = p.per_d {
                     rows.push(("period".into(), format!("{per:.3} d")));
-                    provs.push(("period".into(), Prov::Measured));
+                    provs.push(("period".into(), Ev::ExoArchive));
                 }
                 match s.a_au_of(p) {
                     Some((a, Prov::Measured)) => {
@@ -1483,46 +1495,46 @@ impl Pantheon {
                     }
                     Some((a, _)) => {
                         rows.push(("semi-major axis".into(), format!("{a:.4} AU (from Kepler's 3rd)")));
-                        provs.push(("semi-major axis".into(), Prov::Inferred));
+                        provs.push(("semi-major axis".into(), Ev::ExoDerivedSemiMajor));
                     }
                     None => {
                         rows.push(("semi-major axis".into(), "unknown".into()));
-                        provs.push(("semi-major axis".into(), Prov::Unknown));
+                        provs.push(("semi-major axis".into(), Ev::ExoUnknownValue));
                     }
                 }
                 match p.rade {
-                    Some(r) => rows.push(("radius".into(), format!("{r:.2} RâŠ•"))),
+                    Some(r) => rows.push(("radius".into(), format!("{r:.2} R⊕"))),
                     None => {
                         rows.push(("radius".into(), "unknown".into()));
-                        provs.push(("radius".into(), Prov::Unknown));
+                        provs.push(("radius".into(), Ev::ExoUnknownValue));
                     }
                 }
                 if let Some(m) = p.masse {
-                    rows.push(("mass".into(), format!("{m:.1} MâŠ•")));
+                    rows.push(("mass".into(), format!("{m:.1} M⊕")));
                 }
                 if let Some(t) = p.eqt {
                     rows.push(("equilibrium T".into(), format!("{t:.0} K")));
                 }
                 if p.e.is_none() {
-                    provs.push(("eccentricity assumed 0".into(), Prov::Inferred));
+                    provs.push(("eccentricity assumed 0".into(), Ev::ExoDerivedSemiMajor));
                 }
-                provs.push(("orbital phase".into(), Prov::Illustrative));
+                provs.push(("orbital phase".into(), Ev::ExoPhase));
             }
             ObjectRef::Galaxy(gi) => {
                 let g = &u.galaxies[gi];
-                subtitle = if g.spiral { "spiral galaxy Â· Local Group".into() } else { "dwarf galaxy Â· Local Group".into() };
+                subtitle = if g.spiral { "spiral galaxy · Local Group".into() } else { "dwarf galaxy · Local Group".into() };
                 rows.push(("distance".into(), format!("{:.0} kpc", g.dist_kpc)));
                 rows.push(("size".into(), format!("~{:.1} kpc", g.size_kpc)));
-                provs.push(("position & distance: compiled".into(), Prov::Measured));
-                provs.push(("glyph shape".into(), Prov::Illustrative));
+                provs.push(("position & distance".into(), Ev::CompiledCatalog));
+                provs.push(("glyph shape".into(), Ev::GlyphIllustrative));
             }
             ObjectRef::Node(ni) => {
                 let n = &u.nodes[ni];
                 subtitle = "galaxy cluster / attractor".into();
                 rows.push(("distance".into(), format!("{:.0} Mpc", n.dist_mpc)));
                 rows.push(("size".into(), format!("~{:.0} Mpc", n.size_mpc)));
-                provs.push(("position & distance: compiled".into(), Prov::Measured));
-                provs.push(("web filaments".into(), Prov::Procedural));
+                provs.push(("position & distance".into(), Ev::CompiledCatalog));
+                provs.push(("web filaments".into(), Ev::WebProcedural));
             }
         }
         (title, subtitle, rows, provs, can_awaken)
@@ -1617,7 +1629,7 @@ impl eframe::App for GuiApp {
 pub fn run_gui() -> anyhow::Result<()> {
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([1680.0, 980.0])
-        .with_title("Pantheon â€” An Infinite Vector Atlas of the Living Universe");
+        .with_title("Pantheon — An Infinite Vector Atlas of the Living Universe");
     // window/taskbar icon from the generated atlas emblem
     let icon_path = crate::data::asset_root().join("icon.png");
     if let Ok(img) = image::open(&icon_path) {
@@ -1744,7 +1756,7 @@ impl Headless {
             &screen,
         );
         {
-            // egui's pipelines declare no depth state â†’ depth-less pass
+            // egui's pipelines declare no depth state → depth-less pass
             let mut pass = final_target
                 .begin_no_depth(&mut encoder, Some(wgpu::Color::BLACK))
                 .forget_lifetime();
@@ -1814,7 +1826,7 @@ pub const SHOTS: &[Shot] = &[
     },
     Shot {
         name: "earth_moon",
-        desc: "Earthâ€“Moon system with measured lunar arc",
+        desc: "Earth–Moon system with measured lunar arc",
         setup: |a| {
             let p = sim::body_pos(2, a.clock.jd);
             view(a, p, 9.5e8, Some(ObjectRef::Planet(2)));
@@ -1822,7 +1834,7 @@ pub const SHOTS: &[Shot] = &[
     },
     Shot {
         name: "gravity_moon",
-        desc: "Gravity view: Earthâ€“Moon Lagrange points and Hill sphere",
+        desc: "Gravity view: Earth–Moon Lagrange points and Hill sphere",
         setup: |a| {
             let p = sim::body_pos(2, a.clock.jd);
             view(a, p, 1.35e9, Some(ObjectRef::Moon(0)));
@@ -1959,7 +1971,7 @@ pub fn run_shots(which: &str, w: u32, h: u32, out: &std::path::Path) -> anyhow::
         if which != "all" && which != shot.name {
             continue;
         }
-        // reset ALL transient state between shots â€” deterministic procedural
+        // reset ALL transient state between shots — deterministic procedural
         // time included (AUDIT REND-033)
         host.app.modes = Modes::default();
         host.app.island = None;

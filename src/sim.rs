@@ -310,10 +310,16 @@ pub fn earth_center(jd: f64) -> DVec3 {
     planet_pos(2, jd) - luna_rel(jd) * MU_MOON_FRAC
 }
 
-/// NAIF ids for [`PLANETS`]: planet centers where de440s carries them
-/// (Mercury/Venus/Earth), barycenters for the rest (center–barycenter
-/// offsets are ≤ ~10³ km — far below the analytic fallback's error).
+/// Barycenter-level NAIF ids for [`PLANETS`] (always in de440s).
 pub const NAIF_IDS: [i32; 9] = [199, 299, 399, 4, 5, 6, 7, 8, 9];
+/// True planet-center ids — resolved when a satellite kernel provides the
+/// center-relative-barycenter segment (mar097: 499, jup365: 599, …).
+pub const PLANET_CENTER_IDS: [i32; 9] = [199, 299, 399, 499, 599, 699, 799, 899, 999];
+/// Satellite NAIF ids aligned with [`MOONS`].
+pub const MOON_NAIF: [i32; 21] = [
+    301, 401, 402, 501, 502, 503, 504, 601, 602, 603, 604, 605, 606, 608, 705, 701, 702, 703,
+    704, 801, 901,
+];
 
 /// True when the SPICE kernels cover this epoch (the state source shown
 /// in inspectors depends on it).
@@ -326,6 +332,11 @@ pub fn eph_is_spice(jd: f64) -> bool {
 /// or when kernels are absent (Earth resolved to its true center).
 pub fn body_pos(i: usize, jd: f64) -> DVec3 {
     if let Some(s) = crate::spice::spice() {
+        // true planet center when a satellite kernel carries it, else the
+        // system barycenter from de440s (offset ≤ ~10³ km)
+        if let Some(p) = s.helio_ecl_m(PLANET_CENTER_IDS[i], jd) {
+            return p;
+        }
         if let Some(p) = s.helio_ecl_m(NAIF_IDS[i], jd) {
             return p;
         }
@@ -335,6 +346,11 @@ pub fn body_pos(i: usize, jd: f64) -> DVec3 {
     } else {
         planet_pos(i, jd)
     }
+}
+
+/// True when this moon's state comes from a satellite SPK at this epoch.
+pub fn moon_is_spice(mi: usize, jd: f64) -> bool {
+    crate::spice::spice().map(|s| s.has(MOON_NAIF[mi], jd)).unwrap_or(false)
 }
 
 /// Sampled full orbit ellipse (root frame) for engraving, at the osculating epoch.
@@ -467,13 +483,14 @@ pub const MOON_INCL: [f64; 21] = [
 /// the parent's IAU equator, tilted by the moon's own inclination.
 pub fn moon_rel(mi: usize, jd: f64) -> DVec3 {
     let m = &MOONS[mi];
-    if m.name == "Moon" {
-        // DE440s carries the real lunar ephemeris (301 rel 399)
-        if let Some(s) = crate::spice::spice() {
-            if let Some(rel) = s.rel_ecl_m(301, 399, jd) {
-                return rel;
-            }
+    // real satellite ephemerides when a kernel covers this moon (Moon via
+    // de440s 301; Galileans via jup365; Phobos/Deimos via mar097; …)
+    if let Some(s) = crate::spice::spice() {
+        if let Some(rel) = s.rel_ecl_m(MOON_NAIF[mi], PLANET_CENTER_IDS[m.planet], jd) {
+            return rel;
         }
+    }
+    if m.name == "Moon" {
         return luna_rel(jd);
     }
     let n = std::f64::consts::TAU / (m.period_d * DAY);
