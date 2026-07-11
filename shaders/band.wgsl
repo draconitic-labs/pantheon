@@ -25,9 +25,10 @@ fn speckle(px: vec2<f32>, cell: f32, thresh: f32, seed: f32) -> f32 {
         return 0.0;
     }
     let ctr = (c + 0.5 + vec2<f32>(hash21(c + seed + 3.1), hash21(c + seed + 7.7)) - 0.5) * cell;
-    let d = length(px - ctr);
+    let d = length(px - ctr) / cell;
     let b = (h - thresh) / (1.0 - thresh);
-    return exp(-d * d * 1.4) * b;
+    // falloff normalized to the cell so bright stars stay round, never square
+    return exp(-d * d * 14.0) * b;
 }
 
 fn galaxy_rgb(g: vec2<f32>) -> vec3<f32> {
@@ -95,6 +96,19 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
             V.fog_b.x * in.px.x + V.fog_b.y * in.px.y + V.fog_b.z);
         let raw = galaxy_rgb(g) * V.fog_a.w * V.fog_b.w;
         col = col + raw / (vec3<f32>(1.0) + raw * 0.55);
+        // Stellar sparkle resolved out of the fog's own density (procedural):
+        // grain is chosen in *pixels* via the affine scale, so approaching the
+        // Galaxy resolves ever more individual stars instead of a dead clump.
+        if (V.misc.w > 0.001) {
+            let kpp = max(length(vec2<f32>(V.fog_a.x, V.fog_b.x)), 1e-9); // kpc/px
+            let lum = min(dot(raw, vec3<f32>(0.35, 0.45, 0.20)) * 3.5, 1.0);
+            let s1 = speckle(g / (kpp * 3.2), 1.0, 0.9960, 11.0);
+            let s2 = speckle(g / (kpp * 6.5), 1.0, 0.9980, 23.0);
+            col = col
+                + (vec3<f32>(0.85, 0.90, 1.0) * s1 * 1.5
+                    + vec3<f32>(1.0, 0.88, 0.72) * s2 * 2.0)
+                    * lum * V.misc.w;
+        }
     }
 
     // cosmic web

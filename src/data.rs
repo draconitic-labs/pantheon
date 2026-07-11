@@ -564,16 +564,22 @@ pub struct CosmicNode {
     pub size_mpc: f64,
 }
 
-const COSMIC_NODES: [(&str, f64, f64, f64, f64); 9] = [
+const COSMIC_NODES: [(&str, f64, f64, f64, f64); 15] = [
     ("Virgo Cluster", 187.70, 12.34, 16.5, 4.4),
     ("Fornax Cluster", 54.62, -35.45, 19.0, 2.0),
     ("Ursa Major Cluster", 176.0, 49.0, 18.0, 2.0),
+    ("Antlia Cluster", 157.51, -35.32, 41.0, 2.0),
     ("Centaurus Cluster", 192.20, -41.31, 52.0, 3.0),
+    ("Pegasus I Cluster", 340.5, 8.2, 53.0, 2.2),
     ("Hydra Cluster", 139.52, -12.10, 58.0, 3.0),
     ("Norma / Great Attractor", 243.9, -60.9, 68.0, 8.0),
     ("Perseus Cluster", 49.95, 41.51, 74.0, 4.5),
+    ("Leo Cluster (A1367)", 176.12, 19.84, 92.0, 4.0),
     ("Coma Cluster", 194.95, 27.98, 100.0, 6.0),
+    ("Ophiuchus Cluster", 258.1, -23.4, 120.0, 5.0),
+    ("Hercules Cluster (A2151)", 241.15, 17.75, 155.0, 5.0),
     ("Shapley Concentration", 202.5, -31.5, 200.0, 12.0),
+    ("Horologium-Reticulum", 49.5, -50.6, 210.0, 10.0),
 ];
 
 // -------------------------------------------------------------- universe

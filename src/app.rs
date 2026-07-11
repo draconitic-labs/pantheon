@@ -75,6 +75,10 @@ pub struct Pantheon {
     pub ambience_vol: f32,
     /// glide the clock during path playback instead of jumping (AUDIT UI-020)
     pub jd_glide: Option<(f64, f64)>,
+    pub search_open: bool,
+    pub search_q: String,
+    /// labels placed last frame — hysteresis so labels don't flicker (UX B3)
+    sticky: std::collections::HashSet<String>,
 }
 
 impl Pantheon {
@@ -123,6 +127,9 @@ impl Pantheon {
             ambience_on: true,
             ambience_vol: 0.5,
             jd_glide: None,
+            search_open: false,
+            search_q: String::new(),
+            sticky: std::collections::HashSet::new(),
         }
     }
 
@@ -168,7 +175,9 @@ impl Pantheon {
             }
         }
         self.cam.tick(dt);
-        self.clock.tick(dt * if self.modes.living { 1.0 } else { 0.0 });
+        // one time switch: play/pause is the source of truth, "living" derives
+        self.modes.living = self.clock.playing;
+        self.clock.tick(dt);
 
         // follow a moving focus so Living Orbits keeps the subject centered
         if self.cam.anim.is_none() {
@@ -360,6 +369,8 @@ impl Pantheon {
         });
         self.modes.living = true;
         self.clock.playing = true;
+        // a legible default rate: moons visibly orbit, nothing teleports (UX C6)
+        self.clock.rate = 3_600.0;
         self.note(format!("{} system awakened — local N-body live", PLANETS[pi].name));
     }
 
@@ -457,16 +468,40 @@ impl Pantheon {
                         best = Some((d, pk.obj));
                     }
                 }
-                if let Some((_, obj)) = best {
-                    if dbl {
-                        self.dive_to(obj, rect.width() as f64, rect.height() as f64);
-                    } else {
-                        self.focus = Some(obj);
+                match best {
+                    Some((_, obj)) => {
+                        if dbl {
+                            self.dive_to(obj, rect.width() as f64, rect.height() as f64);
+                        } else {
+                            self.focus = Some(obj);
+                        }
+                    }
+                    None => {
+                        // standard map behavior (UX C5): empty double-click
+                        // zooms in at the cursor; empty click deselects
+                        if dbl {
+                            let sx = (p.x - rect.left()) as f64;
+                            let sy = (p.y - rect.top()) as f64;
+                            let world = proj.unproject(sx, sy);
+                            self.follow = None;
+                            self.cam.fly_to(
+                                world,
+                                self.cam.mpp / 2.5,
+                                rect.width() as f64,
+                                0.7,
+                            );
+                        } else {
+                            self.focus = None;
+                        }
                     }
                 }
             }
         }
-        // keys
+        // keys — suppressed while a text field is focused
+        let typing = ctx.memory(|m| m.focused().is_some());
+        if typing {
+            return;
+        }
         ctx.input(|i| {
             if i.key_pressed(egui::Key::Escape) {
                 self.focus = None;
@@ -484,6 +519,9 @@ impl Pantheon {
             }
             if i.key_pressed(egui::Key::Y) {
                 self.modes.system_view = !self.modes.system_view;
+            }
+            if i.key_pressed(egui::Key::Slash) {
+                self.search_open = true;
             }
             if i.key_pressed(egui::Key::H) {
                 let jd = self.clock.jd;
@@ -512,10 +550,14 @@ impl Pantheon {
     pub fn draw_overlay(&mut self, ui: &mut egui::Ui, rect: Rect) {
         let painter = ui.painter_at(rect);
         let Some(fo) = &self.fo else { return };
-        // labels with collision skip, priority first
+        // labels with collision skip; last frame's winners get a hysteresis
+        // bonus so labels don't flicker as the camera drifts (UX B3)
         let mut order: Vec<usize> = (0..fo.labels.len()).collect();
-        order.sort_by_key(|&i| -fo.labels[i].priority);
+        order.sort_by_key(|&i| {
+            -(fo.labels[i].priority + if self.sticky.contains(&fo.labels[i].text) { 12 } else { 0 })
+        });
         let mut placed: Vec<Rect> = Vec::new();
+        let mut placed_texts: std::collections::HashSet<String> = Default::default();
         for i in order {
             let l = &fo.labels[i];
             let pos = egui::pos2(rect.left() + l.pos[0], rect.top() + l.pos[1]);
@@ -525,6 +567,7 @@ impl Pantheon {
                 continue;
             }
             placed.push(r);
+            placed_texts.insert(l.text.clone());
             let col = theme::col32([l.color[0], l.color[1], l.color[2]], l.color[3]);
             let font = FontId::new(l.size, FontFamily::Proportional);
             painter.text(
@@ -536,6 +579,7 @@ impl Pantheon {
             );
             painter.text(pos, Align2::CENTER_CENTER, &l.text, font, col);
         }
+        self.sticky = placed_texts;
         // focus reticle
         if let Some(obj) = self.focus {
             let p = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref());
@@ -567,11 +611,122 @@ impl Pantheon {
 
     // ------------------------------------------------------------ panels
 
+    /// Search over everything nameable: planets, moons, craft, named stars,
+    /// exoplanet hosts (UX C1).
+    fn search_results(&self) -> Vec<(String, ObjectRef)> {
+        let q = self.search_q.trim().to_lowercase();
+        if q.len() < 2 {
+            return Vec::new();
+        }
+        let mut out: Vec<(String, ObjectRef)> = Vec::new();
+        for (i, p) in PLANETS.iter().enumerate() {
+            if p.name.to_lowercase().contains(&q) {
+                out.push((format!("{} — planet", p.name), ObjectRef::Planet(i)));
+            }
+        }
+        for (i, m) in MOONS.iter().enumerate() {
+            if m.name.to_lowercase().contains(&q) {
+                out.push((
+                    format!("{} — moon of {}", m.name, PLANETS[m.planet].name),
+                    ObjectRef::Moon(i),
+                ));
+            }
+        }
+        for (i, c) in self.u.craft.iter().enumerate() {
+            if c.name.to_lowercase().contains(&q) {
+                out.push((format!("{} — spacecraft", c.name), ObjectRef::Craft(i)));
+            }
+        }
+        for (i, s) in self.u.stars.iter().enumerate() {
+            if let Some(n) = s.name {
+                if n.to_lowercase().contains(&q) {
+                    out.push((format!("{n} — star, {:.1} pc", s.dist_pc), ObjectRef::Star(i)));
+                }
+            }
+        }
+        let mut ex = 0;
+        for (i, e) in self.u.exos.iter().enumerate() {
+            if e.dist_pc.is_some() && e.host.to_lowercase().contains(&q) {
+                out.push((
+                    format!("{} — {} planets", e.host, e.planets.len()),
+                    ObjectRef::ExoHost(i),
+                ));
+                ex += 1;
+                if ex > 8 {
+                    break;
+                }
+            }
+        }
+        out.truncate(12);
+        out
+    }
+
+    fn search_panel(&mut self, ctx: &egui::Context, rect: Rect) {
+        let results = self.search_results();
+        let mut dive: Option<ObjectRef> = None;
+        let mut close = false;
+        egui::Area::new(egui::Id::new("search"))
+            .anchor(Align2::CENTER_TOP, [0.0, 56.0])
+            .show(ctx, |ui| {
+                egui::Frame::window(&ctx.style()).show(ui, |ui| {
+                    ui.set_width(330.0);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("⌕").size(15.0).color(theme::GOLD));
+                        let te = ui.add(
+                            egui::TextEdit::singleline(&mut self.search_q)
+                                .hint_text("planet, moon, star, craft, exo system…")
+                                .desired_width(260.0),
+                        );
+                        te.request_focus();
+                        if ui.button("✕").clicked() {
+                            close = true;
+                        }
+                    });
+                    for (label, obj) in &results {
+                        if ui
+                            .selectable_label(false, egui::RichText::new(label).size(12.0))
+                            .clicked()
+                        {
+                            dive = Some(*obj);
+                        }
+                    }
+                    if results.is_empty() && self.search_q.trim().len() >= 2 {
+                        ui.label(
+                            egui::RichText::new("no match").size(11.0).color(theme::TEXT_DIM),
+                        );
+                    }
+                });
+            });
+        if close || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.search_open = false;
+        }
+        if let Some(obj) = dive {
+            self.search_open = false;
+            self.search_q.clear();
+            self.dive_to(obj, rect.width() as f64, rect.height() as f64);
+        }
+    }
+
     pub fn draw_panels(&mut self, ctx: &egui::Context, rect: Rect) {
         self.top_chip(ctx);
         if self.cinema {
             return;
         }
+        if self.search_open {
+            self.search_panel(ctx, rect);
+        }
+        // persistent control hints (UX C2)
+        egui::Area::new(egui::Id::new("hints"))
+            .anchor(Align2::RIGHT_BOTTOM, [-14.0, -12.0])
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "scroll zoom · drag pan · double-click dive · right-drag tilt · / search",
+                    )
+                    .size(10.5)
+                    .color(theme::col32(theme::INK_FAINT, 1.0)),
+                );
+            });
         self.mode_rail(ctx, rect);
         if self.modes.ladder {
             self.ladder(ctx, rect);
@@ -665,11 +820,32 @@ impl Pantheon {
                         );
                     });
                     ui.label(egui::RichText::new(&scale).size(11.5).color(theme::TEXT_DIM));
-                    ui.label(
-                        egui::RichText::new(fmt_jd(self.clock.jd))
-                            .size(11.5)
-                            .color(theme::col32(theme::INK_BLUE, 0.9)),
-                    );
+                    // active projection frame — the reorientation is deliberate,
+                    // so say so instead of feeling like a glitch (UX B4)
+                    let lw = self.cam.log_width(1600.0);
+                    let frame = if lw < 18.3 {
+                        "ecliptic frame"
+                    } else if lw < 19.3 {
+                        "reorienting → galactic"
+                    } else if lw < 22.3 {
+                        "galactic frame"
+                    } else if lw < 23.2 {
+                        "reorienting → supergalactic"
+                    } else {
+                        "supergalactic frame"
+                    };
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(fmt_jd(self.clock.jd))
+                                .size(11.5)
+                                .color(theme::col32(theme::INK_BLUE, 0.9)),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!("· {frame}"))
+                                .size(10.5)
+                                .color(theme::TEXT_DIM),
+                        );
+                    });
                 });
             });
     }
@@ -685,18 +861,38 @@ impl Pantheon {
                             *on = !*on;
                         }
                     };
-                    let mut living = self.modes.living;
-                    b(ui, &mut living, "⟳ Living Orbits");
-                    if living != self.modes.living {
-                        self.modes.living = living;
-                        self.clock.playing = living;
-                    }
+                    let mut playing = self.clock.playing;
+                    b(ui, &mut playing, "⟳ Living Orbits");
+                    self.clock.playing = playing;
                     b(ui, &mut self.modes.trails, "∿ Trails");
-                    b(ui, &mut self.modes.gravity, "◉ Gravity");
+                    // capability-aware: disabled with a reason, never silent (UX C4)
+                    let grav_ok = matches!(
+                        self.focus,
+                        Some(ObjectRef::Planet(_)) | Some(ObjectRef::Moon(_))
+                    );
+                    let r = ui
+                        .add_enabled(
+                            grav_ok,
+                            egui::SelectableLabel::new(self.modes.gravity, "◉ Gravity"),
+                        )
+                        .on_disabled_hover_text("select a planet or moon first");
+                    if r.clicked() {
+                        self.modes.gravity = !self.modes.gravity;
+                    }
                     b(ui, &mut self.modes.truth, "◈ Truth");
-                    b(ui, &mut self.modes.system_view, "☰ System View");
+                    let sys_ok = self.scene_exo.is_some();
+                    let r = ui
+                        .add_enabled(
+                            sys_ok,
+                            egui::SelectableLabel::new(self.modes.system_view, "☰ System View"),
+                        )
+                        .on_disabled_hover_text("enter an exoplanet system first");
+                    if r.clicked() {
+                        self.modes.system_view = !self.modes.system_view;
+                    }
                     b(ui, &mut self.modes.ladder, "☷ Ladder");
                     b(ui, &mut self.show_capture, "✧ Capture");
+                    b(ui, &mut self.search_open, "⌕ Search");
                     ui.separator();
                     b(ui, &mut self.ambience_on, "♪ Ambience");
                     if self.ambience_on {
@@ -846,6 +1042,17 @@ impl Pantheon {
                         if resp.changed() && (resp.dragged() || resp.clicked() || resp.has_focus())
                         {
                             self.clock.jd = J2000 + (yr - 2000.0) * 365.25;
+                        }
+                        // fine control: the slider is ~4.5 yr per pixel (UX C7)
+                        let mut yr_fine = 2000.0 + (self.clock.jd - J2000) / 365.25;
+                        let dv = ui.add(
+                            egui::DragValue::new(&mut yr_fine)
+                                .speed(0.02)
+                                .range(1600.0..=2500.0)
+                                .suffix(" yr"),
+                        );
+                        if dv.changed() && (dv.dragged() || dv.has_focus()) {
+                            self.clock.jd = J2000 + (yr_fine - 2000.0) * 365.25;
                         }
                     });
                 });
@@ -1541,6 +1748,32 @@ pub const SHOTS: &[Shot] = &[
         name: "oort",
         desc: "Oort cloud shell",
         setup: |a| view(a, DVec3::ZERO, 4.5e15, None),
+    },
+    Shot {
+        name: "mars",
+        desc: "Mars close-up: polar caps, cratered surface",
+        setup: |a| {
+            let p = sim::body_pos(3, a.clock.jd);
+            view(a, p, 1.9e7, Some(ObjectRef::Planet(3)));
+            a.cam.tilt = 0.3;
+        },
+    },
+    Shot {
+        name: "luna",
+        desc: "The Moon close-up: maria and craters",
+        setup: |a| {
+            let jd = a.clock.jd;
+            let p = sim::body_pos(2, jd) + sim::luna_rel(jd);
+            view(a, p, 1.0e7, Some(ObjectRef::Moon(0)));
+        },
+    },
+    Shot {
+        name: "galaxy_close",
+        desc: "Galaxy at 3 kpc: fog resolving into stellar sparkle",
+        setup: |a| {
+            let gc = crate::frames::galactic_frame().center;
+            view(a, gc * 0.5, 2.0e20, None);
+        },
     },
     Shot {
         name: "jupiter",

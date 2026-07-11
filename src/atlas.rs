@@ -277,11 +277,13 @@ pub fn build(inp: &BuildIn, dl: &mut DrawList) -> FrameOut {
         ),
     };
     out.uni.size = [inp.w as f32, inp.h as f32, inp.anim_t as f32, 0.0];
+    // deep field never fully dies (real sky is full of stars behind planets);
+    // drift slowed 3× so zooming doesn't make the background crawl (UX B2/A1)
     out.uni.misc = [
-        (1.0 - band(lw, -10.0, 8.6, 1.2)) as f32 * 0.9 + 0.1,
-        (cam.mpp.log10() * 0.35) as f32,
+        (1.0 - band(lw, -10.0, 8.6, 1.2)) as f32 * 0.55 + 0.45,
+        (cam.mpp.log10() * 0.11) as f32,
         1.7,
-        0.0,
+        (band(lw, 18.8, 21.8, 0.6) * if truth { 0.4 } else { 1.0 }) as f32,
     ];
 
     // ---- fullscreen procedural planes
@@ -382,7 +384,7 @@ fn jd_year(jd: f64) -> f64 {
 
 fn band_name(lw: f64) -> &'static str {
     match lw {
-        x if x < 7.5 => "Planetary Surface",
+        x if x < 7.5 => "Planet Close-up",
         x if x < 8.9 => "Planet",
         x if x < 10.8 => "Planet & Moons",
         x if x < 12.3 => "Inner System",
@@ -588,6 +590,18 @@ fn draw_planet_disc(
         "Saturn" => 0.31,
         _ => 0.11 + i as f32 * 0.07,
     };
+    // per-body surface character (UX A4): ca.a = polar caps, cb.a = detail
+    let (cap, det) = match p.name {
+        "Mars" => (0.9, 1.15),
+        "Mercury" => (0.0, 1.7),
+        "Venus" => (0.0, 0.45),
+        "Jupiter" => (0.0, 1.25),
+        "Saturn" => (0.0, 1.0),
+        "Uranus" => (0.0, 0.35),
+        "Neptune" => (0.0, 0.8),
+        "Pluto" => (0.0, 1.3),
+        _ => (0.0, 1.0),
+    };
     // rings: the far half renders under the disc, the near half above it
     for ring in RINGS.iter().filter(|r| r.planet == i) {
         if r_px > 5.0 {
@@ -600,10 +614,15 @@ fn draw_planet_disc(
         pr: [r_px, p.flatten, p.kind, seed],
         sun: [sun_dir[0], sun_dir[1], sun_dir[2], 0.05],
         axis: [axis[0], axis[1], axis[2], planet_spin(i, jd) as f32],
-        ca: [p.color[0], p.color[1], p.color[2], 1.0],
-        cb: [p.color2[0], p.color2[1], p.color2[2], 1.0],
+        ca: [p.color[0], p.color[1], p.color[2], cap],
+        cb: [p.color2[0], p.color2[1], p.color2[2], det],
         rim: [p.rim[0], p.rim[1], p.rim[2], if p.rim == [0.0, 0.0, 0.0] { 0.0 } else { 0.55 }],
     });
+    // mask the point→disc transition with a fading glow (UX B1)
+    if r_px < 3.2 {
+        let a = ((3.2 - r_px) / 2.0).clamp(0.0, 1.0) * 0.9;
+        dl.point(px, r_px.max(1.6), 6.0, 0.0, [p.color[0], p.color[1], p.color[2], a]);
+    }
     // Earth: vector coastlines + graticule (measured, Natural Earth)
     if p.kind == 4.0 && r_px > 26.0 {
         earth_vector_layer(inp, proj, pos, r_px, dl);
@@ -720,9 +739,13 @@ fn moons_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
     for mi in 0..MOONS.len() {
         let m = &MOONS[mi];
         let a_px = (m.a_km * 1e3 / cam.mpp) as f32;
-        if a_px < 5.0 || a_px > 30_000.0 {
+        // the ORBIT is only worth drawing in a size window, but the BODY must
+        // never be culled by its own orbit size (diving to a moon previously
+        // showed empty space — UX audit, found via the luna shot)
+        if a_px < 5.0 {
             continue;
         }
+        let orbit_visible = a_px <= 30_000.0;
         let ppos = obj_pos(u, ObjectRef::Planet(m.planet), jd, inp.island);
         let ppx = proj.px(ppos);
         if !on_screen(ppx, inp.w, inp.h, a_px + 200.0) {
@@ -735,16 +758,18 @@ fn moons_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
         };
         let mpx = proj.px(mpos);
         // orbit
-        let fade = ((a_px - 5.0) / 30.0).clamp(0.1, 1.0);
-        let pts: Vec<[f32; 2]> =
-            moon_orbit(mi, jd, 160).iter().map(|r| proj.px(ppos + *r)).collect();
         let is_luna = m.name == "Moon";
-        dl.polyline(
-            &pts,
-            true,
-            StrokeStyle::new(ink(theme::INK_GOLD_DIM, 0.4 * fade, truth, Prov::Modeled), 0.9)
-                .glow(1.0),
-        );
+        if orbit_visible {
+            let fade = ((a_px - 5.0) / 30.0).clamp(0.1, 1.0);
+            let pts: Vec<[f32; 2]> =
+                moon_orbit(mi, jd, 160).iter().map(|r| proj.px(ppos + *r)).collect();
+            dl.polyline(
+                &pts,
+                true,
+                StrokeStyle::new(ink(theme::INK_GOLD_DIM, 0.4 * fade, truth, Prov::Modeled), 0.9)
+                    .glow(1.0),
+            );
+        }
         // measured Moon arc from Horizons (geocentric) — only within coverage
         if is_luna && inp.modes.trails {
             if let Some(t) = &u.moon_truth {
@@ -764,16 +789,27 @@ fn moons_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
         if r_px > 1.7 {
             let sun_dir = view_dir(proj, (-mpos).normalize_or_zero());
             let axis = view_dir(proj, planet_axis(m.planet));
+            let mdet = match m.name {
+                "Moon" => 1.6,
+                "Io" => 1.4,
+                "Callisto" | "Mimas" => 1.3,
+                "Europa" | "Enceladus" => 0.5,
+                _ => 0.9,
+            };
             dl.disc_z.push(proj.screen(mpos)[2] as f32);
             dl.discs.push(DiscInst {
                 center: mpx,
                 pr: [r_px, 0.0, m.kind, 0.23 + mi as f32 * 0.041],
                 sun: [sun_dir[0], sun_dir[1], sun_dir[2], 0.05],
                 axis: [axis[0], axis[1], axis[2], (jd - J2000) as f32 * 0.2],
-                ca: [m.color[0], m.color[1], m.color[2], 1.0],
-                cb: [m.color2[0], m.color2[1], m.color2[2], 1.0],
+                ca: [m.color[0], m.color[1], m.color[2], 0.0],
+                cb: [m.color2[0], m.color2[1], m.color2[2], mdet],
                 rim: [0.8, 0.62, 0.35, if m.name == "Titan" { 0.7 } else { 0.0 }],
             });
+            if r_px < 3.2 {
+                let a = ((3.2 - r_px) / 2.0).clamp(0.0, 1.0) * 0.85;
+                dl.point(mpx, r_px.max(1.4), 4.0, 0.0, [m.color[0], m.color[1], m.color[2], a]);
+            }
         } else {
             dl.point(mpx, 1.8, 4.0, 0.0, ink(m.color, 0.9, truth, Prov::Modeled));
         }
@@ -877,13 +913,16 @@ fn craft_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
         let (jd0, jd1) = c.track.span();
         if inp.modes.trails {
             let upto = jd.min(jd1);
-            let pts: Vec<[f32; 2]> = c
+            let all: Vec<[f32; 2]> = c
                 .track
                 .samples
                 .iter()
                 .filter(|(t, _, _)| *t <= upto)
                 .map(|(_, p, _)| proj.px(*p))
                 .collect();
+            // point budget so dense trails (Parker) don't saturate (UX B5)
+            let step = (all.len() / 380).max(1);
+            let pts: Vec<[f32; 2]> = all.iter().step_by(step).cloned().collect();
             if pts.len() > 1 {
                 let a = (0.5 * w) as f32;
                 dl.polyline(
@@ -927,7 +966,8 @@ fn craft_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
 
 fn stars_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut FrameOut) {
     let (u, cam, truth) = (inp.u, inp.cam, inp.modes.truth);
-    let w = band(lw, 15.6, 19.6, 0.7);
+    // lower edge covers the Oort→interstellar dead zone (UX A2)
+    let w = band(lw, 14.9, 19.9, 0.7);
     if w <= 0.005 {
         return;
     }
@@ -982,10 +1022,12 @@ fn stars_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             StrokeStyle::new(theme::rgba(theme::INK_GOLD, 0.5 * w as f32), 1.0).dashed(4.0, 0.55),
         );
     }
-    // exoplanet host portals
+    // exoplanet host portals — ranked, not a wall of identical rings (UX A7):
+    // multi-planet systems first, then proximity to the view center
     let pw = band(lw, 15.6, 18.8, 0.6);
     if pw > 0.02 {
-        let mut shown = 0;
+        let (cx, cy) = (inp.w as f32 * 0.5, inp.h as f32 * 0.5);
+        let mut cands: Vec<(f32, usize, [f32; 2])> = Vec::new();
         for (ei, e) in u.exos.iter().enumerate() {
             if e.dist_pc.is_none() || e.planets.is_empty() {
                 continue;
@@ -994,20 +1036,24 @@ fn stars_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             if !on_screen(px, inp.w, inp.h, 10.0) {
                 continue;
             }
-            shown += 1;
-            if shown > 500 {
-                break;
-            }
-            let c = ink(theme::INK_GOLD, 0.5 * pw as f32, truth, Prov::Measured);
-            dl.circle(px, 7.5, StrokeStyle::new(c, 0.9).dashed(3.6, 0.6));
-            out.picks.push(Pickable { pos: px, r: 8.0, obj: ObjectRef::ExoHost(ei) });
-            if lw < 17.6 {
+            let d2 = (px[0] - cx).powi(2) + (px[1] - cy).powi(2);
+            let rank = d2 / (1.0 + e.planets.len() as f32 * 2.0);
+            cands.push((rank, ei, px));
+        }
+        cands.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        for (k, (_, ei, px)) in cands.iter().take(130).enumerate() {
+            let e = &u.exos[*ei];
+            let fade = if k < 40 { 1.0 } else { 0.55 };
+            let c = ink(theme::INK_GOLD, 0.5 * pw as f32 * fade, truth, Prov::Measured);
+            dl.circle(*px, 7.5, StrokeStyle::new(c, 0.9).dashed(3.6, 0.6));
+            out.picks.push(Pickable { pos: *px, r: 8.0, obj: ObjectRef::ExoHost(*ei) });
+            if lw < 17.6 && k < 24 {
                 out.labels.push(Label {
                     pos: [px[0], px[1] + 16.0],
                     text: format!("{} · {}p", e.host, e.planets.len()),
                     size: 10.5,
                     color: theme::rgba(theme::INK_GOLD, 0.55 * pw as f32),
-                    priority: 5,
+                    priority: 5 + e.planets.len() as i32,
                 });
             }
         }
