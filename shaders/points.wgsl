@@ -5,6 +5,7 @@ struct Inst {
     @location(0) center: vec2<f32>,
     @location(1) shape: vec4<f32>, // core_r, glow_r, spike, quad_half
     @location(2) color: vec4<f32>,
+    @location(3) depth: f32,
 }
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
@@ -21,7 +22,7 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VsOut {
     let c = corners[vi] * inst.shape.w;
     let p = inst.center + c;
     var o: VsOut;
-    o.clip = vec4<f32>(p.x / V.size.x * 2.0 - 1.0, 1.0 - p.y / V.size.y * 2.0, 0.0, 1.0);
+    o.clip = vec4<f32>(p.x / V.size.x * 2.0 - 1.0, 1.0 - p.y / V.size.y * 2.0, inst.depth, 1.0);
     o.local = c;
     o.shape = inst.shape;
     o.color = inst.color;

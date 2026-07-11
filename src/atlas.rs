@@ -247,6 +247,12 @@ fn view_dir(proj: &Proj, world_dir: DVec3) -> [f32; 3] {
     ]
 }
 
+/// View-z → NDC depth, bounded for any scale: near (+z toward viewer) maps
+/// small. atan compresses the unbounded range into (0, 1).
+fn zmap(z_view: f64, view_w: f64) -> f32 {
+    (0.5 - (z_view / view_w.max(1e-6)).atan() / std::f64::consts::PI) as f32
+}
+
 fn seeded(i: usize, k: usize) -> f64 {
     let mut x = (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(k as u64 * 0x632B_E5AB);
     x ^= x >> 29;
@@ -354,12 +360,12 @@ pub fn build(inp: &BuildIn, dl: &mut DrawList) -> FrameOut {
         focused_star_layer(inp, &proj, lw, si, dl, &mut out);
     }
 
-    // back-to-front disc ordering (AUDIT FND-009, partial: correct painter
-    // order for spheres until a real depth buffer lands)
+    // back-to-front for correct edge blending (depth buffer handles occlusion;
+    // disc_z now stores mapped NDC depth, so far = larger = first)
     if dl.discs.len() == dl.disc_z.len() && dl.discs.len() > 1 {
         let mut idx: Vec<usize> = (0..dl.discs.len()).collect();
         idx.sort_by(|&a, &b| {
-            dl.disc_z[a].partial_cmp(&dl.disc_z[b]).unwrap_or(std::cmp::Ordering::Equal)
+            dl.disc_z[b].partial_cmp(&dl.disc_z[a]).unwrap_or(std::cmp::Ordering::Equal)
         });
         dl.discs = idx.iter().map(|&i| dl.discs[i]).collect();
     }
@@ -471,7 +477,8 @@ fn solar_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
     let sun_r_px = (R_SUN_M / cam.mpp) as f32;
     if on_screen(sun_px, inp.w, inp.h, sun_r_px + 400.0) {
         if sun_r_px > 2.5 {
-            dl.disc_z.push(proj.screen(DVec3::ZERO)[2] as f32);
+            let zd = zmap(proj.screen(DVec3::ZERO)[2], cam.mpp * inp.w);
+            dl.disc_z.push(zd);
             dl.discs.push(DiscInst {
                 center: sun_px,
                 pr: [sun_r_px, 0.0, KIND_STAR, 0.13],
@@ -480,8 +487,9 @@ fn solar_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
                 ca: [1.0, 0.82, 0.55, 1.0],
                 cb: [1.0, 0.6, 0.3, 1.0],
                 rim: [1.0, 0.7, 0.35, 0.6],
+                depth: zd,
             });
-            dl.point(sun_px, sun_r_px * 0.7, sun_r_px * 2.6, 0.35, [1.0, 0.85, 0.6, 0.5]);
+            dl.point_z(sun_px, sun_r_px * 0.7, sun_r_px * 2.6, 0.35, [1.0, 0.85, 0.6, 0.5], zd - 0.001);
         } else {
             let a = (w_solar * 0.95) as f32;
             dl.point(sun_px, 2.6, 26.0, 0.8, [1.0, 0.88, 0.62, a]);
@@ -608,7 +616,8 @@ fn draw_planet_disc(
             draw_rings(inp, proj, i, pos, ring, dl);
         }
     }
-    dl.disc_z.push(proj.screen(pos)[2] as f32);
+    let zd = zmap(proj.screen(pos)[2], inp.cam.mpp * inp.w);
+    dl.disc_z.push(zd);
     dl.discs.push(DiscInst {
         center: px,
         pr: [r_px, p.flatten, p.kind, seed],
@@ -617,11 +626,12 @@ fn draw_planet_disc(
         ca: [p.color[0], p.color[1], p.color[2], cap],
         cb: [p.color2[0], p.color2[1], p.color2[2], det],
         rim: [p.rim[0], p.rim[1], p.rim[2], if p.rim == [0.0, 0.0, 0.0] { 0.0 } else { 0.55 }],
+        depth: zd,
     });
     // mask the point→disc transition with a fading glow (UX B1)
     if r_px < 3.2 {
         let a = ((3.2 - r_px) / 2.0).clamp(0.0, 1.0) * 0.9;
-        dl.point(px, r_px.max(1.6), 6.0, 0.0, [p.color[0], p.color[1], p.color[2], a]);
+        dl.point_z(px, r_px.max(1.6), 6.0, 0.0, [p.color[0], p.color[1], p.color[2], a], zd - 0.001);
     }
     // Earth: vector coastlines + graticule (measured, Natural Earth)
     if p.kind == 4.0 && r_px > 26.0 {
@@ -796,7 +806,8 @@ fn moons_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
                 "Europa" | "Enceladus" => 0.5,
                 _ => 0.9,
             };
-            dl.disc_z.push(proj.screen(mpos)[2] as f32);
+            let zd = zmap(proj.screen(mpos)[2], cam.mpp * inp.w);
+            dl.disc_z.push(zd);
             dl.discs.push(DiscInst {
                 center: mpx,
                 pr: [r_px, 0.0, m.kind, 0.23 + mi as f32 * 0.041],
@@ -805,10 +816,11 @@ fn moons_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
                 ca: [m.color[0], m.color[1], m.color[2], 0.0],
                 cb: [m.color2[0], m.color2[1], m.color2[2], mdet],
                 rim: [0.8, 0.62, 0.35, if m.name == "Titan" { 0.7 } else { 0.0 }],
+                depth: zd,
             });
             if r_px < 3.2 {
                 let a = ((3.2 - r_px) / 2.0).clamp(0.0, 1.0) * 0.85;
-                dl.point(mpx, r_px.max(1.4), 4.0, 0.0, [m.color[0], m.color[1], m.color[2], a]);
+                dl.point_z(mpx, r_px.max(1.4), 4.0, 0.0, [m.color[0], m.color[1], m.color[2], a], zd - 0.001);
             }
         } else {
             dl.point(mpx, 1.8, 4.0, 0.0, ink(m.color, 0.9, truth, Prov::Modeled));
@@ -1319,7 +1331,7 @@ fn exo_layer(inp: &BuildIn, proj: &Proj, lw: f64, ei: usize, dl: &mut DrawList, 
     // gets an explicitly schematic glyph (AUDIT FND-020: never silently render
     // a default 1 R☉ as if measured).
     let rgb = s.st_teff.map(crate::data::teff_rgb).unwrap_or([1.0, 0.85, 0.6]);
-    let host_z = proj.screen(host)[2] as f32;
+    let host_z = zmap(proj.screen(host)[2], cam.mpp * inp.w);
     let r_px = match s.st_rad {
         Some(rad) => {
             let r_px = (rad * R_SUN_M / cam.mpp) as f32;
@@ -1333,6 +1345,7 @@ fn exo_layer(inp: &BuildIn, proj: &Proj, lw: f64, ei: usize, dl: &mut DrawList, 
                     ca: [rgb[0], rgb[1], rgb[2], 1.0],
                     cb: [rgb[0] * 0.8, rgb[1] * 0.6, rgb[2] * 0.45, 1.0],
                     rim: [rgb[0], rgb[1] * 0.8, rgb[2] * 0.5, 0.6],
+                    depth: host_z,
                 });
             } else {
                 dl.point(host_px, 3.0, 30.0, 0.8, [rgb[0], rgb[1], rgb[2], 0.95]);
@@ -1395,7 +1408,8 @@ fn exo_layer(inp: &BuildIn, proj: &Proj, lw: f64, ei: usize, dl: &mut DrawList, 
         let rocky = p.rade.map(|r| r < 1.8).unwrap_or(true);
         if pr_px > 1.8 {
             let sun_dir = view_dir(proj, (-rel).normalize_or_zero());
-            dl.disc_z.push(proj.screen(world)[2] as f32);
+            let zd = zmap(proj.screen(world)[2], cam.mpp * inp.w);
+            dl.disc_z.push(zd);
             dl.discs.push(DiscInst {
                 center: ppx,
                 pr: [pr_px, 0.0, if rocky { 1.0 } else { 2.0 }, 0.29 + k as f32 * 0.047],
@@ -1404,6 +1418,7 @@ fn exo_layer(inp: &BuildIn, proj: &Proj, lw: f64, ei: usize, dl: &mut DrawList, 
                 ca: if rocky { [0.72, 0.58, 0.45, 1.0] } else { [0.62, 0.72, 0.85, 1.0] },
                 cb: if rocky { [0.45, 0.36, 0.3, 1.0] } else { [0.4, 0.5, 0.68, 1.0] },
                 rim: [0.6, 0.75, 1.0, if rocky { 0.2 } else { 0.5 }],
+                depth: zd,
             });
         } else {
             let c = if p.rade.is_none() && truth {

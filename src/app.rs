@@ -1645,8 +1645,9 @@ impl Headless {
             &screen,
         );
         {
+            // egui's pipelines declare no depth state → depth-less pass
             let mut pass = final_target
-                .begin(&mut encoder, Some(wgpu::Color::BLACK))
+                .begin_no_depth(&mut encoder, Some(wgpu::Color::BLACK))
                 .forget_lifetime();
             self.rend.render(&mut pass, &jobs, &screen);
         }

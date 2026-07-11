@@ -21,6 +21,7 @@ pub struct PointInst {
     pub center: [f32; 2],
     pub shape: [f32; 4], // core_r, glow_r, spike, quad_half
     pub color: [f32; 4],
+    pub depth: f32, // NDC z: small = near; default far so discs occlude glows
 }
 
 #[repr(C)]
@@ -33,6 +34,7 @@ pub struct DiscInst {
     pub ca: [f32; 4],
     pub cb: [f32; 4],
     pub rim: [f32; 4],
+    pub depth: f32, // NDC z written to the depth buffer (spheres occlude)
 }
 
 pub const KIND_EMBER: f32 = 0.0;
@@ -218,8 +220,21 @@ impl DrawList {
     }
 
     pub fn point(&mut self, center: [f32; 2], core_r: f32, glow_r: f32, spike: f32, color: [f32; 4]) {
+        self.point_z(center, core_r, glow_r, spike, color, 0.9995);
+    }
+
+    /// Point sprite at an explicit NDC depth (pair glows with their discs).
+    pub fn point_z(
+        &mut self,
+        center: [f32; 2],
+        core_r: f32,
+        glow_r: f32,
+        spike: f32,
+        color: [f32; 4],
+        depth: f32,
+    ) {
         let quad = (core_r * 2.4).max(glow_r * 3.2).max(2.0).min(300.0);
-        self.points.push(PointInst { center, shape: [core_r, glow_r, spike, quad], color });
+        self.points.push(PointInst { center, shape: [core_r, glow_r, spike, quad], color, depth });
     }
 }
 
@@ -343,7 +358,14 @@ impl Pipelines {
         let prim = wgpu::PrimitiveState::default();
         let msaa = wgpu::MultisampleState { count: SAMPLES, ..Default::default() };
 
-        let pipeline = |sm: &wgpu::ShaderModule, buffers: &[wgpu::VertexBufferLayout], label: &str| {
+        // one canvas pass, per-pipeline depth policy: discs write real depth,
+        // points test against it (a star can no longer shine through a planet),
+        // background and engraving strokes pass through untested
+        let pipeline = |sm: &wgpu::ShaderModule,
+                        buffers: &[wgpu::VertexBufferLayout],
+                        label: &str,
+                        depth_write: bool,
+                        depth_test: bool| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&layout),
@@ -360,7 +382,17 @@ impl Pipelines {
                     targets: &target,
                 }),
                 primitive: prim,
-                depth_stencil: None,
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: crate::engine::gpu::DEPTH_FORMAT,
+                    depth_write_enabled: depth_write,
+                    depth_compare: if depth_test {
+                        wgpu::CompareFunction::LessEqual
+                    } else {
+                        wgpu::CompareFunction::Always
+                    },
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
                 multisample: msaa,
                 multiview: None,
                 cache: None,
@@ -375,19 +407,19 @@ impl Pipelines {
         let point_layout = wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<PointInst>() as u64,
             step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4, 2 => Float32x4],
+            attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4, 2 => Float32x4, 3 => Float32],
         };
         let disc_layout = wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<DiscInst>() as u64,
             step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4],
+            attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32],
         };
 
         Self {
-            band: pipeline(&sm_band, &[], "band"),
-            strokes: pipeline(&sm_strokes, &[stroke_layout], "strokes"),
-            discs: pipeline(&sm_discs, &[disc_layout], "discs"),
-            points: pipeline(&sm_points, &[point_layout], "points"),
+            band: pipeline(&sm_band, &[], "band", false, false),
+            strokes: pipeline(&sm_strokes, &[stroke_layout], "strokes", false, false),
+            discs: pipeline(&sm_discs, &[disc_layout], "discs", true, true),
+            points: pipeline(&sm_points, &[point_layout], "points", false, true),
             vb_strokes: GrowBuffer::new(gpu, "vb-strokes", wgpu::BufferUsages::VERTEX),
             ib_strokes: GrowBuffer::new(gpu, "ib-strokes", wgpu::BufferUsages::INDEX),
             vb_over: GrowBuffer::new(gpu, "vb-over", wgpu::BufferUsages::VERTEX),

@@ -5,6 +5,7 @@ use anyhow::{anyhow, Context, Result};
 use std::path::Path;
 
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 pub const SAMPLES: u32 = 4;
 
 #[derive(Clone)]
@@ -58,6 +59,7 @@ pub struct ViewTarget {
     pub msaa_view: wgpu::TextureView,
     pub resolve: wgpu::Texture,
     pub resolve_view: wgpu::TextureView,
+    pub depth_view: wgpu::TextureView,
 }
 
 impl ViewTarget {
@@ -87,16 +89,27 @@ impl ViewTarget {
                 | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
+        let depth = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("view-depth"),
+            size,
+            mip_level_count: 1,
+            sample_count: SAMPLES,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
         Self {
             width,
             height,
             msaa_view: msaa.create_view(&Default::default()),
             resolve_view: resolve.create_view(&Default::default()),
             resolve,
+            depth_view: depth.create_view(&Default::default()),
         }
     }
 
-    /// Begin a render pass into this target. `clear: None` loads existing content.
+    /// Begin the canvas render pass (with depth). `clear: None` loads content.
     pub fn begin<'e>(
         &self,
         encoder: &'e mut wgpu::CommandEncoder,
@@ -104,6 +117,38 @@ impl ViewTarget {
     ) -> wgpu::RenderPass<'e> {
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("view-pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &self.msaa_view,
+                resolve_target: Some(&self.resolve_view),
+                ops: wgpu::Operations {
+                    load: match clear {
+                        Some(c) => wgpu::LoadOp::Clear(c),
+                        None => wgpu::LoadOp::Load,
+                    },
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &self.depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Discard,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        })
+    }
+
+    /// Depth-less pass for pipelines that declare no depth state (egui).
+    pub fn begin_no_depth<'e>(
+        &self,
+        encoder: &'e mut wgpu::CommandEncoder,
+        clear: Option<wgpu::Color>,
+    ) -> wgpu::RenderPass<'e> {
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("view-pass-nodepth"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &self.msaa_view,
                 resolve_target: Some(&self.resolve_view),

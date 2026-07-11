@@ -10,6 +10,7 @@ struct Inst {
     @location(4) ca: vec4<f32>,
     @location(5) cb: vec4<f32>,
     @location(6) rim: vec4<f32>,  // rim rgb, rim strength
+    @location(7) depth: f32,
 }
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
@@ -31,7 +32,7 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VsOut {
     let c = corners[vi] * half;
     let p = inst.center + c;
     var o: VsOut;
-    o.clip = vec4<f32>(p.x / V.size.x * 2.0 - 1.0, 1.0 - p.y / V.size.y * 2.0, 0.0, 1.0);
+    o.clip = vec4<f32>(p.x / V.size.x * 2.0 - 1.0, 1.0 - p.y / V.size.y * 2.0, inst.depth, 1.0);
     o.local = c;
     o.pr = inst.pr;
     o.sun = inst.sun;
@@ -70,7 +71,7 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     let aa = 1.5 / radius;
     let alpha = 1.0 - smoothstep(1.0 - aa, 1.0 + aa, rr);
     if (alpha <= 0.003) {
-        return vec4<f32>(0.0);
+        discard; // must not write depth outside the sphere silhouette
     }
     let nz = sqrt(max(1.0 - r2, 0.0));
     let n = vec3<f32>(p.x, -p.y, nz); // view space, y up
