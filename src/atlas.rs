@@ -684,7 +684,7 @@ fn draw_rings(
     }
 }
 
-fn earth_vector_layer(inp: &BuildIn, proj: &Proj, pos: DVec3, _r_px: f32, dl: &mut DrawList) {
+fn earth_vector_layer(inp: &BuildIn, proj: &Proj, pos: DVec3, r_px: f32, dl: &mut DrawList) {
     dl.set_over(true);
     let jd = inp.clock.jd;
     let truth = inp.modes.truth;
@@ -740,6 +740,27 @@ fn earth_vector_layer(inp: &BuildIn, proj: &Proj, pos: DVec3, _r_px: f32, dl: &m
         }
     }
     dl.set_over(false);
+
+    // S5: settlement lights on the night hemisphere (land mask measured,
+    // placement illustrative), fading in across the terminator
+    if r_px > 60.0 && !inp.u.night_lights.is_empty() {
+        let zd = zmap(proj.screen(pos)[2], inp.cam.mpp * inp.w) - 0.0008;
+        let sun = (-pos).normalize_or_zero();
+        let scale = (r_px / 600.0).clamp(0.6, 1.6);
+        for l in &inp.u.night_lights {
+            let w = to_world(l[0] as f64, l[1] as f64);
+            let dir = (w - pos) / r_m;
+            if dir.dot(proj.out) <= 0.04 {
+                continue; // back hemisphere
+            }
+            let night = -dir.dot(sun); // 0 at terminator → 1 at midnight
+            if night < 0.02 {
+                continue;
+            }
+            let a = 0.6 * ((night - 0.02) / 0.16).clamp(0.0, 1.0) as f32;
+            dl.point_z(proj.px(w), 0.85 * scale, 2.4 * scale, 0.0, [1.0, 0.78, 0.46, a], zd);
+        }
+    }
 }
 
 // ------------------------------------------------------------ moons layer

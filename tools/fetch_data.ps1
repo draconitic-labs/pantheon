@@ -32,8 +32,9 @@ Fetch "gaia_bright" "https://gea.esac.esa.int/tap-server/tap/sync" (Join-Path $d
 $exoQ = "select pl_name,hostname,sy_snum,sy_pnum,discoverymethod,disc_year,pl_orbper,pl_orbsmax,pl_orbeccen,pl_orbincl,pl_rade,pl_bmasse,pl_eqt,st_teff,st_rad,st_mass,st_spectype,ra,dec,sy_dist,sy_vmag from ps where default_flag=1"
 Fetch "exoplanets" "https://exoplanetarchive.ipac.caltech.edu/TAP/sync" (Join-Path $data "exoplanets.csv") @("-G", "--data-urlencode", "query=$exoQ", "--data-urlencode", "format=csv")
 
-# ---- Natural Earth 110m coastline (vector Earth) ----
+# ---- Natural Earth 110m coastline + land polygons (vector Earth) ----
 Fetch "coastline" "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_coastline.geojson" (Join-Path $data "ne_110m_coastline.geojson") @()
+Fetch "land" "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_land.geojson" (Join-Path $data "ne_110m_land.geojson") @()
 
 # ---- JPL Horizons: heliocentric state vectors ----
 function Horizons($name, $cmd, $start, $stop, $step, $center) {

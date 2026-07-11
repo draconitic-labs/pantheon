@@ -79,6 +79,8 @@ pub struct Pantheon {
     pub search_q: String,
     /// labels placed last frame — hysteresis so labels don't flicker (UX B3)
     sticky: std::collections::HashSet<String>,
+    /// camera back-stack for dives/jumps (S6): center, mpp, tilt
+    history: Vec<(DVec3, f64, f64)>,
 }
 
 impl Pantheon {
@@ -130,6 +132,26 @@ impl Pantheon {
             search_open: false,
             search_q: String::new(),
             sticky: std::collections::HashSet::new(),
+            history: Vec::new(),
+        }
+    }
+
+    /// Remember the current viewpoint before a jump (dive, ladder, home).
+    fn push_history(&mut self) {
+        self.history.push((self.cam.center, self.cam.mpp, self.cam.tilt));
+        if self.history.len() > 32 {
+            self.history.remove(0);
+        }
+    }
+
+    /// Fly back to the previous viewpoint (Backspace / ⟵).
+    pub fn go_back(&mut self, w: f64) {
+        if let Some((center, mpp, tilt)) = self.history.pop() {
+            self.follow = None;
+            self.jd_glide = Some((self.clock.jd, tilt));
+            self.cam.fly_to(center, mpp, w, 1.6);
+        } else {
+            self.note("no earlier viewpoint");
         }
     }
 
@@ -298,6 +320,7 @@ impl Pantheon {
     }
 
     pub fn dive_to(&mut self, obj: ObjectRef, w: f64, h: f64) {
+        self.push_history();
         if let ObjectRef::ExoHost(ei) | ObjectRef::ExoPlanet(ei, _) = obj {
             if self.u.exos[ei].dist_pc.is_none() {
                 self.note("distance unknown — this system cannot be charted");
@@ -525,9 +548,13 @@ impl Pantheon {
             }
             if i.key_pressed(egui::Key::H) {
                 let jd = self.clock.jd;
+                self.push_history();
                 self.focus = Some(ObjectRef::Planet(2));
                 self.follow = Some((ObjectRef::Planet(2), DVec3::ZERO));
-                self.cam.fly_to(sim::planet_pos(2, jd), 3.6e7 / rect.width() as f64, rect.width() as f64, 2.4);
+                self.cam.fly_to(sim::body_pos(2, jd), 3.6e7 / rect.width() as f64, rect.width() as f64, 2.4);
+            }
+            if i.key_pressed(egui::Key::Backspace) {
+                self.go_back(rect.width() as f64);
             }
         });
     }
@@ -903,11 +930,20 @@ impl Pantheon {
                     }
                     b(ui, &mut self.show_help, "? Help");
                     ui.separator();
+                    let back_ok = !self.history.is_empty();
+                    let r = ui
+                        .add_enabled(back_ok, egui::SelectableLabel::new(false, "⟵ Back"))
+                        .on_disabled_hover_text("no earlier viewpoint")
+                        .on_hover_text("Backspace");
+                    if r.clicked() {
+                        self.go_back(1600.0);
+                    }
                     if ui.selectable_label(false, "⌂ Home (Earth)").clicked() {
                         let jd = self.clock.jd;
+                        self.push_history();
                         self.focus = Some(ObjectRef::Planet(2));
                         self.follow = Some((ObjectRef::Planet(2), DVec3::ZERO));
-                        self.cam.fly_to(sim::planet_pos(2, jd), 3.6e7 / 1600.0, 1600.0, 2.4);
+                        self.cam.fly_to(sim::body_pos(2, jd), 3.6e7 / 1600.0, 1600.0, 2.4);
                     }
                 });
             });
@@ -985,6 +1021,7 @@ impl Pantheon {
                             } else {
                                 DVec3::ZERO // Local Group / web charts around the MW
                             };
+                            self.push_history();
                             self.follow = None;
                             self.cam.fly_to(anchor, mpp, rect.width() as f64, 1.8);
                         }
@@ -1285,6 +1322,7 @@ impl Pantheon {
                 provs.push(("surface pattern".into(), Prov::Procedural));
                 if i == 2 {
                     provs.push(("coastlines: Natural Earth 110m".into(), Prov::Measured));
+                    provs.push(("night lights: land-masked, placement".into(), Prov::Illustrative));
                 }
                 can_awaken = true;
             }

@@ -593,6 +593,8 @@ pub struct Universe {
     pub planet_truth: Vec<Option<Track>>,
     pub moon_truth: Option<Track>,
     pub coast: Vec<Vec<[f32; 2]>>,
+    /// lon/lat of illustrative settlement lights (land-masked, deterministic)
+    pub night_lights: Vec<[f32; 2]>,
     pub galaxies: Vec<GalaxyDef>,
     pub nodes: Vec<CosmicNode>,
     pub retrieved: String,
@@ -673,6 +675,17 @@ impl Universe {
         } else {
             format!("coastlines: MISSING/INVALID — {} lines", coast.len())
         });
+        let land = load_land_rings(&root);
+        let night_lights = generate_night_lights(&land);
+        health.push(if night_lights.len() > 500 {
+            format!("land/night lights: OK — {} rings, {} lights", land.len(), night_lights.len())
+        } else {
+            format!(
+                "land/night lights: MISSING/INVALID — {} rings, {} lights (optional)",
+                land.len(),
+                night_lights.len()
+            )
+        });
         let galaxies = LOCAL_GROUP
             .iter()
             .map(|(name, ra, dec, dkpc, size, spiral)| GalaxyDef {
@@ -709,6 +722,7 @@ impl Universe {
                 planet_truth,
                 moon_truth,
                 coast,
+                night_lights,
                 galaxies,
                 nodes,
                 retrieved,
@@ -741,6 +755,112 @@ impl Universe {
         let truth = t.pos_at(jd)?;
         Some((crate::sim::body_pos(pi, jd) - truth).length() / 1e3)
     }
+}
+
+/// Land polygon rings (outer + holes together; even-odd containment).
+fn load_land_rings(root: &std::path::Path) -> Vec<Vec<[f64; 2]>> {
+    let Ok(text) = std::fs::read_to_string(root.join("data/ne_110m_land.geojson")) else {
+        return Vec::new();
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}'))
+    else {
+        return Vec::new();
+    };
+    let mut rings: Vec<Vec<[f64; 2]>> = Vec::new();
+    let mut push_ring = |coords: &serde_json::Value| {
+        if let Some(arr) = coords.as_array() {
+            let ring: Vec<[f64; 2]> = arr
+                .iter()
+                .filter_map(|p| Some([p.get(0)?.as_f64()?, p.get(1)?.as_f64()?]))
+                .collect();
+            if ring.len() > 3 {
+                rings.push(ring);
+            }
+        }
+    };
+    let Some(features) = v["features"].as_array() else { return rings };
+    for f in features {
+        let geom = &f["geometry"];
+        match geom["type"].as_str() {
+            Some("Polygon") => {
+                if let Some(rs) = geom["coordinates"].as_array() {
+                    for r in rs {
+                        push_ring(r);
+                    }
+                }
+            }
+            Some("MultiPolygon") => {
+                if let Some(polys) = geom["coordinates"].as_array() {
+                    for poly in polys {
+                        if let Some(rs) = poly.as_array() {
+                            for r in rs {
+                                push_ring(r);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    rings
+}
+
+fn point_in_rings(rings: &[Vec<[f64; 2]>], lon: f64, lat: f64) -> bool {
+    // even-odd ray cast across every ring (holes flip containment back off)
+    let mut inside = false;
+    for ring in rings {
+        let n = ring.len();
+        let mut j = n - 1;
+        for i in 0..n {
+            let (xi, yi) = (ring[i][0], ring[i][1]);
+            let (xj, yj) = (ring[j][0], ring[j][1]);
+            if (yi > lat) != (yj > lat) && lon < (xj - xi) * (lat - yi) / (yj - yi) + xi {
+                inside = !inside;
+            }
+            j = i;
+        }
+    }
+    inside
+}
+
+/// Deterministic land-masked light points for Earth's night side. The land
+/// mask is measured (Natural Earth); the placement is a human-geography
+/// prior (mid-latitude weighting), status = illustrative.
+fn generate_night_lights(rings: &[Vec<[f64; 2]>]) -> Vec<[f32; 2]> {
+    if rings.is_empty() {
+        return Vec::new();
+    }
+    let mut out: Vec<[f32; 2]> = Vec::new();
+    let mut rng: u64 = 0x51_9E37_79B9_7F4A;
+    let mut next = move || -> f64 {
+        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (rng >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let mut tries = 0;
+    while out.len() < 1_400 && tries < 80_000 {
+        tries += 1;
+        let lon = next() * 360.0 - 180.0;
+        let lat = (2.0 * next() - 1.0).asin().to_degrees(); // area-uniform on the sphere
+        let alat = lat.abs();
+        // settlement prior: dense 10–55°, sparse subpolar, nearly none polar
+        let keep = if alat > 66.0 {
+            0.015
+        } else if alat > 55.0 {
+            0.25
+        } else if alat < 5.0 {
+            0.55
+        } else {
+            1.0
+        };
+        if next() > keep {
+            continue;
+        }
+        if point_in_rings(rings, lon, lat) {
+            out.push([lon as f32, lat as f32]);
+        }
+    }
+    out
 }
 
 fn load_coast(root: &std::path::Path) -> Vec<Vec<[f32; 2]>> {
