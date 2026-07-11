@@ -1485,7 +1485,7 @@ impl eframe::App for GuiApp {
                     .map(|(t, _)| t.width != w || t.height != h)
                     .unwrap_or(true);
                 if recreate {
-                    let target = ViewTarget::new(&self.app.gpu, w, h);
+                    let target = ViewTarget::new_hdr(&self.app.gpu, w, h);
                     let mut rend = self.rs.renderer.write();
                     if let Some((_, old)) = self.canvas.take() {
                         rend.free_texture(&old);
@@ -1580,7 +1580,7 @@ impl Headless {
             .map(|(t, _)| t.width != w || t.height != h)
             .unwrap_or(true);
         if recreate {
-            let target = ViewTarget::new(&self.app.gpu, w, h);
+            let target = ViewTarget::new_hdr(&self.app.gpu, w, h);
             if let Some((_, old)) = self.canvas.take() {
                 self.rend.free_texture(&old);
             }

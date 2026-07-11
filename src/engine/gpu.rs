@@ -5,6 +5,7 @@ use anyhow::{anyhow, Context, Result};
 use std::path::Path;
 
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+pub const FORMAT_HDR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 pub const SAMPLES: u32 = 4;
 
@@ -56,27 +57,56 @@ pub fn adapter_info() -> Result<String> {
 pub struct ViewTarget {
     pub width: u32,
     pub height: u32,
+    /// canvas pass color attachment (HDR when `hdr`, else sRGB)
     pub msaa_view: wgpu::TextureView,
+    /// what consumers see: ALWAYS the display sRGB texture (tonemapped when hdr)
     pub resolve: wgpu::Texture,
     pub resolve_view: wgpu::TextureView,
     pub depth_view: wgpu::TextureView,
+    /// HDR resolve, input to the tonemap pass (hdr targets only)
+    pub hdr_resolve_view: Option<wgpu::TextureView>,
 }
 
 impl ViewTarget {
     pub fn new(gpu: &GpuContext, width: u32, height: u32) -> Self {
+        Self::new_with(gpu, width, height, false)
+    }
+
+    pub fn new_hdr(gpu: &GpuContext, width: u32, height: u32) -> Self {
+        Self::new_with(gpu, width, height, true)
+    }
+
+    fn new_with(gpu: &GpuContext, width: u32, height: u32, hdr: bool) -> Self {
         let width = width.max(8);
         let height = height.max(8);
         let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+        let color_fmt = if hdr { FORMAT_HDR } else { FORMAT };
         let msaa = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("view-msaa"),
             size,
             mip_level_count: 1,
             sample_count: SAMPLES,
             dimension: wgpu::TextureDimension::D2,
-            format: FORMAT,
+            format: color_fmt,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
+        let hdr_resolve_view = if hdr {
+            let t = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("view-hdr-resolve"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: FORMAT_HDR,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            Some(t.create_view(&Default::default()))
+        } else {
+            None
+        };
         let resolve = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("view-resolve"),
             size,
@@ -106,6 +136,7 @@ impl ViewTarget {
             resolve_view: resolve.create_view(&Default::default()),
             resolve,
             depth_view: depth.create_view(&Default::default()),
+            hdr_resolve_view,
         }
     }
 
@@ -119,7 +150,7 @@ impl ViewTarget {
             label: Some("view-pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &self.msaa_view,
-                resolve_target: Some(&self.resolve_view),
+                resolve_target: Some(self.hdr_resolve_view.as_ref().unwrap_or(&self.resolve_view)),
                 ops: wgpu::Operations {
                     load: match clear {
                         Some(c) => wgpu::LoadOp::Clear(c),

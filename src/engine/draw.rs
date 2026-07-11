@@ -4,7 +4,7 @@
 
 use bytemuck::{Pod, Zeroable};
 
-use super::gpu::{GpuContext, ViewTarget, FORMAT, SAMPLES};
+use super::gpu::{GpuContext, ViewTarget, FORMAT, FORMAT_HDR, SAMPLES};
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -281,6 +281,9 @@ pub struct Pipelines {
     strokes: wgpu::RenderPipeline,
     discs: wgpu::RenderPipeline,
     points: wgpu::RenderPipeline,
+    tonemap: wgpu::RenderPipeline,
+    tm_bgl: wgpu::BindGroupLayout,
+    tm_sampler: wgpu::Sampler,
     vb_strokes: GrowBuffer,
     ib_strokes: GrowBuffer,
     vb_over: GrowBuffer,
@@ -350,8 +353,9 @@ impl Pipelines {
         let sm_discs = make("discs", include_str!("../../shaders/discs.wgsl"));
         let sm_points = make("points", include_str!("../../shaders/points.wgsl"));
 
+        // canvas pipelines render into the HDR intermediate (S2)
         let target = [Some(wgpu::ColorTargetState {
-            format: FORMAT,
+            format: FORMAT_HDR,
             blend: Some(blend_pma()),
             write_mask: wgpu::ColorWrites::ALL,
         })];
@@ -415,11 +419,77 @@ impl Pipelines {
             attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32],
         };
 
+        // tonemap pass: HDR resolve → display sRGB (own layout, no depth/msaa)
+        let tm_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("tonemap-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let tm_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("tonemap-pl"),
+            bind_group_layouts: &[&tm_bgl],
+            push_constant_ranges: &[],
+        });
+        let sm_tm = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("tonemap"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/tonemap.wgsl").into()),
+        });
+        let tonemap = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("tonemap"),
+            layout: Some(&tm_layout),
+            vertex: wgpu::VertexState {
+                module: &sm_tm,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &sm_tm,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        let tm_sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("tonemap-sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
         Self {
             band: pipeline(&sm_band, &[], "band", false, false),
             strokes: pipeline(&sm_strokes, &[stroke_layout], "strokes", false, false),
             discs: pipeline(&sm_discs, &[disc_layout], "discs", true, true),
             points: pipeline(&sm_points, &[point_layout], "points", false, true),
+            tonemap,
+            tm_bgl,
+            tm_sampler,
             vb_strokes: GrowBuffer::new(gpu, "vb-strokes", wgpu::BufferUsages::VERTEX),
             ib_strokes: GrowBuffer::new(gpu, "ib-strokes", wgpu::BufferUsages::INDEX),
             vb_over: GrowBuffer::new(gpu, "vb-over", wgpu::BufferUsages::VERTEX),
@@ -476,6 +546,40 @@ impl Pipelines {
                 pass.set_vertex_buffer(0, self.vb_points.buf.slice(..));
                 pass.draw(0..6, 0..dl.points.len() as u32);
             }
+        }
+        // HDR → sRGB tonemap into the display texture
+        if let Some(hdr_view) = &target.hdr_resolve_view {
+            let bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("tonemap-bg"),
+                layout: &self.tm_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(hdr_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.tm_sampler),
+                    },
+                ],
+            });
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("tonemap-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target.resolve_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.tonemap);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.draw(0..3, 0..1);
         }
         gpu.queue.submit([encoder.finish()]);
     }

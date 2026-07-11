@@ -94,8 +94,9 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
         let g = vec2<f32>(
             V.fog_a.x * in.px.x + V.fog_a.y * in.px.y + V.fog_a.z,
             V.fog_b.x * in.px.x + V.fog_b.y * in.px.y + V.fog_b.z);
+        // HDR: raw radiance accumulates; the ACES pass rolls the bulge off
         let raw = galaxy_rgb(g) * V.fog_a.w * V.fog_b.w;
-        col = col + raw / (vec3<f32>(1.0) + raw * 0.55);
+        col = col + raw;
         // Stellar sparkle resolved out of the fog's own density (procedural):
         // grain is chosen in *pixels* via the affine scale, so approaching the
         // Galaxy resolves ever more individual stars instead of a dead clump.
