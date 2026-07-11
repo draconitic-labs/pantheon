@@ -149,6 +149,21 @@ fn doctor() -> anyhow::Result<()> {
         Ok(info) => println!("gpu:      {info}"),
         Err(e) => println!("gpu:      UNAVAILABLE — {e}"),
     }
+    // SPICE kernels
+    match crate::spice::spice() {
+        Some(s) => {
+            let (y0, y1) = (
+                2000.0 + (s.jd0 - 2_451_545.0) / 365.25,
+                2000.0 + (s.jd1 - 2_451_545.0) / 365.25,
+            );
+            println!(
+                "spice:    OK — de440s.bsp ({} segments, {y0:.0}–{y1:.0}), leap seconds {}",
+                s.spk.segment_count(),
+                s.lsk.as_ref().map(|l| l.entries.len().to_string()).unwrap_or("MISSING".into())
+            );
+        }
+        None => println!("spice:    not loaded — analytic elements only (optional)"),
+    }
     // ffmpeg
     let ff = std::process::Command::new("ffmpeg").arg("-version").output();
     match ff {

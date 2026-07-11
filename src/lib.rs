@@ -11,4 +11,5 @@ pub mod engine;
 pub mod entity;
 pub mod frames;
 pub mod sim;
+pub mod spice;
 pub mod theme;

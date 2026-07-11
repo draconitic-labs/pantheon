@@ -21,11 +21,21 @@ pub const GM_SUN: f64 = 1.327_124_400_18e20; // m^3/s^2
 pub const TT_MINUS_UTC_S: f64 = 69.184;
 pub const DELTA_T_DAYS: f64 = TT_MINUS_UTC_S / 86_400.0;
 
+/// TT−UTC seconds: leap-second kernel when loaded (historically correct
+/// back to 1972), else the post-2017 constant.
+fn tt_minus_utc_s(jd_utc: f64) -> f64 {
+    crate::spice::spice()
+        .and_then(|s| s.lsk.as_ref())
+        .map(|l| l.tt_minus_utc(jd_utc))
+        .unwrap_or(TT_MINUS_UTC_S)
+}
+
 pub fn tdb_from_utc_jd(jd_utc: f64) -> f64 {
-    jd_utc + DELTA_T_DAYS
+    jd_utc + tt_minus_utc_s(jd_utc) / 86_400.0
 }
 pub fn utc_from_tdb_jd(jd_tdb: f64) -> f64 {
-    jd_tdb - DELTA_T_DAYS
+    // ΔAT evaluated at TDB ≈ UTC — the boundary error is ≪ 1 s
+    jd_tdb - tt_minus_utc_s(jd_tdb) / 86_400.0
 }
 
 /// Simulation clock. `jd` is a Julian date in TDB (ephemeris time).
@@ -300,9 +310,26 @@ pub fn earth_center(jd: f64) -> DVec3 {
     planet_pos(2, jd) - luna_rel(jd) * MU_MOON_FRAC
 }
 
-/// Heliocentric position of a body by index, resolving Earth to its true
-/// center (index 2). Everything that renders or measures should use this.
+/// NAIF ids for [`PLANETS`]: planet centers where de440s carries them
+/// (Mercury/Venus/Earth), barycenters for the rest (center–barycenter
+/// offsets are ≤ ~10³ km — far below the analytic fallback's error).
+pub const NAIF_IDS: [i32; 9] = [199, 299, 399, 4, 5, 6, 7, 8, 9];
+
+/// True when the SPICE kernels cover this epoch (the state source shown
+/// in inspectors depends on it).
+pub fn eph_is_spice(jd: f64) -> bool {
+    crate::spice::spice().map(|s| s.covers(jd)).unwrap_or(false)
+}
+
+/// Heliocentric position of a body by index. Prefers the DE440s SPICE
+/// kernel (EPH-004); falls back to the analytic elements outside coverage
+/// or when kernels are absent (Earth resolved to its true center).
 pub fn body_pos(i: usize, jd: f64) -> DVec3 {
+    if let Some(s) = crate::spice::spice() {
+        if let Some(p) = s.helio_ecl_m(NAIF_IDS[i], jd) {
+            return p;
+        }
+    }
     if i == 2 {
         earth_center(jd)
     } else {
@@ -441,6 +468,12 @@ pub const MOON_INCL: [f64; 21] = [
 pub fn moon_rel(mi: usize, jd: f64) -> DVec3 {
     let m = &MOONS[mi];
     if m.name == "Moon" {
+        // DE440s carries the real lunar ephemeris (301 rel 399)
+        if let Some(s) = crate::spice::spice() {
+            if let Some(rel) = s.rel_ecl_m(301, 399, jd) {
+                return rel;
+            }
+        }
         return luna_rel(jd);
     }
     let n = std::f64::consts::TAU / (m.period_d * DAY);

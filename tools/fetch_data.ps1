@@ -92,3 +92,8 @@ $prov = @"
 "@
 $prov | Out-File (Join-Path $data "provenance.json") -Encoding utf8
 "provenance written" | Out-File $log -Append -Encoding utf8
+
+# ---- NAIF SPICE kernels: DE440s planetary ephemeris + leap seconds ----
+New-Item -ItemType Directory -Force (Join-Path $data "spice") | Out-Null
+Fetch "spice_de440s" "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de440s.bsp" (Join-Path $data "spice\de440s.bsp") @()
+Fetch "spice_lsk" "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/lsk/naif0012.tls" (Join-Path $data "spice\naif0012.tls") @()
