@@ -26,6 +26,7 @@ const HELP_ROWS = [
   ['/',            'search'],
   ['Backspace',    'back'],
   ['T',            'pause time'],
+  ['X',            'stop riding the focused body'],
   ['P',            'grand tour'],
   ['M',            'ambience'],
   ['?',            'help'],

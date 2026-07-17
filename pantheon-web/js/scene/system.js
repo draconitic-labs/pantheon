@@ -767,6 +767,20 @@ export class SolarSystem {
 
   bodies() { return this.bodiesList; }
 
+  // world position of a solar-system body at jd WITHOUT a full update — used
+  // by the frame-riding camera, so it must match what update() will compute
+  predictWorld(name, jd) {
+    if (name === 'Sun') return new THREE.Vector3();
+    const pi = eph.PLANETS.findIndex(p => p.name === name);
+    if (pi >= 0) return this._statePos('planet', name, pi, jd);
+    const mi = eph.MOONS.findIndex(m => m.name === name);
+    if (mi >= 0) {
+      const parentName = eph.PLANETS[eph.MOONS[mi].parent].name;
+      return this.predictWorld(parentName, jd).add(this._statePos('moon', name, mi, jd));
+    }
+    return null;
+  }
+
   nearestSurface(camWorld) {
     let best = Infinity, bestB = null;
     for (const b of this.bodiesList) {

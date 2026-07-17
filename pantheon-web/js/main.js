@@ -442,10 +442,12 @@ const ui = initUI({
     pushBack();
     if (r.namedStar) {
       const s = r.namedStar;
+      clearFollow(true);
       selection = { name: s.name, kind: 'star', world: s.world, radius: s.radiusM, named: s };
       nav.flyTo(() => ({ pos: s.world, radius: Math.max(s.radiusM * 40, 0.5 * AU) }));
     } else if (r.star !== undefined) {
       const e = starEntry(r.star);
+      clearFollow(true);
       selection = { name: e.name, kind: 'star', world: e.world, radius: e.radiusM, starIdx: r.star };
       nav.flyTo(() => ({ pos: e.world, radius: Math.max(e.radiusM * 40, 0.5 * AU) }));
     } else if (r.exo) {
@@ -454,10 +456,12 @@ const ui = initUI({
       const aMax = r.exo.planets.reduce((m, p) => Math.max(m, p.aAU || 0), 0) || 0.5;
       nav.flyTo(() => ({ pos: e.world, radius: Math.max(aMax * AU / 2.2, e.radiusM * 40) }), 0.55);
     } else if (r.glow) {
+      clearFollow(true);
       selection = { name: r.glow.name, kind: r.glow.kind, world: r.glow.world, radius: r.glow.radius };
       nav.flyTo(() => ({ pos: r.glow.world, radius: r.glow.radius }));
     } else {
       selection = { name: r.name, kind: r.kind, world: r.world, radius: r.radius, body: r };
+      setFollow(r.name);
       nav.flyTo(() => {
         const b = system.bodies().find(x => x.name === r.name) || r;
         return { pos: b.world, radius: b.radius };
@@ -481,6 +485,7 @@ function pushBack() {
 }
 function goHome() {
   pushBack();
+  setFollow('Earth', true);
   nav.flyTo(() => {
     const e = system.bodies().find(b => b.name === 'Earth');
     return e ? { pos: e.world, radius: e.radius } : { pos: new THREE.Vector3(AU, 0, 0), radius: 6.371e6 };
@@ -490,8 +495,9 @@ window.addEventListener('keydown', (e) => {
   if (ui.isTyping && ui.isTyping()) return;
   if (e.code === 'Backspace') {
     const b = backStack.pop();
-    if (b) nav.goDirect(b.pos, b.quat);
-  } else if (e.code === 'KeyH') goHome();
+    if (b) { clearFollow(true); nav.goDirect(b.pos, b.quat); }
+  } else if (e.code === 'KeyX') clearFollow();
+  else if (e.code === 'KeyH') goHome();
   else if (e.code === 'KeyT') {
     if (clock.rate !== 0) { clock.prevRate = clock.rate; clock.rate = 0; }
     else clock.rate = clock.prevRate || 60;
@@ -499,6 +505,7 @@ window.addEventListener('keydown', (e) => {
   } else if (e.code === 'KeyG' && selection) {
     pushBack();
     const sel = selection;
+    setFollow(sel.name, true);
     nav.flyTo(() => ({ pos: liveWorld(sel), radius: sel.radius }));
   } else if (e.code === 'KeyP') {
     tour ? stopTour('Tour ended') : startTour();
@@ -516,6 +523,36 @@ function liveWorld(sel) {
   return sel.world;
 }
 
+// ---------- frame riding ----------
+// After traveling to a solar-system body the camera anchors to its moving
+// frame: run time at 1 day/s and the world orbits around you instead of
+// sailing away. Released by Backspace, X, or leaving the neighborhood.
+let follow = null;   // {name, last: Vector3}
+function setFollow(name, silent) {
+  const w = system.predictWorld(name, clock.jd);
+  if (w) {
+    const was = follow && follow.name;
+    follow = { name, last: w };
+    if (!silent && was !== name) ui.toast(`riding ${name}`);
+  } else {
+    follow = null;
+  }
+}
+function clearFollow(silent) {
+  if (follow && !silent) ui.toast(`released ${follow.name}`);
+  follow = null;
+}
+function followTick() {
+  if (!follow) return;
+  const w = system.predictWorld(follow.name, clock.jd);
+  if (!w) { follow = null; return; }
+  nav.camWorld.add(w.clone().sub(follow.last));
+  follow.last.copy(w);
+  const b = system.bodies().find(x => x.name === follow.name);
+  const r = b ? b.radius : 1e7;
+  if (nav.camWorld.distanceTo(w) > Math.max(r * 1000, 3e9)) clearFollow();
+}
+
 // ---------- grand tour ----------
 let tour = null;   // {i, phase: 'fly'|'dwell', t0}
 function tourBody(name, k) {
@@ -525,11 +562,11 @@ function tourBody(name, k) {
 function tourStops() {
   const tr = exoSystems.find(s => s.host === 'TRAPPIST-1' && s.world);
   return [
-    { label: 'The Moon — DE440s states', fn: () => tourBody('Moon', 5), lift: 0.2 },
-    { label: 'Mars', fn: () => tourBody('Mars', 5), lift: 0.1 },
-    { label: 'Jupiter', fn: () => tourBody('Jupiter', 5.5), lift: 0.3 },
-    { label: 'Saturn — above the rings', fn: () => tourBody('Saturn', 5.5), lift: 0.8 },
-    { label: 'The Sun', fn: () => tourBody('Sun', 14), lift: 0.3 },
+    { label: 'The Moon — DE440s states', fn: () => tourBody('Moon', 5), lift: 0.2, follow: 'Moon' },
+    { label: 'Mars', fn: () => tourBody('Mars', 5), lift: 0.1, follow: 'Mars' },
+    { label: 'Jupiter', fn: () => tourBody('Jupiter', 5.5), lift: 0.3, follow: 'Jupiter' },
+    { label: 'Saturn — above the rings', fn: () => tourBody('Saturn', 5.5), lift: 0.8, follow: 'Saturn' },
+    { label: 'The Sun', fn: () => tourBody('Sun', 14), lift: 0.3, follow: 'Sun' },
     tr && {
       label: 'TRAPPIST-1 — seven worlds, 12 pc out',
       fn: () => ({ pos: tr.world, radius: (tr.planets.reduce((m, p) => Math.max(m, p.aAU || 0), 0) || 0.5) * AU / 2.2 }),
@@ -538,7 +575,7 @@ function tourStops() {
     { label: 'The Milky Way', fn: () => ({ pos: gcWorld.clone(), radius: 12 * KPC }), lift: 0.5 },
     m31World && { label: 'Andromeda', fn: () => ({ pos: m31World.clone(), radius: 30 * KPC }), lift: 0.3 },
     { label: 'The cosmic web', fn: () => ({ pos: new THREE.Vector3(0, 0, 0), radius: 26e3 * KPC }), lift: 0 },
-    { label: 'Home', fn: () => tourBody('Earth', 4.5), lift: 0.15 },
+    { label: 'Home', fn: () => tourBody('Earth', 4.5), lift: 0.15, follow: 'Earth' },
   ].filter(Boolean);
 }
 function startTour() {
@@ -566,6 +603,7 @@ function tourTick() {
   const s = stops[tour.i];
   if (!s.fn()) { tour.t0 = -99; return; }   // stop unavailable — advance next tick
   ui.toast(s.label);
+  if (s.follow) setFollow(s.follow, true); else clearFollow(true);
   nav.flyTo(() => s.fn(), s.lift || 0);
   tour.phase = 'fly';
 }
@@ -620,6 +658,7 @@ nav.onTravel((nx, ny) => {
   if (!hit) return;
   selection = hit;
   pushBack();
+  setFollow(hit.name, true);   // no-op (clears) for non-solar targets
   nav.flyTo(() => ({ pos: liveWorld(hit), radius: hit.radius }));
   showSelectionCard();
 });
@@ -699,6 +738,7 @@ function fmtDate(jdTdb) {
   nav.camWorld.copy(ep).addScaledVector(sunward, 4.2 * 6.371e6).addScaledVector(up, 1.5 * 6.371e6);
   nav.lookAtWorld(ep);
   ui.setRateActive(clock.rate);
+  setFollow('Earth', true);   // boot anchored — running time keeps Earth here
 }
 
 // ---------- main loop ----------
@@ -718,6 +758,7 @@ function frame(now) {
   tSec += dt;
   clock.jd += clock.rate * dt / 86400;
   maybeFetchStates();
+  followTick();   // ride the anchored body's frame BEFORE parking the scene
 
   // nearest surface -> auto flight speed; collision floor
   const near = system.nearestSurface(nav.camWorld);
@@ -808,7 +849,7 @@ function frame(now) {
   const focusName = selection ? selection.name : (nearBody ? nearBody.name : '—');
   const focusWorld = selection ? liveWorld(selection) : (nearBody ? nearBody.world : null);
   ui.setChip({
-    focus: focusName,
+    focus: focusName + (follow && follow.name === focusName ? ' ⚓' : ''),
     dist: focusWorld ? prettyDist(Math.max(nav.camWorld.distanceTo(focusWorld) - (selection ? selection.radius : nearBody.radius), 0)) : '',
     speed: speed > 0 ? prettySpeed(speed) : '',
     date: fmtDate(clock.jd),

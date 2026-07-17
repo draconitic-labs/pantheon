@@ -118,7 +118,16 @@ fn run(args: &[String]) -> anyhow::Result<()> {
                 Some(p) => p.parse().map_err(|_| anyhow::anyhow!("bad port '{p}'"))?,
                 None => 8090,
             };
-            crate::serve::serve(port, open)
+            let r = crate::serve::serve(port, open);
+            if let Err(e) = &r {
+                // launched from a double-clicked shortcut, the console vanishes
+                // with the process — keep the error on screen long enough to read
+                eprintln!("error: {e:#}");
+                eprintln!("(window closes in 15 s)");
+                std::thread::sleep(std::time::Duration::from_secs(15));
+                std::process::exit(1);
+            }
+            r
         }
         "--shot" => {
             let which = args

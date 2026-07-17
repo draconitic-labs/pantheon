@@ -11,19 +11,40 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 
-pub fn serve(port: u16, open: bool) -> anyhow::Result<()> {
-    let (uni, _health) = crate::data::Universe::load_with_health();
+pub fn serve(port_req: u16, open: bool) -> anyhow::Result<()> {
     let web = web_root()?;
-    // touch SPICE up front so the first /api/states request is fast
-    let spice_loaded = crate::spice::spice().is_some();
-    let listener = TcpListener::bind(("127.0.0.1", port))?;
+    // Bind BEFORE the slow kernel/catalog load: the browser can open at once
+    // and its first request just waits in the accept backlog. If the port is
+    // taken by another Pantheon (double-clicked launcher), reuse it; if taken
+    // by something else, walk forward to the next free port.
+    let mut bound = None;
+    for cand in port_req..port_req.saturating_add(10) {
+        match TcpListener::bind(("127.0.0.1", cand)) {
+            Ok(l) => {
+                bound = Some((l, cand));
+                break;
+            }
+            Err(_) => {
+                if existing_pantheon(cand) {
+                    println!("pantheon web already running — http://127.0.0.1:{cand}/");
+                    if open {
+                        spawn_browser(cand);
+                    }
+                    return Ok(());
+                }
+            }
+        }
+    }
+    let Some((listener, port)) = bound else {
+        anyhow::bail!("no free port in {port_req}..{}", port_req.saturating_add(9));
+    };
     println!("pantheon web — http://127.0.0.1:{port}/");
     if open {
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", &format!("http://127.0.0.1:{port}/")])
-            .spawn()
-            .ok();
+        spawn_browser(port);
     }
+    println!("  loading kernels and catalogs…");
+    let (uni, _health) = crate::data::Universe::load_with_health();
+    let spice_loaded = crate::spice::spice().is_some();
     println!(
         "  web root {} · spice {} · {} stars · {} exo systems · Ctrl-C to stop",
         web.display(),
@@ -36,6 +57,29 @@ pub fn serve(port: u16, open: bool) -> anyhow::Result<()> {
         let _ = handle(s, &uni, &web);
     }
     Ok(())
+}
+
+fn spawn_browser(port: u16) {
+    std::process::Command::new("cmd")
+        .args(["/C", "start", "", &format!("http://127.0.0.1:{port}/")])
+        .spawn()
+        .ok();
+}
+
+/// Is the thing on this port one of ours? Cheap raw-HTTP probe of /api/meta.
+fn existing_pantheon(port: u16) -> bool {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let Ok(mut s) = TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(400)) else {
+        return false;
+    };
+    s.set_read_timeout(Some(std::time::Duration::from_millis(800))).ok();
+    if s.write_all(b"GET /api/meta HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").is_err() {
+        return false;
+    }
+    let mut buf = Vec::new();
+    let _ = std::io::Read::read_to_end(&mut s, &mut buf);
+    let text = String::from_utf8_lossy(&buf);
+    text.contains("\"kernels\"") && text.contains("\"retrieved\"")
 }
 
 fn web_root() -> anyhow::Result<PathBuf> {
