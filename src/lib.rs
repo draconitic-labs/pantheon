@@ -11,6 +11,7 @@ pub mod engine;
 pub mod entity;
 pub mod evidence;
 pub mod frames;
+pub mod serve;
 pub mod sim;
 pub mod spice;
 pub mod theme;
