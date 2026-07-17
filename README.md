@@ -28,6 +28,22 @@ The `--path` renderer plays a cinematic keyframe file (same format the in-app
 Capture panel saves) and writes numbered PNG frames plus an ffmpeg one-liner to
 assemble a video.
 
+## Pantheon 3D — the web edition (free flight)
+
+```
+pantheon-cli --serve --open       serve pantheon-web/ on http://127.0.0.1:8090 and open the browser
+```
+
+A true-3D rebuild of the renderer in three.js (vendored in `pantheon-web/lib`,
+no CDN or Node needed), with the Rust binary as the scientific backend:
+`/api/states` streams SPICE-grade heliocentric states, `/api/tracks` the
+Horizons spacecraft arcs, `/data/*` the cached catalogs. Click the canvas for
+mouse-look, `W A S D` + `R/F` to fly (speed auto-scales with distance to the
+nearest surface), scroll to trim, double-click or `/`-search to autopilot
+anywhere from a coastline to the cosmic web, `P` runs the grand tour, `M`
+toggles the generative ambience, `?` lists everything. The desktop shortcut
+"Pantheon 3D" launches this edition; "Pantheon" remains the native atlas.
+
 ## Controls
 
 | input | action |

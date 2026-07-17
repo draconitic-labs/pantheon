@@ -61,7 +61,7 @@ function galacticCenterWorld() {
   return dir.multiplyScalar(8.178 * KPC);
 }
 const mwCloud = buildMilkyWay(rand);
-const mwPts = cloudToPoints(mwCloud, 55 * PC, 0.5, 17);
+const mwPts = cloudToPoints(mwCloud, 55 * PC, 0.42, 9);
 const mwGroup = new THREE.Group();
 mwGroup.add(mwPts);
 scene.add(mwGroup);
@@ -85,7 +85,7 @@ try {
     m31World = m31.world.clone();
     const disc = buildGalaxyDisc(mulberry32(31), { scale: 1.3 });
     m31Group = new THREE.Group();
-    m31Group.add(cloudToPoints(disc, 90 * PC, 0.55, 15));
+    m31Group.add(cloudToPoints(disc, 90 * PC, 0.55, 9));
     m31Group.rotation.set(1.0, 0.4, 0.7);
     scene.add(m31Group);
   }
@@ -469,6 +469,8 @@ const ui = initUI({
   stepDays(d) { clock.jd += d; },
   goNow() { clock.jd = eph.jdTdb(eph.jdUtcNow()); },
   goHome,
+  tour: () => (tour ? stopTour('Tour ended') : startTour()),
+  audio: () => toggleAmbience(),
 });
 
 const nav = new Nav(canvas, () => ui.isTyping && ui.isTyping());
@@ -498,8 +500,13 @@ window.addEventListener('keydown', (e) => {
     pushBack();
     const sel = selection;
     nav.flyTo(() => ({ pos: liveWorld(sel), radius: sel.radius }));
+  } else if (e.code === 'KeyP') {
+    tour ? stopTour('Tour ended') : startTour();
+  } else if (e.code === 'KeyM') {
+    toggleAmbience();
   }
 });
+nav.moveCb = () => stopTour('Tour ended');
 
 function liveWorld(sel) {
   if (sel.body || ['planet', 'moon', 'star', 'craft'].includes(sel.kind)) {
@@ -507,6 +514,72 @@ function liveWorld(sel) {
     if (b) return b.world;
   }
   return sel.world;
+}
+
+// ---------- grand tour ----------
+let tour = null;   // {i, phase: 'fly'|'dwell', t0}
+function tourBody(name, k) {
+  const b = system.bodies().find(x => x.name === name);
+  return b ? { pos: b.world, radius: b.radius * (k / 3.5) } : null;
+}
+function tourStops() {
+  const tr = exoSystems.find(s => s.host === 'TRAPPIST-1' && s.world);
+  return [
+    { label: 'The Moon — DE440s states', fn: () => tourBody('Moon', 5), lift: 0.2 },
+    { label: 'Mars', fn: () => tourBody('Mars', 5), lift: 0.1 },
+    { label: 'Jupiter', fn: () => tourBody('Jupiter', 5.5), lift: 0.3 },
+    { label: 'Saturn — above the rings', fn: () => tourBody('Saturn', 5.5), lift: 0.8 },
+    { label: 'The Sun', fn: () => tourBody('Sun', 14), lift: 0.3 },
+    tr && {
+      label: 'TRAPPIST-1 — seven worlds, 12 pc out',
+      fn: () => ({ pos: tr.world, radius: (tr.planets.reduce((m, p) => Math.max(m, p.aAU || 0), 0) || 0.5) * AU / 2.2 }),
+      lift: 0.55,
+    },
+    { label: 'The Milky Way', fn: () => ({ pos: gcWorld.clone(), radius: 12 * KPC }), lift: 0.5 },
+    m31World && { label: 'Andromeda', fn: () => ({ pos: m31World.clone(), radius: 30 * KPC }), lift: 0.3 },
+    { label: 'The cosmic web', fn: () => ({ pos: new THREE.Vector3(0, 0, 0), radius: 26e3 * KPC }), lift: 0 },
+    { label: 'Home', fn: () => tourBody('Earth', 4.5), lift: 0.15 },
+  ].filter(Boolean);
+}
+function startTour() {
+  pushBack();
+  selection = null;
+  ui.hideCard();
+  tour = { i: -1, phase: 'dwell', t0: -99 };
+  ui.toast('Grand tour — P or any movement ends it');
+}
+function stopTour(msg) {
+  if (!tour) return;
+  tour = null;
+  if (msg) ui.toast(msg);
+}
+function tourTick() {
+  if (!tour) return;
+  if (tour.phase === 'fly') {
+    if (!nav.autopilot) { tour.phase = 'dwell'; tour.t0 = tSec; }
+    return;
+  }
+  if (tSec - tour.t0 < 4.5) return;
+  const stops = tourStops();
+  tour.i++;
+  if (tour.i >= stops.length) { stopTour('Tour complete'); return; }
+  const s = stops[tour.i];
+  if (!s.fn()) { tour.t0 = -99; return; }   // stop unavailable — advance next tick
+  ui.toast(s.label);
+  nav.flyTo(() => s.fn(), s.lift || 0);
+  tour.phase = 'fly';
+}
+
+// ---------- ambience (WebAudio; started only from a user gesture) ----------
+let amb = null;
+async function toggleAmbience() {
+  if (!amb) {
+    try {
+      const m = await import('./audio.js');
+      amb = m.initAmbience();
+    } catch (e) { ui.toast('ambience unavailable'); console.warn('audio', e); return; }
+  }
+  ui.toast(amb.toggle() ? 'ambience on' : 'ambience off');
 }
 
 // ---------- picking ----------
@@ -654,6 +727,7 @@ function frame(now) {
     if (d < nearDist) { nearDist = d; nearBody = { name: pocket.active.name, world: pocket.active.world, radius: pocket.active.radiusM }; }
   }
   const speed = nav.update(dt, Math.max(nearDist, 0.5));
+  tourTick();
   if (nearBody) {
     const d = nav.camWorld.distanceTo(nearBody.world);
     const floor = nearBody.radius * 1.015;

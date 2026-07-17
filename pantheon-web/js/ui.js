@@ -26,6 +26,8 @@ const HELP_ROWS = [
   ['/',            'search'],
   ['Backspace',    'back'],
   ['T',            'pause time'],
+  ['P',            'grand tour'],
+  ['M',            'ambience'],
   ['?',            'help'],
   ['Esc',          'release mouse'],
 ];
@@ -183,6 +185,8 @@ export function initUI(cb) {
   mkBtn('− day', () => cb.stepDays(-1));
   mkBtn('+ day', () => cb.stepDays(1));
   mkBtn('now', () => cb.goNow());
+  if (cb.tour) mkBtn('⟡ tour', () => cb.tour());
+  if (cb.audio) mkBtn('♪', () => cb.audio());
   el('span', 'tsep', bar);
   const dateOut = el('span', 'tdate', bar);
 

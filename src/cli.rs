@@ -12,7 +12,7 @@ USAGE:
   pantheon --list-shots                     list preset scenes
   pantheon --shot <name|all> [--size WxH] [--out DIR]
   pantheon --path <file.json> [--fps N] [--size WxH] [--out DIR]
-  pantheon --serve [--port N]               serve the three.js web edition (default port 8090)
+  pantheon --serve [--port N] [--open]      serve the three.js web edition (default port 8090)
   pantheon --doctor                         environment, GPU, and data health
   pantheon --help | --version
 
@@ -105,12 +105,20 @@ fn run(args: &[String]) -> anyhow::Result<()> {
         }
         "--doctor" => doctor(),
         "--serve" => {
-            let flags = Flags::parse(&args[1..], &["--port"])?;
+            let mut rest: Vec<String> = args[1..].to_vec();
+            let open = match rest.iter().position(|a| a == "--open") {
+                Some(i) => {
+                    rest.remove(i);
+                    true
+                }
+                None => false,
+            };
+            let flags = Flags::parse(&rest, &["--port"])?;
             let port: u16 = match flags.get("--port") {
                 Some(p) => p.parse().map_err(|_| anyhow::anyhow!("bad port '{p}'"))?,
                 None => 8090,
             };
-            crate::serve::serve(port)
+            crate::serve::serve(port, open)
         }
         "--shot" => {
             let which = args

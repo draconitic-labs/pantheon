@@ -11,13 +11,19 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 
-pub fn serve(port: u16) -> anyhow::Result<()> {
+pub fn serve(port: u16, open: bool) -> anyhow::Result<()> {
     let (uni, _health) = crate::data::Universe::load_with_health();
     let web = web_root()?;
     // touch SPICE up front so the first /api/states request is fast
     let spice_loaded = crate::spice::spice().is_some();
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     println!("pantheon web — http://127.0.0.1:{port}/");
+    if open {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &format!("http://127.0.0.1:{port}/")])
+            .spawn()
+            .ok();
+    }
     println!(
         "  web root {} · spice {} · {} stars · {} exo systems · Ctrl-C to stop",
         web.display(),

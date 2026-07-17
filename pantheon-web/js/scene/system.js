@@ -57,23 +57,24 @@ const BODY_FSH = /* glsl */`
   uniform vec4 uParam;      // x: polar cap, y: detail, z: band freq, w: spot
   uniform vec3 uSunObj;     // sun direction, object space
   uniform float uTime, uSeed;
+  uniform float uClose;     // 0 far .. 1 at the surface (extra octaves + relief)
   #include <common>
   #include <logdepthbuf_pars_fragment>
   ${NOISE}
   void main() {
     #include <logdepthbuf_fragment>
     vec3 n = normalize(vObj);
+    vec3 np = n;              // shading normal (relief-perturbed up close)
     float lat = asin(clamp(n.y, -1.0, 1.0));
     float lon = atan(n.z, n.x);
     vec3 p = n * uParam.y + vec3(uSeed);
-    float diff = smoothstep(-0.06, 0.14, dot(n, uSunObj));
     vec3 col;
     if (uKind == 0) {
       // Sun: granulation + limb darkening, HDR emissive
       float g = fbm(n * 14.0 + vec3(0.0, uTime * 0.02, 0.0));
       float g2 = fbm(n * 40.0 - vec3(uTime * 0.03));
       float limb = pow(max(dot(-vViewDir, vNormalV), 0.0), 0.55);
-      col = mix(uColB, uColA, g * 0.7 + g2 * 0.3) * (0.55 + 1.1 * limb) * 3.4;
+      col = mix(uColB, uColA, g * 0.7 + g2 * 0.3) * (0.55 + 1.1 * limb) * 2.5;
       gl_FragColor = vec4(col, 1.0);
       return;
     } else if (uKind == 2) {
@@ -108,11 +109,35 @@ const BODY_FSH = /* glsl */`
         col = mix(col, vec3(0.93, 0.94, 0.96), cap);
       }
     }
-    // engraved graticule, 15 deg hairlines
+    // close-range detail — uClose is a uniform, so the branch is free when far
+    if (uClose > 0.002) {
+      float f1 = fbm(p * 7.0 + 11.0);
+      float f2 = fbm(p * 26.0 + 23.0);
+      if (uKind == 2 || uKind == 3) {
+        // storm filaments sheared along the bands
+        float fl = fbm(vec3(lon * 10.0, lat * 40.0, uSeed + 7.0));
+        col *= 1.0 + uClose * (0.22 * (fl - 0.5) + 0.12 * (f2 - 0.5));
+      } else if (uKind == 4) {
+        col *= 1.0 + uClose * 0.15 * (f2 - 0.5);   // ocean mottling
+      } else {
+        float ridge = 1.0 - abs(f1 * 2.0 - 1.0);
+        col *= 1.0 + uClose * (0.30 * (f1 - 0.5) + 0.26 * (f2 - 0.5) - 0.16 * ridge * ridge);
+        // relief: perturb the shading normal from the same height field
+        vec3 t1 = normalize(cross(n, abs(n.y) > 0.93 ? vec3(1, 0, 0) : vec3(0, 1, 0)));
+        vec3 t2 = cross(n, t1);
+        float e = 0.012;
+        float hC = fbm((n * uParam.y + vec3(uSeed)) * 9.0 + 31.0);
+        float hX = fbm(((n + t1 * e) * uParam.y + vec3(uSeed)) * 9.0 + 31.0);
+        float hY = fbm(((n + t2 * e) * uParam.y + vec3(uSeed)) * 9.0 + 31.0);
+        np = normalize(n - (t1 * (hX - hC) + t2 * (hY - hC)) * (0.05 / e) * uClose);
+      }
+    }
+    float diff = smoothstep(-0.06, 0.14, dot(np, uSunObj));
+    // engraved graticule, 15 deg hairlines (recedes near the ground)
     float gLat = abs(fract(lat * 57.29578 / 15.0 + 0.5) - 0.5);
     float gLon = abs(fract(lon * 57.29578 / 15.0 + 0.5) - 0.5) * cos(lat);
     float grat = (1.0 - smoothstep(0.0, 0.03, min(gLat, gLon))) * 0.05;
-    col = col * (0.045 + diff) + vec3(0.85, 0.70, 0.42) * grat * (0.25 + diff);
+    col = col * (0.045 + diff) + vec3(0.85, 0.70, 0.42) * grat * (0.25 + diff) * (1.0 - 0.6 * uClose);
     gl_FragColor = vec4(col, 1.0);
   }
 `;
@@ -308,6 +333,7 @@ function bodyMaterial(name, seed) {
       uParam: { value: new THREE.Vector4(...s.p) },
       uSunObj: { value: new THREE.Vector3(0, 0, 1) },
       uTime: { value: 0 }, uSeed: { value: seed },
+      uClose: { value: 0 },
     },
   });
 }
@@ -418,7 +444,7 @@ export class SolarSystem {
           #include <logdepthbuf_fragment>
           float d = length(vUv);
           if (d > 1.0) discard;
-          float g = exp(-d * d * 7.0) * 2.2 + exp(-d * 2.6) * 0.35;
+          float g = exp(-d * d * 7.0) * 1.4 + exp(-d * 2.6) * 0.3;
           float rays = 1.0 + 0.35 * pow(abs(vUv.x * vUv.y) * 4.0, 0.6);
           g *= smoothstep(1.0, 0.72, d);   // reach zero before the quad edge
           gl_FragColor = vec4(vec3(1.0, 0.88, 0.66) * g / rays, 1.0);
@@ -725,6 +751,10 @@ export class SolarSystem {
     const inv = rec.mesh.quaternion.clone().invert();
     const so = sunDirWorld.clone().applyQuaternion(inv);
     rec.mat.uniforms.uSunObj.value.copy(so);
+    if (rec.mat.uniforms.uClose) {
+      const alt = rec.world.distanceTo(camWorld) / rec.radius - 1;
+      rec.mat.uniforms.uClose.value = Math.min(Math.max(1 - alt / 9, 0), 1);
+    }
     if (rec.atmoMat) rec.atmoMat.uniforms.uSunObj.value.copy(so);
     if (rec.lightsMat) rec.lightsMat.uniforms.uSunObj.value.copy(so);
     if (rec.ring) {

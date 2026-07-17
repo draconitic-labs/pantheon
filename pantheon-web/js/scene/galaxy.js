@@ -53,11 +53,13 @@ function galacticBasis() {
 
 // ---------------------------------------------------------------- palette
 const hx = (h) => [((h >> 16) & 255) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255];
-const GOLD = hx(0xd8b36a);
-const GOLD_PALE = hx(0xe8d0a8);
-const IVORY = hx(0xe8e4d8);
-const ARM_BLUE = hx(0xa8c4e8);
-const HII_PINK = hx(0xe8a0b4);
+// deeper chroma than the UI palette: additive stacking + ACES desaturate,
+// so the source colors must overshoot for hue to survive in dense regions
+const GOLD = hx(0xd89e42);
+const GOLD_PALE = hx(0xe8c88e);
+const IVORY = hx(0xe8e2d0);
+const ARM_BLUE = hx(0x6f96e8);
+const HII_PINK = hx(0xe87792);
 const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 
 // ------------------------------------------------------------ core builder
@@ -95,11 +97,14 @@ function genGalaxy(rand, P) {
   };
 
   const put = (x, y, z, rgb, bright, size) => {
-    // dust lane: |z| < 80 pc slab, 3–8 kpc, inter-arm — keep 40–60 % brightness
+    // dust lane: |z| < 80 pc slab, 3–8 kpc, inter-arm — dimmed AND reddened
+    // (extinction reddens; palettes are shared consts, so tint locally)
+    let tg = 1, tb = 1;
     if (Math.abs(z) < P.dust.zLane) {
       const r = Math.hypot(x, y);
       if (r > P.dust.rIn && r < P.dust.rOut && armDist(r, Math.atan2(y, x)) > P.dust.armGap) {
         bright *= 0.4 + 0.2 * rand();
+        tg = 0.74; tb = 0.5;
       }
     }
     const o = 3 * i;
@@ -111,8 +116,8 @@ function genGalaxy(rand, P) {
       positions[o] = x; positions[o + 1] = y; positions[o + 2] = z;
     }
     colors[o] = rgb[0] * bright;
-    colors[o + 1] = rgb[1] * bright;
-    colors[o + 2] = rgb[2] * bright;
+    colors[o + 1] = rgb[1] * bright * tg;
+    colors[o + 2] = rgb[2] * bright * tb;
     sizes[i] = size;
     i++;
   };
