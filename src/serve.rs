@@ -11,8 +11,15 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 
-pub fn serve(port_req: u16, open: bool) -> anyhow::Result<()> {
+pub fn serve(port_req: u16, open: bool, app: bool) -> anyhow::Result<()> {
     let web = web_root()?;
+    let launch = |port: u16| {
+        if app {
+            spawn_app_window(port);
+        } else {
+            spawn_browser(port);
+        }
+    };
     // Bind BEFORE the slow kernel/catalog load: the browser can open at once
     // and its first request just waits in the accept backlog. If the port is
     // taken by another Pantheon (double-clicked launcher), reuse it; if taken
@@ -27,8 +34,8 @@ pub fn serve(port_req: u16, open: bool) -> anyhow::Result<()> {
             Err(_) => {
                 if existing_pantheon(cand) {
                     println!("pantheon web already running — http://127.0.0.1:{cand}/");
-                    if open {
-                        spawn_browser(cand);
+                    if open || app {
+                        launch(cand);
                     }
                     return Ok(());
                 }
@@ -39,11 +46,13 @@ pub fn serve(port_req: u16, open: bool) -> anyhow::Result<()> {
         anyhow::bail!("no free port in {port_req}..{}", port_req.saturating_add(9));
     };
     println!("pantheon web — http://127.0.0.1:{port}/");
-    if open {
-        spawn_browser(port);
+    if open || app {
+        launch(port);
     }
     println!("  loading kernels and catalogs…");
     let (uni, _health) = crate::data::Universe::load_with_health();
+    let uni = std::sync::Arc::new(uni);
+    let web = std::sync::Arc::new(web);
     let spice_loaded = crate::spice::spice().is_some();
     println!(
         "  web root {} · spice {} · {} stars · {} exo systems · Ctrl-C to stop",
@@ -52,11 +61,62 @@ pub fn serve(port_req: u16, open: bool) -> anyhow::Result<()> {
         uni.stars.len(),
         uni.exos.len()
     );
+    // Thread per connection. Browsers open speculative sockets that never send
+    // a request; served sequentially each one would stall the accept loop for
+    // its whole read timeout and the page appears frozen.
     for stream in listener.incoming() {
         let Ok(s) = stream else { continue };
-        let _ = handle(s, &uni, &web);
+        s.set_nodelay(true).ok();
+        let uni = uni.clone();
+        let web = web.clone();
+        std::thread::spawn(move || {
+            let _ = handle(s, &uni, &web);
+        });
     }
     Ok(())
+}
+
+/// Launch the web edition in its own window: Edge/Chrome `--app` mode with a
+/// dedicated profile so our GPU flags always apply (a delegated window in an
+/// already-running browser would ignore them).
+fn spawn_app_window(port: u16) {
+    let cands = [
+        (std::env::var("ProgramFiles(x86)"), r"Microsoft\Edge\Application\msedge.exe"),
+        (std::env::var("ProgramFiles"), r"Microsoft\Edge\Application\msedge.exe"),
+        (std::env::var("ProgramFiles"), r"Google\Chrome\Application\chrome.exe"),
+        (std::env::var("LOCALAPPDATA"), r"Google\Chrome\Application\chrome.exe"),
+    ];
+    let exe = cands.iter().find_map(|(base, rel)| {
+        let p = PathBuf::from(base.as_deref().ok()?).join(rel);
+        p.exists().then_some(p)
+    });
+    let Some(exe) = exe else {
+        println!("  no Edge/Chrome found — opening the default browser instead");
+        spawn_browser(port);
+        return;
+    };
+    let profile = std::env::var("LOCALAPPDATA")
+        .map(|l| PathBuf::from(l).join("Pantheon3D").join("webview-profile"))
+        .unwrap_or_else(|_| PathBuf::from("exports/.webview-profile"));
+    std::fs::create_dir_all(&profile).ok();
+    let ok = std::process::Command::new(&exe)
+        .args([
+            format!("--app=http://127.0.0.1:{port}/"),
+            format!("--user-data-dir={}", profile.display()),
+            "--window-size=1600,950".into(),
+            "--no-first-run".into(),
+            "--no-default-browser-check".into(),
+            // force the hardware D3D11 path — never software WebGL
+            "--use-angle=d3d11".into(),
+            "--ignore-gpu-blocklist".into(),
+        ])
+        .spawn()
+        .is_ok();
+    if ok {
+        println!("  app window: {}", exe.display());
+    } else {
+        spawn_browser(port);
+    }
 }
 
 fn spawn_browser(port: u16) {

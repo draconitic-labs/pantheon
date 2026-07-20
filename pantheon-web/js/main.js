@@ -27,6 +27,21 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
+// which adapter is actually rendering (three.js uses WebGL2 -> D3D11/Vulkan
+// via ANGLE — never WebGPU); software fallbacks must be loudly visible
+const glInfo = (() => {
+  try {
+    const gl = renderer.getContext();
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    return {
+      renderer: String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER)),
+      vendor: String(gl.getParameter(ext ? ext.UNMASKED_VENDOR_WEBGL : gl.VENDOR)),
+      webgl2: typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext,
+    };
+  } catch (e) { return { renderer: 'unknown', vendor: '', webgl2: false }; }
+})();
+const gpuSoftware = /swiftshader|software|llvmpipe|basic render/i.test(glInfo.renderer);
+console.log(`[pantheon] gpu: ${glInfo.renderer} · webgl2: ${glInfo.webgl2}${gpuSoftware ? ' · SOFTWARE FALLBACK' : ''}`);
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000000);
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.5, 1e27);
@@ -739,12 +754,15 @@ function fmtDate(jdTdb) {
   nav.lookAtWorld(ep);
   ui.setRateActive(clock.rate);
   setFollow('Earth', true);   // boot anchored — running time keeps Earth here
+  const gshort = glInfo.renderer.replace(/^ANGLE \(/, '').replace(/\)$/, '').slice(0, 70);
+  ui.toast(gpuSoftware ? `⚠ software rendering — ${gshort}` : `GPU: ${gshort}`);
 }
 
 // ---------- main loop ----------
 let pocketItems = [];
 let last = performance.now();
 let tSec = 0;
+let fpsEma = 60;
 function schedule() {
   // rAF stalls in hidden tabs; keep simulation time and headless
   // verification alive with a slow timeout ticker
@@ -756,6 +774,7 @@ function frame(now) {
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
   tSec += dt;
+  if (dt > 0.0005 && !document.hidden) fpsEma += (1 / dt - fpsEma) * 0.05;
   clock.jd += clock.rate * dt / 86400;
   maybeFetchStates();
   followTick();   // ride the anchored body's frame BEFORE parking the scene
@@ -861,7 +880,7 @@ function frame(now) {
 schedule();
 document.addEventListener('visibilitychange', () => { if (!document.hidden) last = performance.now(); });
 // debug/verification handle
-window.__pantheon = { renderer, composer, scene, camera, nav, clock, system, goTo: (n, k = 4) => {
+window.__pantheon = { renderer, composer, scene, camera, nav, clock, system, gpu: glInfo, fps: () => Math.round(fpsEma), goTo: (n, k = 4) => {
   const b = system.bodies().find(x => x.name === n);
   if (!b) return;
   const sunward = b.world.clone().normalize().negate();          // day side
