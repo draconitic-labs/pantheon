@@ -259,6 +259,40 @@ export function initUI(cb) {
     }
   });
 
+  // ---- hover tip + selection reticle --------------------------------------
+  const hoverTip = el('div', 'hovertip', document.getElementById('labels'));
+  hoverTip.style.display = 'none';
+  function setHover(h) {
+    if (!h) { hoverTip.style.display = 'none'; return; }
+    hoverTip.style.display = '';
+    hoverTip.textContent = h.text;
+    hoverTip.style.left = `${h.x + 14}px`;
+    hoverTip.style.top = `${h.y + 12}px`;
+  }
+  const reticle = el('div', 'reticle', document.getElementById('labels'));
+  reticle.style.display = 'none';
+  function setReticle(rt) {
+    if (!rt) { reticle.style.display = 'none'; return; }
+    reticle.style.display = '';
+    reticle.style.left = `${rt.x - rt.r}px`;
+    reticle.style.top = `${rt.y - rt.r}px`;
+    reticle.style.width = `${rt.r * 2}px`;
+    reticle.style.height = `${rt.r * 2}px`;
+  }
+
+  // ---- scale ladder --------------------------------------------------------
+  const LADDER = ['surface', 'planet', 'system', 'stars', 'galaxy', 'local group', 'cosmic web'];
+  const ladderRoot = el('div', 'panel ladder', document.body);
+  ladderRoot.id = 'ladder';
+  const ladderRows = LADDER.map((name, i) => {
+    const row = el('div', 'ladder-row', ladderRoot, name);
+    row.addEventListener('pointerdown', (e) => { e.preventDefault(); cb.ladder && cb.ladder(i); });
+    return row;
+  });
+  function setLadderActive(idx) {
+    ladderRows.forEach((r, i) => r.classList.toggle('active', i === idx));
+  }
+
   // ---- help overlay -------------------------------------------------------
   const helpRoot = document.getElementById('help');
   const hp = el('div', 'panel help-panel', helpRoot);
@@ -287,5 +321,6 @@ export function initUI(cb) {
   return {
     setChip, showCard, hideCard, renderLabels, toast, setRateActive, setHelp,
     isTyping, searchResults, hideSearch,
+    setHover, setReticle, setLadderActive,
   };
 }

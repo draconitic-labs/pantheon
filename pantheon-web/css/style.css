@@ -176,3 +176,51 @@ html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
 .help-k { color: var(--gold); font: 11px var(--sans); letter-spacing: 0.08em; text-align: right; white-space: nowrap; }
 .help-v { color: var(--ivory); font: 11px var(--sans); letter-spacing: 0.04em; }
 .help-hint { margin-top: 14px; text-align: center; color: rgba(232, 228, 216, 0.4); font: italic 10px var(--sans); letter-spacing: 0.1em; }
+
+/* ---- hover tip, selection reticle, scale ladder ---- */
+.hovertip {
+  position: absolute;
+  padding: 2px 8px;
+  background: rgba(8, 10, 14, 0.82);
+  border: 1px solid rgba(216, 179, 106, 0.35);
+  border-radius: 3px;
+  color: #e8e4d8;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 30;
+}
+.reticle {
+  position: absolute;
+  border: 1px solid rgba(216, 179, 106, 0.75);
+  border-radius: 50%;
+  box-shadow: 0 0 10px rgba(216, 179, 106, 0.25), inset 0 0 8px rgba(216, 179, 106, 0.12);
+  pointer-events: none;
+  z-index: 25;
+}
+#ladder {
+  position: fixed;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 6px;
+  z-index: 40;
+}
+.ladder-row {
+  padding: 4px 10px;
+  font-size: 10.5px;
+  font-variant: small-caps;
+  letter-spacing: 0.14em;
+  color: rgba(232, 228, 216, 0.55);
+  text-align: right;
+  border-right: 2px solid rgba(216, 179, 106, 0.18);
+  cursor: pointer;
+  user-select: none;
+  transition: color 120ms, border-color 120ms;
+}
+.ladder-row:hover { color: #e8e4d8; border-right-color: rgba(216, 179, 106, 0.55); }
+.ladder-row.active { color: #d8b36a; border-right-color: #d8b36a; }

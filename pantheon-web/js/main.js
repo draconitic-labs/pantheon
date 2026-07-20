@@ -547,7 +547,52 @@ const ui = initUI({
   goHome,
   tour: () => (tour ? stopTour('Tour ended') : startTour()),
   audio: () => toggleAmbience(),
+  ladder: (i) => ladderJump(i),
 });
+
+// scale-ladder rungs: teleport across whole decades in one click
+function ladderJump(i) {
+  pushBack();
+  stopTour();
+  const focusName = follow ? follow.name : 'Earth';
+  const live = (name) => {
+    const b = system.bodies().find(x => x.name === name);
+    return b ? { pos: b.world, radius: b.radius } : null;
+  };
+  const b0 = system.bodies().find(x => x.name === focusName);
+  switch (i) {
+    case 0:   // surface — skim the focused body
+      if (!b0) return;
+      setFollow(b0.name, true);
+      nav.flyTo(() => ({ pos: live(b0.name).pos, radius: b0.radius * 0.3 }), 0.05);
+      break;
+    case 1:   // planet overview
+      if (!b0) return;
+      setFollow(b0.name, true);
+      nav.flyTo(() => ({ pos: live(b0.name).pos, radius: b0.radius * 1.4 }), 0.2);
+      break;
+    case 2:   // solar system from above
+      setFollow('Sun', true);
+      nav.flyTo(() => ({ pos: new THREE.Vector3(), radius: 12 * AU }), 0.9);
+      break;
+    case 3:   // stellar neighborhood
+      clearFollow(true);
+      nav.flyTo(() => ({ pos: new THREE.Vector3(), radius: 7 * PC }), 0.4);
+      break;
+    case 4:   // the galaxy, face-on-ish
+      clearFollow(true);
+      nav.flyTo(() => ({ pos: gcWorld.clone(), radius: 11 * KPC }), 0.55);
+      break;
+    case 5:   // local group — between us and Andromeda
+      clearFollow(true);
+      nav.flyTo(() => ({ pos: m31World ? m31World.clone().multiplyScalar(0.45) : new THREE.Vector3(), radius: 300 * KPC }), 0.3);
+      break;
+    case 6:   // cosmic web
+      clearFollow(true);
+      nav.flyTo(() => ({ pos: new THREE.Vector3(), radius: 30e3 * KPC }), 0);
+      break;
+  }
+}
 
 const nav = new Nav(canvas, () => ui.isTyping && ui.isTyping());
 // wheel-zoom and drag-orbit center on the anchored body (or a star pocket)
@@ -577,6 +622,8 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'Backspace') {
     const b = backStack.pop();
     if (b) { clearFollow(true); nav.goDirect(b.pos, b.quat); }
+  } else if (e.code === 'Escape') {
+    if (selection) { selection = null; ui.hideCard(); ui.setReticle(null); }
   } else if (e.code === 'KeyX') clearFollow();
   else if (e.code === 'KeyH') goHome();
   else if (e.code === 'KeyT') {
@@ -631,7 +678,9 @@ function followTick() {
   follow.last.copy(w);
   const b = system.bodies().find(x => x.name === follow.name);
   const r = b ? b.radius : 1e7;
-  if (nav.camWorld.distanceTo(w) > Math.max(r * 1000, 3e9)) clearFollow();
+  // leaving the neighborhood releases the anchor — but not while the
+  // autopilot is still flying us IN from far away
+  if (!nav.autopilot && nav.camWorld.distanceTo(w) > Math.max(r * 1000, 3e9)) clearFollow();
 }
 
 // ---------- grand tour ----------
@@ -732,8 +781,17 @@ function pickAll(ndc) {
 nav.onSelect((nx, ny) => {
   const hit = pickAll([nx, ny]);
   if (hit) { selection = hit; showSelectionCard(); }
-  else { selection = null; ui.hideCard(); }
+  else { selection = null; ui.hideCard(); ui.setReticle(null); }
 });
+
+// hover feedback: name tip + pointer cursor (throttled pick in the frame loop)
+const hover = { px: -1, py: -1, hit: null, tick: 0 };
+canvas.addEventListener('mousemove', (e) => {
+  const r = canvas.getBoundingClientRect();
+  hover.px = e.clientX - r.left;
+  hover.py = e.clientY - r.top;
+});
+canvas.addEventListener('mouseleave', () => { hover.px = -1; ui.setHover(null); });
 nav.onTravel((nx, ny) => {
   const hit = pickAll([nx, ny]) || selection;
   if (!hit) return;
@@ -935,6 +993,41 @@ function frame(now) {
     consider(selection.name, 'body', w, selection.radius, 0, 'l');
   }
   ui.renderLabels(labels);
+
+  // hover pick (throttled), selection reticle, active ladder rung
+  if (++hover.tick % 6 === 0) {
+    if (hover.px >= 0 && !nav.dragging && !nav.locked && !nav.autopilot) {
+      const r = canvas.getBoundingClientRect();
+      const hit = pickAll([(hover.px / r.width) * 2 - 1, -((hover.py / r.height) * 2 - 1)]);
+      hover.hit = hit;
+      ui.setHover(hit ? { text: hit.name, x: hover.px, y: hover.py } : null);
+      canvas.style.cursor = hit ? 'pointer' : 'default';
+    } else if (hover.px < 0 || nav.dragging || nav.locked) {
+      ui.setHover(null);
+      canvas.style.cursor = 'default';
+    }
+  }
+  if (selection) {
+    const sw = liveWorld(selection);
+    v.copy(sw).sub(nav.camWorld);
+    const sd = v.length();
+    v.project(camera);
+    if (v.z > -1 && v.z < 1 && Math.abs(v.x) < 1.1 && Math.abs(v.y) < 1.1) {
+      const appPx = (selection.radius / sd) * h2 / Math.tan(camera.fov * Math.PI / 360);
+      ui.setReticle({ x: (v.x + 1) * w2, y: (1 - v.y) * h2, r: Math.max(appPx * 1.25 + 8, 16) });
+    } else ui.setReticle(null);
+  } else ui.setReticle(null);
+  {
+    const nb = nearBody;
+    const alt = nb ? (nav.camWorld.distanceTo(nb.world) - nb.radius) / nb.radius : 1e9;
+    const rung = nb && alt < 0.8 ? 0
+      : nb && alt < 250 && nb.name !== 'Sun' ? 1
+      : sunDist < 90 * AU ? 2
+      : sunDist < 300 * PC ? 3
+      : sunDist < 200 * KPC ? 4
+      : sunDist < 5e3 * KPC ? 5 : 6;
+    ui.setLadderActive(rung);
+  }
 
   // chip
   const focusName = selection ? selection.name : (nearBody ? nearBody.name : '—');
