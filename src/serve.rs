@@ -11,59 +11,42 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 
-pub fn serve(port_req: u16, open: bool, app: bool) -> anyhow::Result<()> {
-    let web = web_root()?;
-    let launch = |port: u16| {
-        if app {
-            spawn_app_window(port);
-        } else {
-            spawn_browser(port);
-        }
-    };
-    // Bind BEFORE the slow kernel/catalog load: the browser can open at once
-    // and its first request just waits in the accept backlog. If the port is
-    // taken by another Pantheon (double-clicked launcher), reuse it; if taken
-    // by something else, walk forward to the next free port.
-    let mut bound = None;
+/// Bind the first free port from `port_req`; if a port is taken by another
+/// Pantheon, report that instead so callers can reuse it.
+enum Bound {
+    Listener(TcpListener, u16),
+    Existing(u16),
+}
+
+fn bind_or_find(port_req: u16) -> anyhow::Result<Bound> {
     for cand in port_req..port_req.saturating_add(10) {
         match TcpListener::bind(("127.0.0.1", cand)) {
-            Ok(l) => {
-                bound = Some((l, cand));
-                break;
-            }
+            Ok(l) => return Ok(Bound::Listener(l, cand)),
             Err(_) => {
                 if existing_pantheon(cand) {
-                    println!("pantheon web already running — http://127.0.0.1:{cand}/");
-                    if open || app {
-                        launch(cand);
-                    }
-                    return Ok(());
+                    return Ok(Bound::Existing(cand));
                 }
             }
         }
     }
-    let Some((listener, port)) = bound else {
-        anyhow::bail!("no free port in {port_req}..{}", port_req.saturating_add(9));
-    };
-    println!("pantheon web — http://127.0.0.1:{port}/");
-    if open || app {
-        launch(port);
-    }
-    println!("  loading kernels and catalogs…");
+    anyhow::bail!("no free port in {port_req}..{}", port_req.saturating_add(9))
+}
+
+/// Load the universe and serve forever. Thread per connection: browsers open
+/// speculative sockets that never send a request; served sequentially each one
+/// would stall the accept loop for its whole read timeout and the page
+/// appears frozen.
+fn run_loop(listener: TcpListener, web: std::sync::Arc<PathBuf>) {
     let (uni, _health) = crate::data::Universe::load_with_health();
     let uni = std::sync::Arc::new(uni);
-    let web = std::sync::Arc::new(web);
     let spice_loaded = crate::spice::spice().is_some();
     println!(
-        "  web root {} · spice {} · {} stars · {} exo systems · Ctrl-C to stop",
+        "  web root {} · spice {} · {} stars · {} exo systems",
         web.display(),
         if spice_loaded { "loaded" } else { "NOT loaded (mean elements)" },
         uni.stars.len(),
         uni.exos.len()
     );
-    // Thread per connection. Browsers open speculative sockets that never send
-    // a request; served sequentially each one would stall the accept loop for
-    // its whole read timeout and the page appears frozen.
     for stream in listener.incoming() {
         let Ok(s) = stream else { continue };
         s.set_nodelay(true).ok();
@@ -73,7 +56,49 @@ pub fn serve(port_req: u16, open: bool, app: bool) -> anyhow::Result<()> {
             let _ = handle(s, &uni, &web);
         });
     }
-    Ok(())
+}
+
+/// Start (or find) the server on a background thread and return its port —
+/// used by the pantheon-3d window binary. Binding happens before the slow
+/// kernel load, so the first page request just waits in the accept backlog.
+pub fn spawn_background(port_req: u16) -> anyhow::Result<u16> {
+    let web = std::sync::Arc::new(web_root()?);
+    match bind_or_find(port_req)? {
+        Bound::Existing(port) => Ok(port),
+        Bound::Listener(listener, port) => {
+            std::thread::spawn(move || run_loop(listener, web));
+            Ok(port)
+        }
+    }
+}
+
+pub fn serve(port_req: u16, open: bool, app: bool) -> anyhow::Result<()> {
+    let web = std::sync::Arc::new(web_root()?);
+    let launch = |port: u16| {
+        if app {
+            spawn_app_window(port);
+        } else {
+            spawn_browser(port);
+        }
+    };
+    match bind_or_find(port_req)? {
+        Bound::Existing(port) => {
+            println!("pantheon web already running — http://127.0.0.1:{port}/");
+            if open || app {
+                launch(port);
+            }
+            Ok(())
+        }
+        Bound::Listener(listener, port) => {
+            println!("pantheon web — http://127.0.0.1:{port}/");
+            if open || app {
+                launch(port);
+            }
+            println!("  loading kernels and catalogs… (Ctrl-C to stop)");
+            run_loop(listener, web);
+            Ok(())
+        }
+    }
 }
 
 /// Launch the web edition in its own window: Edge/Chrome `--app` mode with a
