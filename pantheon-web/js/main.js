@@ -66,8 +66,65 @@ const clock = {
 
 // ---------- world content ----------
 const system = new SolarSystem(scene);
+system.initTextures(Math.min(renderer.capabilities.getMaxAnisotropy(), 8));
 const rand = mulberry32(1877);
 const cloudMats = [];   // fog-cloud materials needing per-frame uPxScale
+
+// ESO all-sky Milky Way panorama: a galactic-frame backdrop sphere. It is a
+// photograph from HERE, so it only holds while stellar parallax is negligible
+// — full inside ~15 pc of the Sun, gone by ~150 pc (the 3D clouds take over).
+let panoMat = null;
+const panoGroup = new THREE.Group();
+{
+  const geo = new THREE.SphereGeometry(1, 64, 40);
+  panoMat = new THREE.ShaderMaterial({
+    vertexShader: /* glsl */`
+      varying vec3 vObj;
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+      void main() {
+        vObj = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        #include <logdepthbuf_vertex>
+      }`,
+    fragmentShader: /* glsl */`
+      varying vec3 vObj;
+      uniform sampler2D uMap; uniform float uA;
+      #include <common>
+      #include <logdepthbuf_pars_fragment>
+      void main() {
+        #include <logdepthbuf_fragment>
+        if (uA <= 0.002) discard;
+        vec3 n = normalize(vObj);
+        float lat = asin(clamp(n.y, -1.0, 1.0));
+        float lon = atan(n.z, n.x);
+        // galactic l increases eastward (leftward on the sky) -> flip u
+        vec2 uv = vec2(0.5 - lon * 0.15915494, lat * 0.31830989 + 0.5);
+        gl_FragColor = vec4(texture2D(uMap, uv).rgb * uA, 1.0);
+      }`,
+    uniforms: { uMap: { value: null }, uA: { value: 0 } },
+    blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
+    side: THREE.BackSide,
+  });
+  new THREE.TextureLoader().load('/data/textures/eso_milkyway.jpg', (t) => {
+    t.colorSpace = THREE.SRGBColorSpace;
+    panoMat.uniforms.uMap.value = t;
+    const mesh = new THREE.Mesh(geo, panoMat);
+    mesh.scale.setScalar(6.0e17);        // ~20 pc shell, additive so nothing occludes
+    mesh.frustumCulled = false;
+    mesh.renderOrder = -10;              // behind the point stars
+    // object axes -> galactic frame: +X to the GC, +Y = ZxX, +Z to the NGP,
+    // with the shader's lat/lon around object +Y as "north" -> map basis so
+    // object +Y = galactic north, +X = galactic center
+    const gz = data.icrsToEcl(192.85948, 27.12825).normalize();
+    let gx = data.icrsToEcl(266.405, -28.93617).normalize();
+    gx = gx.addScaledVector(gz, -gx.dot(gz)).normalize();
+    const gy = gx.clone().cross(gz);
+    mesh.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(gx, gz, gy));
+    panoGroup.add(mesh);
+  });
+  scene.add(panoGroup);
+}
 
 // galactic frame: ecliptic-axis vectors for placing the galaxy
 const gcWorld = galacticCenterWorld();
@@ -493,6 +550,15 @@ const ui = initUI({
 });
 
 const nav = new Nav(canvas, () => ui.isTyping && ui.isTyping());
+// wheel-zoom and drag-orbit center on the anchored body (or a star pocket)
+nav.orbitInfo = () => {
+  if (follow) {
+    const b = system.bodies().find(x => x.name === follow.name);
+    if (b) return { center: b.world, radius: b.radius };
+  }
+  if (pocket.active) return { center: pocket.active.world, radius: pocket.active.radiusM };
+  return null;
+};
 
 function pushBack() {
   backStack.push({ pos: nav.camWorld.clone(), quat: nav.quat.clone() });
@@ -805,6 +871,12 @@ function frame(now) {
     const dMpc = nav.camWorld.length() / (1e3 * KPC);
     const t = Math.min(Math.max((dMpc - 0.8) / 12, 0), 1);
     webMat.uniforms.uB.value = 0.16 * t * t;
+  }
+  // the photographic sky holds only while parallax is negligible
+  if (panoMat) {
+    const dPc = nav.camWorld.length() / PC;
+    const t = Math.min(Math.max((dPc - 15) / 135, 0), 1);
+    panoMat.uniforms.uA.value = 0.5 * (1 - t);
   }
   system.setCamQuat(nav.quat);
   system.update(clock.jd, nav.camWorld, tSec);

@@ -14,13 +14,14 @@ const RATES = [
 ];
 
 const HELP_ROWS = [
-  ['click canvas', 'mouse-look (pointer lock)'],
-  ['W A S D',      'fly'],
-  ['R / F',        'up / down'],
-  ['Shift',        'boost ×8'],
-  ['scroll',       'speed'],
+  ['drag',         'look around · orbit the anchored body'],
+  ['scroll',       'zoom in / out'],
+  ['right-drag',   'pan'],
   ['click',        'select'],
-  ['double-click', 'travel to'],
+  ['double-click', 'travel there'],
+  ['W A S D / arrows', 'fly (R/F up-down, Shift boost)'],
+  ['Shift+scroll', 'flight speed trim'],
+  ['L',            'immersive mouse-look (Esc exits)'],
   ['G',            'travel to selection'],
   ['H',            'home'],
   ['/',            'search'],
@@ -30,7 +31,6 @@ const HELP_ROWS = [
   ['P',            'grand tour'],
   ['M',            'ambience'],
   ['?',            'help'],
-  ['Esc',          'release mouse'],
 ];
 
 const LABEL_MAX = 64;

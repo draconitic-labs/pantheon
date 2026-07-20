@@ -3,3 +3,4 @@
 !/exports/paths/
 /assets/data/spacecraft/*.txt
 /assets/data/spice/*.bsp
+/assets/data/textures/

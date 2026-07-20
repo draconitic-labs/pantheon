@@ -104,3 +104,12 @@ Fetch "spice_sat441" "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/sat
 Fetch "spice_nep097" "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satellites/nep097.bsp" (Join-Path $data "spice\nep097.bsp") @()
 Fetch "spice_plu060" "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satellites/plu060.bsp" (Join-Path $data "spice\plu060.bsp") @()
 # Uranus kernels skipped: ura111xl-70x / ura184 parts are 1-2 GB EACH (4-6 GB total); Uranian moons use mean elements
+
+# ---- surface imagery (web edition): Solar System Scope pack CC BY 4.0 + ESO Milky Way pano ----
+$tex = Join-Path $data "textures"
+New-Item -ItemType Directory -Force $tex | Out-Null
+$sss = "https://www.solarsystemscope.com/textures/download"
+foreach ($f in @("8k_earth_daymap.jpg","8k_earth_nightmap.jpg","2k_earth_clouds.jpg","8k_moon.jpg","8k_mars.jpg","8k_jupiter.jpg","8k_saturn.jpg","8k_saturn_ring_alpha.png","8k_sun.jpg","4k_venus_atmosphere.jpg","8k_mercury.jpg","2k_uranus.jpg","2k_neptune.jpg")) {
+    Fetch "tex_$f" "$sss/$f" (Join-Path $tex $f) @()
+}
+Fetch "tex_eso_milkyway" "https://cdn.eso.org/images/large/eso0932a.jpg" (Join-Path $tex "eso_milkyway.jpg") @()

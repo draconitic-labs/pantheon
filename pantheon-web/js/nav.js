@@ -12,13 +12,76 @@ export class Nav {
     this.keys = new Set();
     this.speedMult = 1.0;
     this.locked = false;
-    this.autopilot = null;      // {targetFn, arriveDist, k, t}
+    this.autopilot = null;      // {targetFn, arriveDist, k, lift}
     this.speedNow = 0;
+    this.lastSurfaceDist = 1e9; // refreshed each update() for zoom/pan scaling
+    this.orbitInfo = null;      // main provides: () => {center, radius} | null
     this.selectCb = null; this.travelCb = null; this.moveCb = null;
 
-    canvas.addEventListener('click', (e) => {
-      if (!this.locked) { canvas.requestPointerLock(); return; }
-      if (this.selectCb) this.selectCb(0, 0);
+    // ---- drag model: left = look (or orbit the anchored body), right = pan
+    const drag = { btn: -1, sx: 0, sy: 0, moved: false };
+    canvas.addEventListener('mousedown', (e) => {
+      if (this.locked) return;
+      drag.btn = e.button; drag.sx = e.clientX; drag.sy = e.clientY; drag.moved = false;
+    });
+    window.addEventListener('mousemove', (e) => {
+      if (this.locked) {
+        const s = 0.0022;
+        const qy = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -e.movementX * s);
+        const qx = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -e.movementY * s);
+        this.quat.multiply(qy).multiply(qx).normalize();
+        return;
+      }
+      if (drag.btn < 0) return;
+      const dx = e.movementX, dy = e.movementY;
+      if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 4) return;
+      drag.moved = true;
+      if (drag.btn === 2) {
+        // pan: slide laterally, scaled to how far the ground is
+        const k = Math.max(this.lastSurfaceDist, 1) * 0.0016;
+        const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.quat);
+        const up = new THREE.Vector3(0, 1, 0).applyQuaternion(this.quat);
+        this.camWorld.addScaledVector(right, -dx * k).addScaledVector(up, dy * k);
+        this.autopilot = null;
+        return;
+      }
+      const oi = this._orbit();
+      if (oi) {
+        // orbit the anchored body: swing the offset, keep looking at it
+        const off = this.camWorld.clone().sub(oi.center);
+        const s = 0.006;
+        const qz = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -dx * s);
+        off.applyQuaternion(qz);
+        const rightAx = off.clone().cross(new THREE.Vector3(0, 0, 1)).normalize();
+        if (rightAx.lengthSq() > 0.5) {
+          const tilted = off.clone().applyQuaternion(new THREE.Quaternion().setFromAxisAngle(rightAx, -dy * s));
+          const cosPole = Math.abs(tilted.clone().normalize().z);
+          if (cosPole < 0.985) off.copy(tilted);
+        }
+        this.camWorld.copy(oi.center).add(off);
+        this.lookAtWorld(oi.center);
+        this.autopilot = null;
+      } else {
+        // free look
+        const s = 0.0035;
+        const qy = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -dx * s);
+        const qx = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -dy * s);
+        this.quat.multiply(qy).multiply(qx).normalize();
+      }
+    });
+    window.addEventListener('mouseup', (e) => {
+      // the press started on the canvas (mousedown listener lives there), so
+      // a stationary release selects regardless of what's under the cursor now
+      const wasClick = drag.btn === 0 && !drag.moved;
+      drag.btn = -1;
+      if (wasClick && this.selectCb) {
+        const [nx, ny] = this._ndc(e);
+        this.selectCb(nx, ny);
+      }
+    });
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    canvas.addEventListener('click', () => {
+      if (this.locked && this.selectCb) this.selectCb(0, 0);
     });
     canvas.addEventListener('dblclick', (e) => {
       const [nx, ny] = this.locked ? [0, 0] : this._ndc(e);
@@ -27,27 +90,57 @@ export class Nav {
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === canvas;
     });
-    document.addEventListener('mousemove', (e) => {
-      if (!this.locked) return;
-      const s = 0.0022;
-      // Local-frame yaw/pitch (true free-fly; slight roll accumulation is
-      // inherent and expected — Q/E trims it).
-      const qy = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -e.movementX * s);
-      const qx = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -e.movementY * s);
-      this.quat.multiply(qy).multiply(qx).normalize();
-    });
     window.addEventListener('keydown', (e) => {
       if (this.isTyping()) return;
-      this.keys.add(e.code);
-      if (['KeyW','KeyA','KeyS','KeyD','KeyR','KeyF'].includes(e.code)) this.autopilot = null;
+      const alias = { ArrowUp: 'KeyW', ArrowDown: 'KeyS', ArrowLeft: 'KeyA', ArrowRight: 'KeyD' };
+      this.keys.add(alias[e.code] || e.code);
+      if (['KeyW','KeyA','KeyS','KeyD','KeyR','KeyF'].includes(alias[e.code] || e.code)) this.autopilot = null;
+      if (e.code === 'KeyL') {
+        if (this.locked) document.exitPointerLock();
+        else canvas.requestPointerLock();
+      }
     });
-    window.addEventListener('keyup', (e) => this.keys.delete(e.code));
+    window.addEventListener('keyup', (e) => {
+      const alias = { ArrowUp: 'KeyW', ArrowDown: 'KeyS', ArrowLeft: 'KeyA', ArrowRight: 'KeyD' };
+      this.keys.delete(alias[e.code] || e.code);
+    });
     window.addEventListener('blur', () => this.keys.clear());
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
-      const f = e.deltaY < 0 ? 1.25 : 1 / 1.25;
-      this.speedMult = Math.min(1000, Math.max(0.01, this.speedMult * f));
+      if (e.shiftKey) {
+        // flight-speed trim (the old wheel behavior)
+        const f = e.deltaY < 0 ? 1.25 : 1 / 1.25;
+        this.speedMult = Math.min(1000, Math.max(0.01, this.speedMult * f));
+        return;
+      }
+      this.zoom(e.deltaY < 0 ? 1 : -1);
     }, { passive: false });
+  }
+
+  _orbit() {
+    const oi = this.orbitInfo && this.orbitInfo();
+    if (!oi) return null;
+    // orbit feel only in the body's neighborhood; deep space is free-look
+    return this.camWorld.distanceTo(oi.center) < oi.radius * 120 ? oi : null;
+  }
+
+  // dir: +1 in, -1 out. Anchored: dolly the surface altitude geometrically;
+  // free space: dolly along the view direction scaled by surface distance.
+  zoom(dir) {
+    this.autopilot = null;
+    const oi = this._orbit();
+    const f = dir > 0 ? 0.78 : 1 / 0.78;
+    if (oi) {
+      const off = this.camWorld.clone().sub(oi.center);
+      const d = off.length();
+      const alt = Math.max(d - oi.radius, oi.radius * 0.001);
+      const nalt = Math.min(Math.max(alt * f, oi.radius * 0.015), oi.radius * 5.0e4);
+      this.camWorld.copy(oi.center).addScaledVector(off.normalize(), oi.radius + nalt);
+    } else {
+      const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this.quat);
+      this.camWorld.addScaledVector(fwd, dir * 0.22 * Math.max(this.lastSurfaceDist, 1));
+    }
+    if (this.moveCb) this.moveCb();
   }
 
   _ndc(e) {

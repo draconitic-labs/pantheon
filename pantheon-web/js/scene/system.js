@@ -58,6 +58,10 @@ const BODY_FSH = /* glsl */`
   uniform vec3 uSunObj;     // sun direction, object space
   uniform float uTime, uSeed;
   uniform float uClose;     // 0 far .. 1 at the surface (extra octaves + relief)
+  uniform sampler2D uMap;   // equirect imagery (lon 0 at center, north up)
+  uniform float uHasMap;
+  uniform sampler2D uNight; uniform float uHasNight;
+  uniform sampler2D uClouds; uniform float uHasClouds;
   #include <common>
   #include <logdepthbuf_pars_fragment>
   ${NOISE}
@@ -67,6 +71,8 @@ const BODY_FSH = /* glsl */`
     vec3 np = n;              // shading normal (relief-perturbed up close)
     float lat = asin(clamp(n.y, -1.0, 1.0));
     float lon = atan(n.z, n.x);
+    // object +X is the IAU prime meridian, so this lands lon 0 at map center
+    vec2 tuv = vec2(lon * 0.15915494 + 0.5, lat * 0.31830989 + 0.5);
     vec3 p = n * uParam.y + vec3(uSeed);
     vec3 col;
     if (uKind == 0) {
@@ -74,9 +80,20 @@ const BODY_FSH = /* glsl */`
       float g = fbm(n * 14.0 + vec3(0.0, uTime * 0.02, 0.0));
       float g2 = fbm(n * 40.0 - vec3(uTime * 0.03));
       float limb = pow(max(dot(-vViewDir, vNormalV), 0.0), 0.55);
-      col = mix(uColB, uColA, g * 0.7 + g2 * 0.3) * (0.55 + 1.1 * limb) * 2.5;
+      if (uHasMap > 0.5) {
+        col = texture2D(uMap, tuv).rgb * (0.6 + 0.55 * g) * (0.5 + 1.05 * limb) * 2.4;
+      } else {
+        col = mix(uColB, uColA, g * 0.7 + g2 * 0.3) * (0.55 + 1.1 * limb) * 2.5;
+      }
       gl_FragColor = vec4(col, 1.0);
       return;
+    } else if (uHasMap > 0.5) {
+      // real imagery; clouds ride slightly east with time
+      col = texture2D(uMap, tuv).rgb;
+      if (uHasClouds > 0.5) {
+        float cl = texture2D(uClouds, vec2(fract(tuv.x + uTime * 0.0004), tuv.y)).r;
+        col = mix(col, vec3(1.0), cl * 0.8);
+      }
     } else if (uKind == 2) {
       // banded gas giant: latitudinal bands warped by turbulence
       float turb = fbm(vec3(lon * 1.5, lat * 3.0, uSeed)) - 0.5;
@@ -122,22 +139,35 @@ const BODY_FSH = /* glsl */`
       } else {
         float ridge = 1.0 - abs(f1 * 2.0 - 1.0);
         col *= 1.0 + uClose * (0.30 * (f1 - 0.5) + 0.26 * (f2 - 0.5) - 0.16 * ridge * ridge);
-        // relief: perturb the shading normal from the same height field
-        vec3 t1 = normalize(cross(n, abs(n.y) > 0.93 ? vec3(1, 0, 0) : vec3(0, 1, 0)));
-        vec3 t2 = cross(n, t1);
-        float e = 0.012;
-        float hC = fbm((n * uParam.y + vec3(uSeed)) * 9.0 + 31.0);
-        float hX = fbm(((n + t1 * e) * uParam.y + vec3(uSeed)) * 9.0 + 31.0);
-        float hY = fbm(((n + t2 * e) * uParam.y + vec3(uSeed)) * 9.0 + 31.0);
-        np = normalize(n - (t1 * (hX - hC) + t2 * (hY - hC)) * (0.05 / e) * uClose);
+        // relief: perturb the shading normal from the same height field —
+        // only truly near the ground, or the terminator crunches at range
+        float rel = smoothstep(0.72, 1.0, uClose);
+        if (rel > 0.001) {
+          vec3 t1 = normalize(cross(n, abs(n.y) > 0.93 ? vec3(1, 0, 0) : vec3(0, 1, 0)));
+          vec3 t2 = cross(n, t1);
+          float e = 0.012;
+          float hC = fbm((n * uParam.y + vec3(uSeed)) * 9.0 + 31.0);
+          float hX = fbm(((n + t1 * e) * uParam.y + vec3(uSeed)) * 9.0 + 31.0);
+          float hY = fbm(((n + t2 * e) * uParam.y + vec3(uSeed)) * 9.0 + 31.0);
+          np = normalize(n - (t1 * (hX - hC) + t2 * (hY - hC)) * (0.04 / e) * rel);
+        }
       }
     }
     float diff = smoothstep(-0.06, 0.14, dot(np, uSunObj));
-    // engraved graticule, 15 deg hairlines (recedes near the ground)
+    // city lights emerge on the night side (Black Marble), dimmed under cloud
+    vec3 night = vec3(0.0);
+    if (uHasNight > 0.5) {
+      night = texture2D(uNight, tuv).rgb * pow(1.0 - diff, 3.0) * 1.25;
+      if (uHasClouds > 0.5) {
+        float cl = texture2D(uClouds, vec2(fract(tuv.x + uTime * 0.0004), tuv.y)).r;
+        night *= 1.0 - cl * 0.7;
+      }
+    }
+    // engraved graticule, 15 deg hairlines (recedes over imagery + up close)
     float gLat = abs(fract(lat * 57.29578 / 15.0 + 0.5) - 0.5);
     float gLon = abs(fract(lon * 57.29578 / 15.0 + 0.5) - 0.5) * cos(lat);
-    float grat = (1.0 - smoothstep(0.0, 0.03, min(gLat, gLon))) * 0.05;
-    col = col * (0.045 + diff) + vec3(0.85, 0.70, 0.42) * grat * (0.25 + diff) * (1.0 - 0.6 * uClose);
+    float grat = (1.0 - smoothstep(0.0, 0.03, min(gLat, gLon))) * 0.05 * (1.0 - 0.8 * uHasMap);
+    col = col * (0.045 + diff) + night + vec3(0.85, 0.70, 0.42) * grat * (0.25 + diff) * (1.0 - 0.6 * uClose);
     gl_FragColor = vec4(col, 1.0);
   }
 `;
@@ -234,12 +264,21 @@ const RING_FSH = /* glsl */`
   uniform vec4 uZones[12];   // r0, r1 (m), alpha, tone
   uniform int uNZones;
   uniform vec3 uSunObj;
+  uniform sampler2D uMap;    // radial strip: u = (r-inner)/(outer-inner)
+  uniform float uHasMap, uInner, uOuter;
   #include <common>
   #include <logdepthbuf_pars_fragment>
   ${NOISE}
   void main() {
     #include <logdepthbuf_fragment>
     float r = length(vObj.xy);
+    float lit = 0.35 + 0.65 * abs(uSunObj.z);
+    if (uHasMap > 0.5) {
+      vec4 t = texture2D(uMap, vec2(clamp((r - uInner) / (uOuter - uInner), 0.0, 1.0), 0.5));
+      if (t.a <= 0.02) discard;
+      gl_FragColor = vec4(t.rgb * t.a * (0.55 + 1.15 * lit), 1.0);
+      return;
+    }
     float a = 0.0, tone = 1.0;
     for (int i = 0; i < 12; i++) {
       if (i >= uNZones) break;
@@ -252,7 +291,6 @@ const RING_FSH = /* glsl */`
     }
     if (a <= 0.001) discard;
     float grain = 0.75 + 0.5 * vnoise(vec3(r * 3.0e-7, 0.0, 0.0));
-    float lit = 0.35 + 0.65 * abs(uSunObj.z);
     vec3 col = mix(vec3(0.86, 0.78, 0.62), vec3(0.72, 0.68, 0.60), tone);
     gl_FragColor = vec4(col * a * grain * lit * 0.85, 1.0);
   }
@@ -322,6 +360,10 @@ function basisToQuatRing(b) {   // object +Z -> pole (ring/orbit plane in XY)
   return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(b.x, b.z.clone().cross(b.x), b.z));
 }
 
+// shared 1x1 placeholder so sampler uniforms are always bound
+const PLACEHOLDER_TEX = new THREE.DataTexture(new Uint8Array([128, 128, 128, 255]), 1, 1);
+PLACEHOLDER_TEX.needsUpdate = true;
+
 function bodyMaterial(name, seed) {
   const s = styleFor(name);
   return new THREE.ShaderMaterial({
@@ -334,6 +376,9 @@ function bodyMaterial(name, seed) {
       uSunObj: { value: new THREE.Vector3(0, 0, 1) },
       uTime: { value: 0 }, uSeed: { value: seed },
       uClose: { value: 0 },
+      uMap: { value: PLACEHOLDER_TEX }, uHasMap: { value: 0 },
+      uNight: { value: PLACEHOLDER_TEX }, uHasNight: { value: 0 },
+      uClouds: { value: PLACEHOLDER_TEX }, uHasClouds: { value: 0 },
     },
   });
 }
@@ -497,6 +542,8 @@ export class SolarSystem {
       uniforms: {
         uZones: { value: zArr }, uNZones: { value: Math.min(zones.length, 12) },
         uSunObj: { value: new THREE.Vector3(0, 0, 1) },
+        uMap: { value: PLACEHOLDER_TEX }, uHasMap: { value: 0 },
+        uInner: { value: inner }, uOuter: { value: outer },
       },
       blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, side: THREE.DoubleSide,
     });
@@ -562,6 +609,53 @@ export class SolarSystem {
     this.scene.add(this.glowGroup);
   }
 
+  // Real imagery (fetched CC-BY/PD mosaics; see provenance). Loads lazily and
+  // flips uHasMap per body — the procedural surface is the fallback until then.
+  initTextures(maxAniso = 4) {
+    const loader = new THREE.TextureLoader();
+    const load = (file, cb) => loader.load(
+      '/data/textures/' + file,
+      (t) => { t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = maxAniso; cb(t); },
+      undefined,
+      () => {},   // missing texture -> stay procedural
+    );
+    const MAPS = {
+      Sun: '8k_sun.jpg', Mercury: '8k_mercury.jpg', Venus: '4k_venus_atmosphere.jpg',
+      Earth: '8k_earth_daymap.jpg', Moon: '8k_moon.jpg', Mars: '8k_mars.jpg',
+      Jupiter: '8k_jupiter.jpg', Saturn: '8k_saturn.jpg',
+      Uranus: '2k_uranus.jpg', Neptune: '2k_neptune.jpg',
+    };
+    for (const [name, file] of Object.entries(MAPS)) {
+      const rec = this.groups.get(name);
+      if (!rec) continue;
+      load(file, (t) => {
+        rec.mat.uniforms.uMap.value = t;
+        rec.mat.uniforms.uHasMap.value = 1;
+        rec.textured = true;
+      });
+    }
+    const earth = this.groups.get('Earth');
+    if (earth) {
+      load('8k_earth_nightmap.jpg', (t) => {
+        earth.mat.uniforms.uNight.value = t;
+        earth.mat.uniforms.uHasNight.value = 1;
+        // measured Black Marble supersedes the illustrative light points
+        if (earth.lightsObj) earth.lightsObj.visible = false;
+      });
+      load('2k_earth_clouds.jpg', (t) => {
+        earth.mat.uniforms.uClouds.value = t;
+        earth.mat.uniforms.uHasClouds.value = 1;
+      });
+    }
+    const sat = this.groups.get('Saturn');
+    if (sat && sat.ring) {
+      load('8k_saturn_ring_alpha.png', (t) => {
+        sat.ring.material.uniforms.uMap.value = t;
+        sat.ring.material.uniforms.uHasMap.value = 1;
+      });
+    }
+  }
+
   // Earth vector extras — call once coast (and land) GeoJSON rings are loaded.
   addEarthExtras(coastRings, landRings, rand) {
     const earth = this.groups.get('Earth');
@@ -620,6 +714,8 @@ export class SolarSystem {
       });
       const lights = new THREE.Points(lg, earth.lightsMat);
       lights.frustumCulled = false;
+      if (earth.mat.uniforms.uHasNight.value > 0.5) lights.visible = false;
+      earth.lightsObj = lights;
       earth.mesh.add(lights);
     }
   }
@@ -803,9 +899,16 @@ export class SolarSystem {
     const ol = this.orbitLines.get(b.name);
     if (ol) rows.push({ label: 'orbital period', value: ol.period > 800 ? `${(ol.period / 365.25).toFixed(2)} yr` : `${ol.period.toFixed(2)} d`, ev: evState });
     rows.push({ label: 'camera range', value: prettyRange(b.world.distanceTo(camWorld)) });
+    const grec = this.groups.get(b.name);
+    if (grec && grec.textured) {
+      rows.push({ label: 'imagery', value: 'mission mosaics (CC-BY pack)', ev: 'surface-imagery' });
+    }
     if (b.name === 'Earth') {
       rows.push({ label: 'coastlines', value: 'Natural Earth 110m', ev: 'coastlines' });
-      rows.push({ label: 'night lights', value: 'illustrative placement', ev: 'land-lights' });
+      const nightReal = grec && grec.mat.uniforms.uHasNight.value > 0.5;
+      rows.push(nightReal
+        ? { label: 'night lights', value: 'Black Marble mosaic', ev: 'surface-imagery' }
+        : { label: 'night lights', value: 'illustrative placement', ev: 'land-lights' });
     }
     return {
       title: b.name,
