@@ -1,94 +1,87 @@
-# KNOWN_ISSUES — validated, prioritized remainder of the audit backlog
+# Known issues
 
-Each entry: audit ID(s) · severity · state. These are real, acknowledged, and
-sequenced; nothing here is hidden behind product claims (README is written to
-current behavior).
+What is true of Pantheon today and isn't what you might assume. Nothing here stops the
+apps running. The on-screen labels already say most of this where it applies.
 
-## Architecture (audit Phase 5–6)
-- **ARCH-001/002/006** [High] `ObjectRef` is a closed enum; no general frame
-  graph / entity registry / capability model. Current special cases work but do
-  not compose (binary stars, barycenters, surface frames, instruments).
-- **FND-006/007** [High] One global f64 coordinate space: local detail at
-  arbitrary cosmic origins needs per-frame local origins + camera rebasing.
-  (Exo pockets now have world positions but still live in the root frame.)
-- **ARCH-005** [Med] `focus` still doubles as gravity-pair selector and
-  awaken target (selection vs scene now split via `scene_exo`; the rest
-  remains).
+## Positions and science
 
-## Science (audit Phase 2–3, 7)
-- **SCI-041** [Med] Without the kernels (a fresh clone), planetary states fall back
-  to Standish elements (about 1e4 km inner, 2e6 km Saturn). The app says so.
-- **SCI-024** [Low] IAU rotation omits small periodic terms; moons other than ours
-  use a mean tidal lock with no libration.
-- **SCI-027** [High] Non-lunar moon planes = parent equator approximation;
-  Triton's true inclined retrograde plane not modeled.
-- **SIM-002/004** [Med] Island initialization does not zero total momentum;
-  no energy/momentum diagnostics; step policy heuristic (GMs now correct).
-- **SCI-040** [Med] Gravity contour field is evaluated in the screen plane —
-  exact only face-on (L-point markers ARE 3D-correct now).
-- **SCI-004** [Med] Cosmic distances are Euclidean heliocentric; no cosmology.
-  Labeled illustrative in truth mode, kept.
-- **SCI-011** [Med] Proper motion is linear; no validity model at kyr/Myr rates.
+- **Fresh clone.** Without the kernels, planets use JPL's approximate orbital elements, and
+  moons use mean elements. The app says so.
+- **The moons of Uranus.** `tools/fetch_data.py` downloads no Uranian kernel, so Miranda,
+  Ariel, Umbriel, Titania and Oberon always use mean elements, and where each sits along its
+  orbit is chosen for legibility rather than real. Their cards say this.
+- **Moons without a kernel.** The orbit lies in a plane tilted a fixed amount from the planet's
+  equator, and its node doesn't precess. Moons other than ours are tidally locked with no
+  libration.
+- **Rotation.** IAU rotation elements, with the small periodic terms left out.
+- **Gravity view.** Contours are computed in the screen plane, so they are exact only when
+  the system is seen face-on. The Lagrange point markers are correct in 3D.
+- **Cosmic distances.** Straight lines from the Sun in a flat space. There is no cosmology.
+- **Star motion.** Proper motion is linear, with no perspective acceleration or binary motion,
+  and it stops being meaningful over thousands of years.
+- **N-body islands.** The substep is a fixed fraction of the shortest moon period, not an
+  adaptive scheme. When time runs too fast for it, the simulation pauses and says so.
 
-## Provenance & data (audit Phase 4)
-- **FND-008/PROV** [High] Evidence is still an enum applied at call sites, not
-  field-level records with uncertainty/citation/lineage. Cards hardcode source
-  prose. (Parallax σ now kept for star distance — first uncertainty display.)
-- **DATA-003** [Med] Handwritten CSV parser (quoted-comma aware, BOM-blind for
-  non-provenance files); `csv` crate migration pending.
-- **DATA-007/037** [Med] No raw/normalized/derived stages, hashes, or release
-  manifests; fetch script is not atomic-promote.
-- **DATA-012/013** [Med] Named-star crossmatch is a 0.57° cone; synthesized
-  rows mix V/G photometry.
+## Data
 
-## Rendering (audit Phase 8)
-- **REND-008** [Low] Full buffer rebuild per frame (fine at current loads).
-- **REND-034** [Low] Moons don't cast shadows on their planets, and rings don't
-  shadow moons. Saturn's rings do shadow Saturn and Saturn shadows its rings.
-- **REND-035** [Low] Below about 5 km per pixel a surface map runs out of
-  resolution and goes soft. There is no streaming or finer data.
-- **REND-036** [Med] Bright stars sit on the sky by true direction, through a
-  nominal lens (the atlas camera is orthographic). Directions are right, angular
-  scale is not meaningful.
+- **Evidence is per source, not per value.** Only star distances carry an uncertainty.
+- **Named stars.** The crossmatch to Gaia uses a 0.11° cone with distance and magnitude gates.
+  Stars it can't match come from an embedded table with V magnitudes, so the star field mixes
+  V and G photometry.
+- **Downloads.** Kernels and maps are checked against their exact size. Catalogs and Horizons
+  tables change with each fetch, so they are checked by what the server promised and by their
+  markers, and a catalog truncated some other way wouldn't be noticed on a later run. There are
+  no checksums. Natural Earth comes from an unpinned `master` branch.
+- **Spacecraft tracks end on 2027-07-01** (Cassini in 2017). Past the end of a track, the atlas
+  hides that spacecraft (Cassini stays as a dim marker), and in 3D its marker holds at the end
+  and the card says so. Newer dates
+  need an edit to `tools/fetch_data.py`.
+- **Catalog parser.** A small handwritten CSV reader. It handles quoted commas, but not a
+  byte-order mark, and the catalogs it reads have none.
 
-## UX / capture (audit Phase 11)
-- **UI-019/PATH-001** [Med] Path schema unversioned, partial state snapshot.
-- **UI-031** [Low] `T`, `G`, `Y` and other single-key shortcuts assume a Latin
-  layout, and `?` is read from text input so it does work across layouts.
+## The atlas
 
-## Fixed in the Linux pass (2026-11-04)
-See UX_AUDIT.md for the field-test list. Closed here: FND-009 (depth + HDR were
-already in; the entry was stale), REND-003 (HDR, AgX), FND-015 (canvas in physical
-pixels), REND-005/006 (adaptive tessellation), UI-008 (search), UI-011 (layout is
-computed from the window size and tested not to collide), and the SPICE and IAU
-entries above, which predate the kernels and orientation work: planet states use
-DE440s when kernels are present and IAU 2015 rotation elements always.
+- **Scene model.** Positions run through a frame graph, but the kinds of object are a closed
+  enum (`ObjectRef`), so binary stars, barycenters and surface frames aren't expressible.
+- **Precision.** Outside an exoplanet system, everything lives in one heliocentric 64-bit space,
+  so fine local detail at cosmic distances isn't possible.
+- **Selection.** `focus` also picks the pair for the gravity view and the target for a simulation.
+- **Shadows.** Saturn's rings shadow Saturn and Saturn shadows its rings. Moons don't cast
+  shadows on planets, and rings don't shadow moons.
+- **Map resolution.** Below about 5 km per pixel on an Earth-sized body, a surface map goes soft.
+  There is no streaming or finer data.
+- **The sky.** Bright stars and the sky photograph are correct in direction, but the camera is
+  orthographic, so their angular scale is nominal.
+- **Frame cost.** Vertex buffers are rebuilt every frame, which is fine at current loads.
+- **Recorded paths.** The file format has no version number, and a key stores only part of the
+  app's state.
+- **Keyboard layouts.** `T`, `G`, `Y` and other single-key shortcuts assume a Latin layout. `?`
+  is read from text input, so it works on any layout.
 
-## Fixed in the follow-up session (2026-07-11)
-- UI-007 help overlay; UI-009 case-insensitive lookup; UI-020 path time/tilt glide;
-  UI-026 timestamped capture saves w/ error surfacing; SIM-002/004 island momentum
-  zeroing + energy-drift diagnostic (card row, ppm); DATA-012 crossmatch tightened
-  (0.11 deg, distance + magnitude gates); REND-006 partial (4 px chords, 1024-seg cap);
-  REND-024 partial (char-count label widths). Plus: window/taskbar/shortcut icon
-  (assets/icon.ico via tools/make_icon.ps1) and a dependency-free generative
-  ambience engine (src/audio.rs, winmm waveOut; GUI-only, rail toggle + volume).
+## Pantheon 3D
 
-## Pantheon 3D (2026-11-04)
-- The window is tested on Linux only (WebKitGTK 2.54, RTX 4060). The Windows build path
-  (WebView2 through Tauri) is untested since the move away from tao and wry. Drivers other
-  than NVIDIA's keep WebKit's default frame handover, and that path is untested here.
-- At 1600×950 on that RTX 4060, on a busy machine, the window held 55-62 fps at High on
-  both Wayland and XWayland. That was with the shared-memory frame handover the app selects
-  on NVIDIA. With `WEBKIT_DISABLE_DMABUF_RENDERER=1` instead, Wayland ran at 40-48 fps.
-  Larger windows have not been measured.
-- WebKitGTK has no GPU timer and masks the adapter name. The frame readout's render figure
-  is timed through `glFinish`, and it barely changed between quality tiers when measured,
-  so treat it as rough. The frame interval is the reliable number. Headroom at 60 fps is
-  therefore not known precisely.
-- Under sustained heavy load from other programs, Automatic quality can step down although
-  the GPU has headroom, because it cannot tell a busy machine from a slow GPU.
-- First approach to an 8K map uploads over about 16 frames; the largest single frame
-  measured was about 80 ms, so a small hitch remains during that flight.
-- All Local Group spirals share one illustrative structure, oriented from the literature.
-  The Sun's own map does not rotate, and star surfaces, corona and prominences are generic.
-- Cloud shapes are one saved snapshot. Their drift is illustrative.
+- **Tested on one setup.** Linux, WebKitGTK 2.54, RTX 4060. Other drivers keep WebKit's
+  default frame handover, and that path hasn't been tested.
+- **Frame rate.** At 1600×950 on that RTX 4060, on a busy machine, the window held 55-62 fps
+  at High on both Wayland and XWayland, using the shared-memory frame handover the app selects on
+  NVIDIA. With `WEBKIT_DISABLE_DMABUF_RENDERER=1`, Wayland ran at 40-48 fps. Larger windows have
+  not been measured.
+- **Frame readout.** WebKitGTK has no GPU timer and masks the adapter name. The render figure
+  is timed through `glFinish` and barely changed between quality tiers when measured, so treat
+  it as rough. The frame interval is the reliable number.
+- **Automatic quality** can step down under heavy load from other programs although the GPU has
+  headroom, because it can't tell a busy machine from a slow GPU.
+- **First approach to an 8K map** uploads over about 16 frames. The largest single frame measured
+  was about 80 ms, so a small hitch remains during that flight.
+- **Procedural looks.** All Local Group spirals share one illustrative structure, oriented from
+  the literature. The Sun's own map doesn't rotate, and star surfaces, corona and prominences are
+  generic. Cloud shapes are one saved snapshot, and their drift is illustrative.
+- **Moving ports.** If port 8090 is taken, the window takes the next free one, and WebKit treats
+  that as a new site, so the first-run hint returns and the quality setting resets.
+- **Spacecraft in 3D** move linearly between Horizons samples. The atlas uses Hermite
+  interpolation.
+
+## Windows
+
+Pantheon was first built on Windows, and the code paths remain (kernel memory mapping,
+WebView2 through Tauri). The current tree is developed and tested only on Linux.

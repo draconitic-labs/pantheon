@@ -50,7 +50,9 @@ tools/fetch_data.py --list        # see what's here and what isn't
 ```
 
 Python 3.9 or newer and nothing else is required. `pantheon-cli --doctor` checks
-the result.
+the result. A dropped connection leaves no partial file behind, and running the script
+again fetches whatever is missing or truncated. If a kernel on disk is damaged anyway, both
+apps skip it, say so, and carry on with orbital elements.
 
 To add Pantheon to your application menu, under `~/.local` only:
 
@@ -58,6 +60,11 @@ To add Pantheon to your application menu, under `~/.local` only:
 scripts/install-desktop.sh              # build, then add menu entries and icons
 scripts/install-desktop.sh --uninstall  # take them away again
 ```
+
+The installer won't overwrite a menu entry or icon it didn't write, and it refuses a checkout
+path containing `$`, a backtick, `"`, `\` or `%`. Uninstalling removes Pantheon's entries and
+icons and refreshes the menu and icon caches, which stay. It leaves your settings: the
+atlas keeps them in `~/.config/pantheon`, and you can delete that folder yourself.
 
 No sound is built in if you'd rather skip ALSA: build with
 `--no-default-features`. With sound compiled in, ambience stays off until you turn
@@ -102,9 +109,10 @@ card's "Where this comes from" gives source, citation and frame for each value.
 
 | You see | It is | Class |
 |---|---|---|
-| Planet and Moon positions | JPL DE440s and satellite kernels, with Standish elements outside coverage or without kernels | measured / modeled |
+| Planet and moon positions | JPL DE440s and satellite kernels, with Standish and mean elements outside coverage or without kernels | measured / modeled |
+| The moons of Uranus | Always mean elements, because no Uranian kernel is downloaded. Where each sits along its orbit is chosen for legibility | modeled / illustrative |
 | Spacecraft paths | JPL Horizons vectors, Hermite-interpolated, never extrapolated | measured |
-| Nearest 12,000 stars and the naked-eye sky | ESA Gaia DR3 | measured |
+| Nearby stars and the naked-eye sky | ESA Gaia DR3: the 12,000 largest parallaxes among sources brighter than G 16 with parallax known to 10%, which reach about 35 pc and leave out fainter stars inside that, plus every source brighter than G 6 | measured |
 | Exoplanet periods, sizes and hosts | NASA Exoplanet Archive | measured |
 | Orientation of exoplanet orbits, their phases | A convention. Most systems have no known orientation | illustrative |
 | Body orientation | IAU 2015 rotation elements, small terms omitted | modeled |
@@ -117,12 +125,12 @@ card's "Where this comes from" gives source, citation and frame for each value.
 | Relief on rocky bodies | Derived from image brightness, not elevation | illustrative |
 | Asteroid, Kuiper and Oort samples, the heliosphere's shape | Show where these are, not the rocks themselves. The Kirkwood gaps are in the right places | illustrative |
 | The Milky Way | An illustration. Arms are stylized to pass near their real distances along the Sun's azimuth | procedural |
-| Stars beyond 83 pc, distant galaxies | Illustrative dust, kept out of the sphere where this atlas has real Gaia data. A ring marks the edge | procedural |
+| Faint stars beyond the nearby sample, distant galaxies | Illustrative dust, kept out of the sphere where this atlas has the dense Gaia sample. A ring marks that sphere's edge, measured from the loaded catalog | procedural |
 | Local Group and cluster positions | Compiled literature values, approximate sizes | measured |
 | Their appearance, halos, the cosmic web's filaments | Procedural, not a survey map | illustrative |
 
-Time is TDB internally and UTC on display. See `AUDIT_STATUS.md` and
-`KNOWN_ISSUES.md` for the verified state and the honest remainder.
+Time is TDB internally and UTC on display. `KNOWN_ISSUES.md` lists what isn't done and
+what to keep in mind.
 
 ## Graphics
 
@@ -164,9 +172,8 @@ cd src-tauri && CARGO_TARGET_DIR=../target-3d cargo build --release
 ```
 
 `scripts/install-desktop.sh` builds it too and adds its own menu entry. The window keeps
-its small data (the first-run flag, WebKit's cache) beside the binary, so `--uninstall`
-leaves nothing of Pantheon's in your home folder. Your GPU driver's own shader caches
-under `~/.cache` are the driver's.
+its small data (the first-run flag, WebKit's cache) beside the binary, in the checkout. Your
+GPU driver's own shader caches under `~/.cache` are the driver's.
 
 **Getting around.** Drag to swing around what you are looking at. Scroll to zoom: one
 wheel goes from the ground to the cosmic web, and scrolling back returns you to where you
@@ -177,9 +184,13 @@ follows the distance to the nearest thing; `L` adds mouse-look and Esc releases 
 runs a grand tour, `Space` pauses time, `?` lists every key. Esc always backs out one step.
 
 **What is real.** The line under the place name says what you are looking at, and every
-row on a card has a label you can hover for its source. Positions come from the SPICE
-kernels. The Sun, the planets, the Moon, Earth's night lights and the sky photograph are
-real imagery; Pluto and the other moons have no maps and are procedural, and marked so.
+row on a card has a label you can hover for its source. With the kernels downloaded, the
+planets, the Moon and the moons of Mars, Jupiter, Saturn, Neptune and Pluto have kernel
+positions. The moons of Uranus have no kernel here, so they sit on mean elements with an
+illustrative place along each orbit, and their cards say so. The Sun, the planets, the Moon and
+Earth's night lights are maps built from NASA data, with colours tuned and gaps filled by the
+publisher, and the sky is a photograph; Pluto and the other moons have no maps and are
+procedural, and marked so.
 Modeled: atmospheres, ring lighting, eclipses (real geometry, modeled look). Illustrative,
 and labeled so: the Milky Way and galaxy portraits, the filaments of the cosmic web, field
 stars beyond the Gaia catalog, the Sun's corona, the surfaces of other stars, and how
@@ -189,13 +200,19 @@ is synthetic.
 
 **Without the downloads.** A fresh clone has no `assets/data/textures` or SPICE kernels. It
 still runs and says so on screen: planets become procedural, Earth is real outlines with
-painted colors, the sky is the illustrative Galaxy model, and positions come from mean
-elements. `tools/fetch_data.py` fetches the rest.
+painted colors, the sky is the illustrative Galaxy model, and every position comes from
+mean elements. `tools/fetch_data.py` fetches the rest.
 
 **Quality.** Automatic by default: it measures real frame cost and steps between four tiers,
 and the Quality menu shows the numbers or fixes a tier. For a frame readout on screen, run
-`PANTHEON_START_URL='/?fps' pantheon-3d`. For the same as log lines, and scripted access
-to the open window, add `PANTHEON_QA=1` and use `'/?qa&fps'`; see the top of `src/serve.rs`.
+`PANTHEON_START_URL='/?fps' pantheon-3d`.
+
+**The local server.** The window's backend listens on 127.0.0.1 and answers only its own page:
+`Host` must be `127.0.0.1:<port>` or `localhost:<port>`, a request from any other origin
+is refused, and it serves only the page's own files, not your disk or the kernels. The top of
+`src/serve.rs` explains why. For test hooks and scripted access to the open window, set
+`PANTHEON_QA=1` and open `'/?qa'`. While that's on, any program on this computer can run
+scripts in the window, so it's for testing.
 
 On NVIDIA's driver the app sets `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` before the webview
 starts, because WebKitGTK's GPU-buffer path crashes on Wayland and leaves a blank window
@@ -205,6 +222,13 @@ use `WEBKIT_DISABLE_DMABUF_RENDERER=1`.
 
 ## Layout of the code
 
+Both renderers share these conventions: meters, time as a TDB Julian date, and one root
+frame, heliocentric ecliptic J2000, with the Sun at the origin. A body's own frame has +Y at
+the pole, +X at the prime meridian, and east toward -Z. The atlas has one orthographic camera,
+with a 64-bit center and a meters-per-pixel scale, and sends the GPU screen-space primitives.
+Pantheon 3D keeps the camera at the scene origin and re-parks every group relative to it each
+frame, computed in JavaScript doubles, with a logarithmic depth buffer.
+
 - `src/frames.rs`: coordinate frames, the camera, the zoom-and-pan flight path.
 - `src/atlas.rs`: every scale band, composed into one frame.
 - `src/engine/`: the wgpu renderer and the surface map bank. `shaders/` holds WGSL.
@@ -212,10 +236,15 @@ use `WEBKIT_DISABLE_DMABUF_RENDERER=1`.
 - `src/sim.rs`: time, Kepler propagation, N-body islands, gravity mechanics.
 - `src/spice.rs`: a dependency-free reader for NAIF kernels.
 - `src/data.rs`, `src/evidence.rs`: datasets, and the record behind each evidence label.
+- `pantheon-web/`: the 3D renderer. `src-tauri/`: its window. `src/serve.rs`: its backend.
 - `tools/`: dataset and icon scripts. `scripts/`: the desktop installer.
 
-`cargo test --lib --bins` runs the checks, including golden frame and time tests
-and a test that panels never collide at any window size.
+`cargo test --lib --bins` runs the checks, including golden frame and time tests, a test
+that panels never collide at any window size, and the local server's refusals over real
+sockets. `tools/test_fetch_data.py` tests the downloader against a server that misbehaves on
+purpose. All of it works with or without the large downloads.
+
+Pantheon is developed and tested on Linux. See the end of `KNOWN_ISSUES.md` about Windows.
 
 ## License
 
