@@ -83,6 +83,9 @@ fn qa_requested(value: Option<&std::ffi::OsStr>) -> bool {
 fn run_loop(listener: TcpListener, port: u16, web: PathBuf) {
     let (uni, _health) = crate::data::Universe::load_with_health();
     let spice_loaded = crate::spice::spice().is_some();
+    for problem in crate::spice::problems() {
+        eprintln!("pantheon: {problem} tools/fetch_data.py replaces it.");
+    }
     println!(
         "  web root {} · spice {} · {} stars · {} exo systems",
         web.display(),
@@ -608,6 +611,7 @@ fn api_meta(s: &mut Conn, uni: &crate::data::Universe, site: &Site) -> std::io::
             "retrieved": uni.retrieved,
             "kernels": kernels,
             "spice": crate::spice::spice().is_some(),
+            "kernel_problems": crate::spice::problems(),
             "textures": textures,
             "stars": uni.stars.len(),
             "exo_systems": uni.exos.len(),

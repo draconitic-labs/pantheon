@@ -147,7 +147,7 @@ pub struct Pantheon {
     pub intro: bool,
     intro_born: f64,
     /// what a fresh clone is missing, in plain words
-    pub data_gaps: Vec<&'static str>,
+    pub data_gaps: Vec<String>,
 }
 
 /// A body fills this fraction of the shorter window side when flown to.
@@ -192,19 +192,26 @@ impl Pantheon {
         cam.tilt = 0.0;
         let bank = TextureBank::new(&gpu);
         let pipes = Pipelines::new(&gpu, &bank.bgl);
-        let mut data_gaps: Vec<&'static str> = Vec::new();
+        let mut data_gaps: Vec<String> = Vec::new();
         if !bank.status.any_planet_imagery() {
-            data_gaps.push("Planet maps are missing, so surfaces are procedural.");
+            data_gaps.push("Planet maps are missing, so surfaces are procedural.".into());
         }
+        let damaged = crate::spice::problems();
+        data_gaps.extend(damaged.iter().cloned());
         if crate::spice::spice().is_none() {
-            data_gaps
-                .push("JPL kernels are missing, so positions use approximate orbital elements.");
+            data_gaps.push(if damaged.is_empty() {
+                "JPL kernels are missing, so positions use approximate orbital elements.".into()
+            } else {
+                "Without it, positions use approximate orbital elements.".into()
+            });
+        } else if !damaged.is_empty() {
+            data_gaps.push("What it carries falls back to approximate orbital elements.".into());
         }
         if u.craft.is_empty() {
-            data_gaps.push("Spacecraft tracks are missing.");
+            data_gaps.push("Spacecraft tracks are missing.".into());
         }
         if u.stars.len() < 1000 {
-            data_gaps.push("Gaia star catalogs are missing.");
+            data_gaps.push("Gaia star catalogs are missing.".into());
         }
         if !data_gaps.is_empty() {
             eprintln!("pantheon: running with partial data. Run tools/fetch_data.py to add it:");
@@ -212,12 +219,19 @@ impl Pantheon {
                 eprintln!("  - {g}");
             }
         }
-        let status = (!data_gaps.is_empty()).then(|| {
-            (
-                "Running with basic data. Open the view menu to see what's missing.".to_string(),
-                12.0,
-            )
-        });
+        let status = match damaged.first() {
+            Some(problem) => Some((
+                format!("{problem} Open the view menu for what this changes."),
+                30.0,
+            )),
+            None => (!data_gaps.is_empty()).then(|| {
+                (
+                    "Running with basic data. Open the view menu to see what's missing."
+                        .to_string(),
+                    12.0,
+                )
+            }),
+        };
         let search = SearchState::new(&u);
         Self {
             gpu,

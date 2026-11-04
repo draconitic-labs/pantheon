@@ -1,5 +1,4 @@
-//! SPICE foundation (audit EPH-004 / plan "SPICE kernel foundation"):
-//! a dependency-free reader for NAIF kernels.
+//! A dependency-free reader for NAIF SPICE kernels.
 //!
 //! - `SpkFile`: binary DAF/SPK (little-endian) with Type 2 (Chebyshev
 //!   position) and Type 3 (Chebyshev position+velocity) segments — enough for
@@ -10,6 +9,10 @@
 //! `sim::body_pos` prefers these states inside kernel coverage (1849–2150 for
 //! de440s) and falls back to the analytic elements outside it; the inspector
 //! reports which source produced the shown state.
+//!
+//! A kernel on disk can be truncated or damaged. Loading checks every offset against
+//! the file's real length, so a bad file is reported in [`problems`] and skipped, and
+//! the app carries on with what remains.
 
 use std::path::Path;
 
@@ -171,65 +174,127 @@ fn i32_at_byte(buf: &[u8], off: usize) -> i32 {
     i32::from_le_bytes(buf[off..off + 4].try_into().unwrap())
 }
 
+/// A DAF stores some counts and addresses as doubles. `None` unless it's a sane one.
+fn whole_number(x: f64) -> Option<usize> {
+    (x.is_finite() && x >= 0.0 && x.fract() == 0.0 && x < 1e15).then_some(x as usize)
+}
+
+/// Read the segment table, checking every address against the file's real length. A
+/// segment that passes can be evaluated at any time without reading out of bounds.
+fn parse_segments(buf: &[u8]) -> Result<Vec<Segment>, String> {
+    if buf.len() < 1024 {
+        return Err(format!("the file ends early, at {} bytes", buf.len()));
+    }
+    if &buf[0..8] != b"DAF/SPK " {
+        return Err("not a DAF/SPK file".into());
+    }
+    let nd = i32_at_byte(buf, 8);
+    let ni = i32_at_byte(buf, 12);
+    if nd != 2 || ni != 6 {
+        return Err(format!("unexpected DAF ND/NI = {nd}/{ni}"));
+    }
+    if &buf[88..96] != b"LTL-IEEE" {
+        return Err("only little-endian (LTL-IEEE) kernels supported".into());
+    }
+    let ends_early = |need: usize| {
+        format!(
+            "the file ends early: it has {} bytes and needs at least {need}",
+            buf.len()
+        )
+    };
+    let ss = (nd + (ni + 1) / 2) as usize; // doubles per summary = 5
+    let max_summaries = (1024 - 24) / (ss * 8);
+    let words = buf.len() / 8;
+    let mut segments = Vec::new();
+    let mut rec = usize::try_from(i32_at_byte(buf, 76))
+        .map_err(|_| "the first summary record's address is invalid".to_string())?;
+    if rec == 0 {
+        return Err("the first summary record's address is invalid".into());
+    }
+    // a damaged chain of records could loop forever
+    let mut budget = buf.len() / 1024;
+    while rec != 0 {
+        budget = budget
+            .checked_sub(1)
+            .ok_or("the chain of summary records doesn't end")?;
+        let base = (rec - 1)
+            .checked_mul(1024)
+            .ok_or("a summary record's address is invalid")?;
+        let end = base
+            .checked_add(1024)
+            .ok_or("a summary record's address is invalid")?;
+        if end > buf.len() {
+            return Err(ends_early(end));
+        }
+        let double = |off: usize| f64::from_le_bytes(buf[off..off + 8].try_into().unwrap());
+        let next = whole_number(double(base)).ok_or("a summary record's link is invalid")?;
+        let nsum = whole_number(double(base + 16))
+            .filter(|n| *n <= max_summaries)
+            .ok_or("a summary record's count is invalid")?;
+        for k in 0..nsum {
+            let s = base + 24 + k * ss * 8;
+            let dtype = i32_at_byte(buf, s + 28);
+            if dtype != 2 && dtype != 3 {
+                continue; // planetary DE kernels are Type 2/3
+            }
+            let t0 = double(s);
+            let t1 = double(s + 8);
+            let target = i32_at_byte(buf, s + 16);
+            let center = i32_at_byte(buf, s + 20);
+            let invalid = || format!("segment for body {target} is invalid");
+            let begin_word = usize::try_from(i32_at_byte(buf, s + 32)).map_err(|_| invalid())?;
+            let end_word = usize::try_from(i32_at_byte(buf, s + 36)).map_err(|_| invalid())?;
+            // the data and its four-word trailer: INIT, INTLEN, RSIZE, N
+            if begin_word < 1 || end_word < begin_word + 3 {
+                return Err(invalid());
+            }
+            if end_word > words {
+                return Err(ends_early(end_word * 8));
+            }
+            let init = f64_at(buf, end_word - 3);
+            let intlen = f64_at(buf, end_word - 2);
+            let rsize = whole_number(f64_at(buf, end_word - 1)).ok_or_else(invalid)?;
+            let n = whole_number(f64_at(buf, end_word)).ok_or_else(invalid)?;
+            // each record: mid, radius, then at least one coefficient per component
+            let sets = if dtype == 2 { 3 } else { 6 };
+            let records = n.checked_mul(rsize).ok_or_else(invalid)?;
+            let fits = begin_word
+                .checked_add(records)
+                .is_some_and(|after| after + 3 <= end_word);
+            if n == 0
+                || rsize < 2 + sets
+                || !fits
+                || !init.is_finite()
+                || !intlen.is_finite()
+                || intlen <= 0.0
+            {
+                return Err(invalid());
+            }
+            segments.push(Segment {
+                target,
+                center,
+                dtype,
+                t0,
+                t1,
+                init,
+                intlen,
+                rsize,
+                n,
+                begin_word,
+            });
+        }
+        rec = next;
+    }
+    if segments.is_empty() {
+        return Err("no Type 2/3 segments found".into());
+    }
+    Ok(segments)
+}
+
 impl SpkFile {
     pub fn load(path: &Path) -> Result<SpkFile, String> {
         let buffer = Buffer::open(path)?;
-        let buf = buffer.as_slice();
-        if buf.len() < 1024 || &buf[0..8] != b"DAF/SPK " {
-            return Err("not a DAF/SPK file".into());
-        }
-        let nd = i32_at_byte(buf, 8);
-        let ni = i32_at_byte(buf, 12);
-        if nd != 2 || ni != 6 {
-            return Err(format!("unexpected DAF ND/NI = {nd}/{ni}"));
-        }
-        let fward = i32_at_byte(buf, 76) as usize;
-        if &buf[88..96] != b"LTL-IEEE" {
-            return Err("only little-endian (LTL-IEEE) kernels supported".into());
-        }
-        let ss = (nd + (ni + 1) / 2) as usize; // doubles per summary = 5
-        let mut segments = Vec::new();
-        let mut rec = fward;
-        while rec != 0 {
-            let base = (rec - 1) * 1024;
-            let next = f64::from_le_bytes(buf[base..base + 8].try_into().unwrap()) as usize;
-            let nsum = f64::from_le_bytes(buf[base + 16..base + 24].try_into().unwrap()) as usize;
-            for k in 0..nsum {
-                let s = base + 24 + k * ss * 8;
-                let t0 = f64::from_le_bytes(buf[s..s + 8].try_into().unwrap());
-                let t1 = f64::from_le_bytes(buf[s + 8..s + 16].try_into().unwrap());
-                let target = i32_at_byte(buf, s + 16);
-                let center = i32_at_byte(buf, s + 20);
-                let _frame = i32_at_byte(buf, s + 24);
-                let dtype = i32_at_byte(buf, s + 28);
-                let begin_word = i32_at_byte(buf, s + 32) as usize;
-                let end_word = i32_at_byte(buf, s + 36) as usize;
-                if dtype != 2 && dtype != 3 {
-                    continue; // planetary DE kernels are Type 2/3
-                }
-                // segment trailer: INIT, INTLEN, RSIZE, N
-                let init = f64_at(buf, end_word - 3);
-                let intlen = f64_at(buf, end_word - 2);
-                let rsize = f64_at(buf, end_word - 1) as usize;
-                let n = f64_at(buf, end_word) as usize;
-                segments.push(Segment {
-                    target,
-                    center,
-                    dtype,
-                    t0,
-                    t1,
-                    init,
-                    intlen,
-                    rsize,
-                    n,
-                    begin_word,
-                });
-            }
-            rec = next;
-        }
-        if segments.is_empty() {
-            return Err("no Type 2/3 segments found".into());
-        }
+        let segments = parse_segments(buffer.as_slice())?;
         Ok(SpkFile {
             buf: buffer,
             segments,
@@ -368,41 +433,61 @@ pub struct SpiceSet {
     pub jd1: f64,
 }
 
+/// What was found in the kernel folder: the usable set, if any, and what was wrong.
+pub struct KernelScan {
+    pub set: Option<SpiceSet>,
+    /// one plain sentence per kernel that exists but can't be used
+    pub problems: Vec<String>,
+}
+
 impl SpiceSet {
-    pub fn load(dir: &Path) -> Result<SpiceSet, String> {
+    /// Load every kernel in `dir`. A bad file is reported and skipped; only a usable
+    /// planetary kernel makes a set, because everything else chains through it.
+    pub fn scan(dir: &Path) -> KernelScan {
         let mut spks: Vec<(String, SpkFile)> = Vec::new();
+        let mut problems = Vec::new();
         let mut planetary: Option<(f64, f64)> = None;
-        let entries = std::fs::read_dir(dir).map_err(|e| format!("{e}"))?;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .to_string();
-            if !name.ends_with(".bsp") {
-                continue;
-            }
-            match SpkFile::load(&path) {
-                Ok(spk) => {
-                    if name.starts_with("de440") {
-                        planetary = Some(spk.coverage_et());
-                    }
-                    spks.push((name, spk));
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                if !name.ends_with(".bsp") {
+                    continue;
                 }
-                Err(e) => log::warn!("spice: skipping {name}: {e}"),
+                match SpkFile::load(&path) {
+                    Ok(spk) => {
+                        if name.starts_with("de440") {
+                            planetary = Some(spk.coverage_et());
+                        }
+                        spks.push((name, spk));
+                    }
+                    Err(e) => problems.push(format!("Kernel {name} can't be used: {e}.")),
+                }
             }
         }
-        let (et0, et1) = planetary.ok_or("de440s.bsp missing (planetary states)")?;
+        problems.sort();
+        let Some((et0, et1)) = planetary else {
+            return KernelScan {
+                set: None,
+                problems,
+            };
+        };
         // planetary kernel first so common lookups resolve in one probe
         spks.sort_by_key(|(n, _)| !n.starts_with("de440") as u8);
         let lsk = Lsk::load(&dir.join("naif0012.tls")).ok();
-        Ok(SpiceSet {
-            spks,
-            lsk,
-            jd0: J2000_JD + et0 / 86_400.0,
-            jd1: J2000_JD + et1 / 86_400.0,
-        })
+        KernelScan {
+            set: Some(SpiceSet {
+                spks,
+                lsk,
+                jd0: J2000_JD + et0 / 86_400.0,
+                jd1: J2000_JD + et1 / 86_400.0,
+            }),
+            problems,
+        }
     }
 
     pub fn covers(&self, jd_tdb: f64) -> bool {
@@ -456,31 +541,36 @@ impl SpiceSet {
     }
 }
 
-static SPICE: std::sync::OnceLock<Option<SpiceSet>> = std::sync::OnceLock::new();
+static SPICE: std::sync::OnceLock<KernelScan> = std::sync::OnceLock::new();
+
+fn loaded() -> &'static KernelScan {
+    SPICE.get_or_init(|| {
+        let scan = SpiceSet::scan(&crate::data::asset_root().join("data/spice"));
+        for p in &scan.problems {
+            log::warn!("spice: {p}");
+        }
+        match &scan.set {
+            Some(s) => log::info!(
+                "spice: loaded {} · JD {:.1}–{:.1}",
+                s.kernel_summary(),
+                s.jd0,
+                s.jd1
+            ),
+            None => log::warn!("spice: unavailable — analytic elements only"),
+        }
+        scan
+    })
+}
 
 /// The globally loaded kernel set (None when kernels are absent — every
 /// consumer must have an analytic fallback).
 pub fn spice() -> Option<&'static SpiceSet> {
-    SPICE
-        .get_or_init(|| {
-            let dir = crate::data::asset_root().join("data/spice");
-            match SpiceSet::load(&dir) {
-                Ok(s) => {
-                    log::info!(
-                        "spice: loaded {} · JD {:.1}–{:.1}",
-                        s.kernel_summary(),
-                        s.jd0,
-                        s.jd1
-                    );
-                    Some(s)
-                }
-                Err(e) => {
-                    log::warn!("spice: unavailable ({e}) — analytic elements only");
-                    None
-                }
-            }
-        })
-        .as_ref()
+    loaded().set.as_ref()
+}
+
+/// Kernels that exist but couldn't be used, for the app to say so.
+pub fn problems() -> &'static [String] {
+    &loaded().problems
 }
 
 #[cfg(test)]
@@ -507,7 +597,10 @@ mod tests {
     fn de440_matches_cached_horizons() {
         let Some(s) = spice() else { return };
         let u = crate::data::Universe::load();
-        let earth = u.planet_truth[2].as_ref().expect("earth track");
+        let (Some(earth), Some(moon)) = (&u.planet_truth[2], &u.moon_truth) else {
+            eprintln!("kernels are here but the Horizons tracks aren't: gate skipped");
+            return;
+        };
         for k in [5usize, 60, 130] {
             let (jd, pos, _) = earth.samples[k];
             let spk = s.helio_ecl_m(399, jd).expect("coverage");
@@ -515,7 +608,6 @@ mod tests {
             assert!(err_km < 2.0, "earth sample {k}: {err_km} km");
         }
         // Moon relative to Earth against the geocentric Horizons arc
-        let moon = u.moon_truth.as_ref().expect("moon track");
         for k in [10usize, 200] {
             let (jd, rel, _) = moon.samples[k];
             let spk = s.rel_ecl_m(301, 399, jd).expect("coverage");
@@ -542,9 +634,15 @@ mod tests {
                 eprintln!("kernel for {moon_id} not loaded — gate skipped");
                 continue;
             }
-            let track =
-                crate::data::load_horizons_pub(&root.join("data/spacecraft").join(file), center)
-                    .unwrap_or_else(|e| panic!("{file}: {e}"));
+            // these arcs were fetched by hand to check the reader, and aren't in
+            // tools/fetch_data.py, so a normal fetch doesn't have them
+            let path = root.join("data/spacecraft").join(file);
+            if !path.is_file() {
+                eprintln!("{file} isn't on this computer: gate for {moon_id} skipped");
+                continue;
+            }
+            let track = crate::data::load_horizons_pub(&path, center)
+                .unwrap_or_else(|e| panic!("{file}: {e}"));
             let last = track.samples.len() - 1;
             for k in [0usize, last / 2, last] {
                 let (jd, rel, _) = track.samples[k];
@@ -553,5 +651,116 @@ mod tests {
                 assert!(err_km < 10.0, "{file} sample {k}: {err_km} km");
             }
         }
+    }
+
+    /// A small but real Type 2 kernel: one body, a straight-line position in two
+    /// records, built by hand so these tests need no downloaded data.
+    fn tiny_kernel() -> Vec<u8> {
+        let mut buf = vec![0u8; 1024];
+        buf[0..8].copy_from_slice(b"DAF/SPK ");
+        buf[8..12].copy_from_slice(&2i32.to_le_bytes());
+        buf[12..16].copy_from_slice(&6i32.to_le_bytes());
+        buf[76..80].copy_from_slice(&2i32.to_le_bytes()); // first summary record
+        buf[88..96].copy_from_slice(b"LTL-IEEE");
+        // record 2 holds the summaries, record 3 the names, record 4 on the data
+        let mut summary = vec![0u8; 1024];
+        summary[16..24].copy_from_slice(&1f64.to_le_bytes()); // one summary
+        summary[24..32].copy_from_slice(&(-100f64).to_le_bytes()); // coverage
+        summary[32..40].copy_from_slice(&100f64.to_le_bytes());
+        summary[40..44].copy_from_slice(&399i32.to_le_bytes()); // target
+        summary[44..48].copy_from_slice(&0i32.to_le_bytes()); // center
+        summary[48..52].copy_from_slice(&1i32.to_le_bytes()); // frame
+        summary[52..56].copy_from_slice(&2i32.to_le_bytes()); // type
+        let begin = 2 * 128 + 128 + 1; // first word after three records
+        let rsize = 8usize; // mid, radius, two coefficients for each of x y z
+        let n = 2usize;
+        let end = begin + n * rsize + 4 - 1;
+        summary[56..60].copy_from_slice(&(begin as i32).to_le_bytes());
+        summary[60..64].copy_from_slice(&(end as i32).to_le_bytes());
+        buf.extend_from_slice(&summary);
+        buf.extend_from_slice(&[0u8; 1024]);
+        let mut words: Vec<f64> = Vec::new();
+        for mid in [-50.0, 50.0] {
+            // x = 1000 + et, y = 2000, z = 3000 across this record
+            words.extend([mid, 50.0, 1000.0 + mid, 50.0, 2000.0, 0.0, 3000.0, 0.0]);
+        }
+        words.extend([-100.0, 100.0, rsize as f64, n as f64]);
+        for w in words {
+            buf.extend_from_slice(&w.to_le_bytes());
+        }
+        buf
+    }
+
+    #[test]
+    fn a_whole_kernel_evaluates() {
+        let segments = parse_segments(&tiny_kernel()).unwrap();
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].target, 399);
+    }
+
+    #[test]
+    fn a_kernel_cut_anywhere_is_an_error_not_a_panic() {
+        let whole = tiny_kernel();
+        for len in 0..whole.len() {
+            assert!(
+                parse_segments(&whole[..len]).is_err(),
+                "cut to {len} bytes of {} still parsed",
+                whole.len()
+            );
+        }
+    }
+
+    #[test]
+    fn a_kernel_with_damaged_words_is_an_error_or_safe_to_evaluate() {
+        // overwrite every word in turn with values that used to index out of bounds
+        let whole = tiny_kernel();
+        for bad in [f64::NAN, f64::INFINITY, -1.0, 1e300, 0.0, 1.5] {
+            for word in 0..whole.len() / 8 {
+                let mut buf = whole.clone();
+                buf[word * 8..word * 8 + 8].copy_from_slice(&bad.to_le_bytes());
+                let Ok(segments) = parse_segments(&buf) else {
+                    continue;
+                };
+                let spk = SpkFile {
+                    buf: Buffer::Heap(buf),
+                    segments,
+                };
+                for seg in &spk.segments {
+                    for et in [-1e300, -100.0, 0.0, 100.0, 1e300, f64::NAN] {
+                        spk.eval_segment(seg, et);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_truncated_planetary_kernel_is_reported_and_the_set_is_empty() {
+        let dir = std::env::temp_dir().join(format!("pantheon-spice-test-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let file = dir.join("de440s.bsp");
+        std::fs::write(&file, &tiny_kernel()[..2500]).unwrap();
+        let scan = SpiceSet::scan(&dir);
+        std::fs::remove_file(&file).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
+        assert!(scan.set.is_none());
+        assert_eq!(scan.problems.len(), 1);
+        assert!(
+            scan.problems[0].contains("de440s.bsp"),
+            "{:?}",
+            scan.problems
+        );
+        assert!(
+            scan.problems[0].contains("ends early"),
+            "{:?}",
+            scan.problems
+        );
+    }
+
+    #[test]
+    fn a_folder_with_no_kernels_is_not_a_problem() {
+        let scan = SpiceSet::scan(Path::new("/nonexistent/pantheon/kernels"));
+        assert!(scan.set.is_none());
+        assert!(scan.problems.is_empty());
     }
 }

@@ -218,6 +218,9 @@ fn doctor() -> anyhow::Result<()> {
         }
         None => println!("spice:    not loaded — analytic elements only (optional)"),
     }
+    for problem in crate::spice::problems() {
+        println!("  {problem} tools/fetch_data.py replaces it.");
+    }
     // layer registry
     println!(
         "layers:   {} registered — {}",
@@ -270,8 +273,12 @@ fn doctor() -> anyhow::Result<()> {
             ""
         }
     );
-    if optional > 0 || maps == 0 || crate::spice::spice().is_none() {
-        println!("optional data is missing; run tools/fetch_data.py to download it");
+    if optional > 0
+        || maps == 0
+        || crate::spice::spice().is_none()
+        || !crate::spice::problems().is_empty()
+    {
+        println!("optional data is missing or damaged; run tools/fetch_data.py to download it");
     }
     println!(
         "loaded:   {} stars, {} exo systems, {} craft, coast {} lines, retrieved {}",

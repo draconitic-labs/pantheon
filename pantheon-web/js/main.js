@@ -1247,13 +1247,13 @@ const earthT = makeTarget('body:Earth');
 ui.setRateActive(clock.rate, false);
 ui.setSound(false);
 
-const meta = { spice: false, textures: [] };
+const meta = { spice: false, textures: [], kernelProblems: [] };
 async function boot() {
   ui.setLoading('Loading kernels and catalogs');
   let metaOk = false;
   try {
     const m = await (await fetch('/api/meta')).json();
-    meta.spice = !!m.spice; meta.textures = m.textures || [];
+    meta.spice = !!m.spice; meta.textures = m.textures || []; meta.kernelProblems = m.kernel_problems || [];
     metaOk = true;
   } catch (e) { console.warn('meta', e); }
   textures.setAvailable(meta.textures);
@@ -1265,8 +1265,12 @@ async function boot() {
   const lines = [];
   const missingMaps = !textures.has('8k_earth_daymap.jpg');
   if (missingMaps) lines.push('No surface maps in assets/data/textures: planets are procedural, Earth is real outlines with painted colors, and the sky is the illustrative Galaxy model instead of a photograph.');
-  if (!meta.spice) lines.push('No SPICE kernels in assets/data/spice: planets and moons sit where mean orbital elements put them, thousands of kilometres off at best, and moon phases are approximate.');
-  if (lines.length) lines.push('Run tools/fetch_data.py to download them, then restart.');
+  const damaged = meta.kernelProblems.length > 0;
+  lines.push(...meta.kernelProblems);
+  const fallback = 'planets and moons sit where mean orbital elements put them, thousands of kilometres off at best, and moon phases are approximate.';
+  if (!meta.spice) lines.push(damaged ? `Without it, ${fallback}` : `No SPICE kernels in assets/data/spice: ${fallback}`);
+  else if (damaged) lines.push('What it carries falls back to mean orbital elements. Each card says what its numbers come from.');
+  if (lines.length) lines.push('Run tools/fetch_data.py to download what is missing or damaged, then restart.');
   if (!metaOk) lines.unshift('The data server did not answer, so the catalogs may be missing too.');
   ui.setNotice(lines);
 

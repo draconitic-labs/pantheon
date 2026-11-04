@@ -1696,10 +1696,10 @@ impl Pantheon {
                             ui.label(RichText::new("All datasets are present.").size(12.0));
                         } else {
                             for g in &self.data_gaps {
-                                ui.label(RichText::new(*g).size(12.0));
+                                ui.label(RichText::new(g).size(12.0));
                             }
                             ui.label(
-                                RichText::new("Run tools/fetch_data.py to download what's missing (about 3 GB with kernels).")
+                                RichText::new("Run tools/fetch_data.py to download what's missing or damaged (about 3 GB with kernels).")
                                     .size(12.0)
                                     .color(theme::BRASS),
                             );
@@ -1824,7 +1824,13 @@ impl Pantheon {
                             done = ui.button("Got it").clicked();
                         });
                     });
-                    if !self.data_gaps.is_empty() {
+                    if let Some(problem) = crate::spice::problems().first() {
+                        ui.label(
+                            RichText::new(format!("{problem} Run tools/fetch_data.py to replace it."))
+                                .size(11.5)
+                                .color(theme::BRASS),
+                        );
+                    } else if !self.data_gaps.is_empty() {
                         ui.label(
                             RichText::new("Real planet maps and spacecraft tracks aren't downloaded yet: run tools/fetch_data.py.")
                                 .size(11.5)
