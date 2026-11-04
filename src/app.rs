@@ -1,22 +1,30 @@
 //! Application shell shared by the interactive window and headless export:
-//! one code path builds the atlas frame, renders the canvas, and lays the
-//! glass UI (cards, ladder, time bar, truth legend, capture) over it.
+//! one code path builds the atlas frame, renders the canvas, and lays the UI
+//! (where-am-I readout, scale rail, search, selection card, time bar) over it.
+
+mod search;
+mod settings;
+mod ui;
 
 use std::time::Instant;
 
-use egui::{Align2, Color32, FontFamily, FontId, Rect};
+use egui::{Align2, Color32, Rect};
 use glam::DVec3;
 
 use crate::atlas::{
-    self, build, obj_half_extent, obj_name, obj_pos, BuildIn, FrameOut, Island, Modes,
-    ObjectRef, Pickable,
+    self, build, obj_half_extent, obj_name, obj_pos, BuildIn, FrameOut, Island, Modes, ObjectRef,
+    Pickable,
 };
 use crate::data::{Prov, Universe};
 use crate::engine::draw::{DrawList, Pipelines};
 use crate::engine::gpu::{save_png, GpuContext, ViewTarget};
-use crate::frames::{fmt_len, Camera, AU, PC};
+use crate::engine::textures::TextureBank;
+use crate::frames::{fmt_len, Camera, AU};
 use crate::sim::{self, fmt_jd, jd_now, Clock, NBody, J2000, MOONS, PLANETS};
 use crate::theme;
+
+pub use search::{Dest, SearchState};
+pub use settings::Settings;
 
 // ------------------------------------------------------------- state
 
@@ -27,6 +35,8 @@ pub struct PathKey {
     pub mpp: f64,
     #[serde(default)]
     pub tilt: f64,
+    #[serde(default)]
+    pub yaw: f64,
     pub jd: f64,
     pub dur: f64,
     #[serde(default)]
@@ -44,9 +54,21 @@ pub struct PathPlay {
     pub t: f64,
 }
 
+/// A saved viewpoint: where Back returns to.
+#[derive(Clone, Copy)]
+struct HistoryEntry {
+    center: DVec3,
+    mpp: f64,
+    tilt: f64,
+    yaw: f64,
+    focus: Option<ObjectRef>,
+    follow: Option<(ObjectRef, DVec3)>,
+}
+
 pub struct Pantheon {
     pub gpu: GpuContext,
     pub pipes: Pipelines,
+    pub bank: TextureBank,
     pub u: Universe,
     pub cam: Camera,
     pub clock: Clock,
@@ -65,22 +87,72 @@ pub struct Pantheon {
     pub anim_t: f64,
     pub show_capture: bool,
     pub show_help: bool,
-    /// cinematic renders: canvas + labels + scale chip only, no control panels
+    pub show_layers: bool,
+    /// cinematic renders: canvas + labels only, no controls
     pub cinema: bool,
+    /// headless exports: imagery loads synchronously, the camera settles at once
+    pub immediate: bool,
     /// set by shot setups that could not resolve their subject
     pub setup_error: Option<String>,
     pub status: Option<(String, f64)>,
-    // ambience controls (the engine itself lives in the GUI shell)
-    pub ambience_on: bool,
-    pub ambience_vol: f32,
+    /// persisted preferences (GUI only; exports never touch the disk)
+    pub settings: Settings,
+    pub persist_settings: bool,
+    /// None until the audio engine has been tried; Some(false) = no device found
+    pub ambience_available: Option<bool>,
     /// glide the clock during path playback instead of jumping (AUDIT UI-020)
-    pub jd_glide: Option<(f64, f64)>,
-    pub search_open: bool,
-    pub search_q: String,
-    /// labels placed last frame — hysteresis so labels don't flicker (UX B3)
+    pub jd_glide: Option<f64>,
+    pub search: SearchState,
+    /// the canvas in logical pixels, and the display's scale
+    pub view_w: f64,
+    pub view_h: f64,
+    pub ppp: f32,
+    /// what's under the pointer right now
+    pub hover: Option<ObjectRef>,
+    /// labels placed last frame, for clicks and hysteresis (UX B3)
     sticky: std::collections::HashSet<String>,
-    /// camera back-stack for dives/jumps (S6): center, mpp, tilt
-    history: Vec<(DVec3, f64, f64)>,
+    label_hits: Vec<(Rect, ObjectRef)>,
+    /// back-stack for flights
+    history: Vec<HistoryEntry>,
+    // ---- motion state
+    /// log10(mpp) still to be applied by the smooth zoom
+    zoom_pending: f64,
+    /// the screen point and frame-local world point a zoom holds fixed
+    zoom_anchor: Option<(f64, f64, DVec3)>,
+    /// release velocity of a drag, px/s
+    pan_vel: [f64; 2],
+    drag_vel: [f64; 2],
+    last_drag: f64,
+    /// a held key's continuous pan/zoom
+    key_pan: [f64; 2],
+    pres_moving: bool,
+    /// the first-run hint, until dismissed
+    pub intro: bool,
+    intro_born: f64,
+    /// what a fresh clone is missing, in plain words
+    pub data_gaps: Vec<&'static str>,
+}
+
+/// A body fills this fraction of the shorter window side when flown to.
+const FRAME_FILL: f64 = 0.62;
+
+#[derive(Clone, Copy)]
+enum KeyAction {
+    Escape,
+    TogglePlay,
+    Truth,
+    Gravity,
+    SystemView,
+    Search,
+    Help,
+    Home,
+    Back,
+    Now,
+    Ambience,
+    FlyToSelection,
+    LevelView,
+    Slower,
+    Faster,
 }
 
 impl Pantheon {
@@ -96,14 +168,43 @@ impl Pantheon {
         }
         let clock = Clock::now();
         let mut cam = Camera::new();
-        // flagship start: Earth, close
+        // the opening view: Earth, large, where it is right now
         cam.center = sim::body_pos(2, clock.jd);
-        cam.mpp = 3.6e7 / 1600.0;
+        let view_h = 900.0;
+        cam.mpp = (crate::sim::PLANETS[2].radius_km * 1e3 * 2.0) / (FRAME_FILL * view_h);
         cam.tilt = 0.0;
-        let pipes = Pipelines::new(&gpu);
+        let bank = TextureBank::new(&gpu);
+        let pipes = Pipelines::new(&gpu, &bank.bgl);
+        let mut data_gaps: Vec<&'static str> = Vec::new();
+        if !bank.status.any_planet_imagery() {
+            data_gaps.push("Planet maps are missing, so surfaces are procedural.");
+        }
+        if crate::spice::spice().is_none() {
+            data_gaps.push("JPL kernels are missing, so positions use approximate orbital elements.");
+        }
+        if u.craft.is_empty() {
+            data_gaps.push("Spacecraft tracks are missing.");
+        }
+        if u.stars.len() < 1000 {
+            data_gaps.push("Gaia star catalogs are missing.");
+        }
+        if !data_gaps.is_empty() {
+            eprintln!("pantheon: running with partial data. Run tools/fetch_data.py to add it:");
+            for g in &data_gaps {
+                eprintln!("  - {g}");
+            }
+        }
+        let status = (!data_gaps.is_empty()).then(|| {
+            (
+                "Running with basic data. Open the view menu to see what's missing.".to_string(),
+                12.0,
+            )
+        });
+        let search = SearchState::new(&u);
         Self {
             gpu,
             pipes,
+            bank,
             u,
             cam,
             clock,
@@ -121,38 +222,100 @@ impl Pantheon {
             anim_t: 0.0,
             show_capture: false,
             show_help: false,
+            show_layers: false,
             cinema: false,
+            immediate: false,
             setup_error: None,
-            status: problems
-                .first()
-                .map(|p| (format!("⚠ degraded data — {p}"), 10.0)),
-            ambience_on: true,
-            ambience_vol: 0.5,
+            status,
+            settings: Settings::default(),
+            persist_settings: false,
+            ambience_available: None,
             jd_glide: None,
-            search_open: false,
-            search_q: String::new(),
+            search,
+            view_w: 1600.0,
+            view_h,
+            ppp: 1.0,
+            hover: None,
             sticky: std::collections::HashSet::new(),
+            label_hits: Vec::new(),
             history: Vec::new(),
+            zoom_pending: 0.0,
+            zoom_anchor: None,
+            pan_vel: [0.0, 0.0],
+            drag_vel: [0.0, 0.0],
+            last_drag: -1.0,
+            key_pan: [0.0, 0.0],
+            pres_moving: false,
+            intro: false,
+            intro_born: 0.0,
+            data_gaps,
         }
     }
 
-    /// Remember the current viewpoint before a jump (dive, ladder, home).
+    /// Hand over to the GUI: remembered preferences, and the first-run hint.
+    pub fn attach_settings(&mut self, settings: Settings) {
+        self.intro = !settings.intro_seen;
+        self.intro_born = self.anim_t;
+        self.settings = settings;
+        self.persist_settings = true;
+    }
+
+    pub fn save_settings(&self) {
+        if self.persist_settings {
+            self.settings.save();
+        }
+    }
+
+    pub fn dismiss_intro(&mut self) {
+        if self.intro {
+            self.intro = false;
+            self.settings.intro_seen = true;
+            self.save_settings();
+        }
+    }
+
+    /// Remember the current viewpoint before a jump (dive, rail, home).
     fn push_history(&mut self) {
-        self.history.push((self.cam.center_root(), self.cam.mpp, self.cam.tilt));
+        self.history.push(HistoryEntry {
+            center: self.cam.center_root(),
+            mpp: self.cam.mpp,
+            tilt: self.cam.tilt,
+            yaw: self.cam.yaw,
+            focus: self.focus,
+            follow: self.follow,
+        });
         if self.history.len() > 32 {
             self.history.remove(0);
         }
     }
 
-    /// Fly back to the previous viewpoint (Backspace / ⟵).
-    pub fn go_back(&mut self, w: f64) {
-        if let Some((center, mpp, tilt)) = self.history.pop() {
-            self.follow = None;
-            self.jd_glide = Some((self.clock.jd, tilt));
-            self.cam.fly_to(center, mpp, w, 1.6);
-        } else {
-            self.note("no earlier viewpoint");
-        }
+    pub fn can_go_back(&self) -> bool {
+        !self.history.is_empty()
+    }
+
+    /// Fly back to the previous viewpoint (Backspace or the back button).
+    pub fn go_back(&mut self) {
+        let Some(h) = self.history.pop() else {
+            self.note("No earlier view to return to");
+            return;
+        };
+        self.stop_motion();
+        self.focus = h.focus;
+        self.follow = h.follow;
+        let dur = self.cam.flight_seconds(h.center, h.mpp, self.view_w);
+        self.cam.fly_to_view(h.center, h.mpp, h.tilt, h.yaw, self.view_w, dur);
+    }
+
+    fn stop_motion(&mut self) {
+        self.zoom_pending = 0.0;
+        self.zoom_anchor = None;
+        self.pan_vel = [0.0, 0.0];
+    }
+
+    /// Fly to Earth, the place everyone starts from.
+    pub fn go_home(&mut self) {
+        self.scene_exo = None;
+        self.dive_to(ObjectRef::Planet(2));
     }
 
     fn note(&mut self, s: impl Into<String>) {
@@ -175,28 +338,33 @@ impl Pantheon {
                         self.apply_key(&key);
                     } else {
                         self.play = None;
-                        self.note("path finished");
+                        self.note("Path finished");
                     }
                 }
             }
         }
-        // path glides: ease clock + tilt alongside the camera animation
-        if let Some((jd1, tilt1)) = self.jd_glide {
+        // path glides: ease the clock alongside the camera animation
+        if let Some(jd1) = self.jd_glide {
             match &self.cam.anim {
                 Some(a) => {
                     let s = (a.t / a.dur).clamp(0.0, 1.0);
                     let e = s * s * (3.0 - 2.0 * s);
                     self.clock.jd += (jd1 - self.clock.jd) * e.max(0.02);
-                    self.cam.tilt += (tilt1 - self.cam.tilt) * e.max(0.02);
                 }
                 None => {
                     self.clock.jd = jd1;
-                    self.cam.tilt = tilt1;
                     self.jd_glide = None;
                 }
             }
         }
-        self.cam.tick(dt);
+        // a flight chases a moving target instead of snapping to it on arrival
+        if let (Some(a), Some((obj, off))) = (&mut self.cam.anim, self.follow) {
+            let p = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref());
+            a.c1 = (p + off) - self.cam.frame_origin;
+        }
+        self.cam.tick(dt, self.view_w);
+        self.apply_smooth_zoom(dt);
+        self.apply_pan_inertia(dt);
         // one time switch: play/pause is the source of truth, "living" derives
         self.modes.living = self.clock.playing;
         self.clock.tick(dt);
@@ -259,9 +427,10 @@ impl Pantheon {
                 self.island = None;
             }
         }
+        self.update_presentation(dt);
         // exoplanet pocket persists until the camera actually leaves it
         if let Some(ei) = self.scene_exo {
-            let lw = self.cam.log_width(1600.0);
+            let lw = self.cam.log_width(self.view_w);
             let d = (self.cam.center_root() - self.u.exos[ei].pos).length();
             if lw > 15.8 || d > crate::frames::PC {
                 self.scene_exo = None;
@@ -301,6 +470,100 @@ impl Pantheon {
         self.u.find_system(n).map(ObjectRef::ExoHost)
     }
 
+    /// Smooth zoom: wheel notches feed `zoom_pending`, which drains over ~0.1 s
+    /// around a fixed anchor, so a burst of notches glides instead of stepping.
+    fn apply_smooth_zoom(&mut self, dt: f64) {
+        if self.zoom_pending == 0.0 {
+            return;
+        }
+        let take = if self.immediate { 1.0 } else { 1.0 - (-dt / 0.09).exp() };
+        let mut step = self.zoom_pending * take;
+        if self.zoom_pending.abs() < 0.0004 {
+            step = self.zoom_pending;
+        }
+        self.zoom_pending -= step;
+        let new = (self.cam.mpp * 10f64.powf(step)).clamp(crate::frames::MPP_MIN, crate::frames::MPP_MAX);
+        // hitting the zoom limits ends the glide
+        if new == crate::frames::MPP_MIN || new == crate::frames::MPP_MAX {
+            self.zoom_pending = 0.0;
+        }
+        self.cam.mpp = new;
+        if let Some((sx, sy, world)) = self.zoom_anchor {
+            // solved against the NEW basis, which can rotate with scale (AUDIT FND-022)
+            let proj = crate::frames::Proj::new(&self.cam, self.view_w, self.view_h, &self.u.gal);
+            self.cam.center = world
+                - proj.right * ((sx - proj.w * 0.5) * new)
+                - proj.up * ((proj.h * 0.5 - sy) * new);
+        }
+        if self.zoom_pending == 0.0 {
+            self.zoom_anchor = None;
+        }
+        self.sync_follow();
+    }
+
+    /// A flung drag coasts and settles.
+    fn apply_pan_inertia(&mut self, dt: f64) {
+        let held = self.key_pan != [0.0, 0.0];
+        if self.pan_vel == [0.0, 0.0] && !held {
+            return;
+        }
+        let proj = crate::frames::Proj::new(&self.cam, self.view_w, self.view_h, &self.u.gal);
+        let (vx, vy) = (self.pan_vel[0] + self.key_pan[0], self.pan_vel[1] + self.key_pan[1]);
+        self.cam.center -= proj.right * (vx * dt * self.cam.mpp);
+        self.cam.center += proj.up * (vy * dt * self.cam.mpp);
+        let k = (-dt / 0.38).exp();
+        self.pan_vel = [self.pan_vel[0] * k, self.pan_vel[1] * k];
+        if self.pan_vel[0].hypot(self.pan_vel[1]) < 6.0 {
+            self.pan_vel = [0.0, 0.0];
+        }
+        self.sync_follow();
+    }
+
+    /// Close to a body, ease to a view that shows it well: sunlit three-quarter,
+    /// north up. Further out the map returns to plan view on its own.
+    fn update_presentation(&mut self, dt: f64) {
+        let view_m = self.cam.mpp * self.view_w;
+        let c = self.cam.center_root();
+        let jd = self.clock.jd;
+        let mut target = (0.0, 0.0);
+        if self.scene_exo.is_none() && self.cam.log_width(self.view_w) < 11.2 {
+            // the subject: what's selected if it's near, else the closest body
+            let mut best: Option<(f64, ObjectRef, f64)> = None;
+            let mut consider = |obj: ObjectRef, this: &Self| {
+                let Some(r) = atlas::body_frame_radius(obj) else { return };
+                let p = obj_pos(&this.u, obj, jd, this.island.as_ref());
+                let d = (p - c).length();
+                if d < view_m * 0.9 {
+                    let score = d / r;
+                    if best.map(|(b, _, _)| score < b).unwrap_or(true) {
+                        best = Some((score, obj, r));
+                    }
+                }
+            };
+            consider(ObjectRef::Sun, self);
+            for i in 0..PLANETS.len() {
+                consider(ObjectRef::Planet(i), self);
+            }
+            for mi in 0..MOONS.len() {
+                consider(ObjectRef::Moon(mi), self);
+            }
+            if let Some((_, obj, r)) = best {
+                // full effect while the body spans a sixth of the view or more
+                let span = view_m / (2.0 * r);
+                let w = 1.0 - crate::frames::smoothstep(6.0, 30.0, span);
+                if w > 0.0 {
+                    let (t, y) = atlas::presentation_angles(&self.u, obj, jd, self.island.as_ref());
+                    target = (t * w, crate::frames::shortest_arc(self.cam.pres_yaw, y) * w);
+                }
+            }
+        }
+        let k = if self.immediate { 1.0 } else { 1.0 - (-dt / 0.45).exp() };
+        self.cam.pres_tilt += (target.0 - self.cam.pres_tilt) * k;
+        let dy = crate::frames::shortest_arc(self.cam.pres_yaw, target.1) - self.cam.pres_yaw;
+        self.cam.pres_yaw += dy * k;
+        self.pres_moving = dy.abs() > 1e-4 || (target.0 - self.cam.pres_tilt).abs() > 1e-4;
+    }
+
     fn apply_key(&mut self, key: &PathKey) {
         if let Some(host) = &key.host {
             if let Some(ei) = self.u.find_system(host) {
@@ -309,8 +572,8 @@ impl Pantheon {
             }
         }
         self.follow = None;
-        // glide time and tilt with the camera instead of jumping (AUDIT UI-020)
-        self.jd_glide = Some((key.jd, key.tilt));
+        // glide time with the camera instead of jumping (AUDIT UI-020)
+        self.jd_glide = Some(key.jd);
         let mut center = DVec3::new(key.center[0], key.center[1], key.center[2]);
         if let Some(name) = &key.at {
             if let Some(obj) = self.find_object(name) {
@@ -326,27 +589,69 @@ impl Pantheon {
                 eprintln!("warning: path key anchor '{name}' not found");
             }
         }
-        self.cam.fly_to(center, key.mpp, 1600.0, key.dur.max(0.05));
+        self.cam.fly_to_view(center, key.mpp, key.tilt, key.yaw, self.view_w, key.dur.max(0.05));
     }
 
-    pub fn dive_to(&mut self, obj: ObjectRef, w: f64, h: f64) {
-        self.push_history();
+    /// Metres per pixel that frames a half-extent at a comfortable size.
+    fn framing_mpp(&self, half_extent: f64) -> f64 {
+        half_extent * 2.0 / (FRAME_FILL * self.view_h.min(self.view_w))
+    }
+
+    /// Select an object and fly to it, framed.
+    pub fn dive_to(&mut self, obj: ObjectRef) {
         if let ObjectRef::ExoHost(ei) | ObjectRef::ExoPlanet(ei, _) = obj {
             if self.u.exos[ei].dist_pc.is_none() {
-                self.note("distance unknown — this system cannot be charted");
+                self.note("This system has no measured distance, so it can't be placed on the map");
                 return;
             }
+        }
+        let ext = obj_half_extent(&self.u, obj);
+        self.fly_to_object(obj, ext);
+        let name = obj_name(&self.u, obj);
+        self.note(format!("Flying to {name}"));
+    }
+
+    /// Frame a planet's whole moon system.
+    pub fn show_moons(&mut self, pi: usize) {
+        if let Some(ext) = atlas::moon_system_extent(pi) {
+            self.fly_to_object(ObjectRef::Planet(pi), ext);
+        }
+    }
+
+    fn fly_to_object(&mut self, obj: ObjectRef, half_extent: f64) {
+        self.push_history();
+        self.stop_motion();
+        if let ObjectRef::ExoHost(ei) | ObjectRef::ExoPlanet(ei, _) = obj {
             self.scene_exo = Some(ei);
         }
         let pos = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref());
-        let ext = obj_half_extent(&self.u, obj);
-        let mpp = (ext * 2.0) / (0.62 * h.min(w));
+        let mpp = self.framing_mpp(half_extent);
         self.focus = Some(obj);
         self.follow = Some((obj, DVec3::ZERO));
-        let d_log = (self.cam.mpp / mpp).abs().log10().abs();
-        self.cam.fly_to(pos, mpp, w, (0.9 + 0.35 * d_log).clamp(0.9, 4.2));
-        let name = obj_name(&self.u, obj);
-        self.note(format!("→ {name}"));
+        let dur = self.cam.flight_seconds(pos, mpp, self.view_w);
+        self.cam.fly_to_view(pos, mpp, 0.0, 0.0, self.view_w, dur);
+    }
+
+    /// Search results and rail rungs land here.
+    pub fn go_to(&mut self, dest: Dest) {
+        match dest {
+            Dest::Obj(obj) => self.dive_to(obj),
+            Dest::Place { center, width_m, name } => self.fly_to_place(center, width_m, name),
+        }
+    }
+
+    /// Fly to a location in space at a given view width.
+    pub fn fly_to_place(&mut self, center: DVec3, width_m: f64, name: &str) {
+        self.push_history();
+        self.stop_motion();
+        self.follow = None;
+        self.scene_exo = None;
+        let mpp = width_m / self.view_w;
+        let dur = self.cam.flight_seconds(center, mpp, self.view_w);
+        self.cam.fly_to_view(center, mpp, 0.0, 0.0, self.view_w, dur);
+        if !name.is_empty() {
+            self.note(format!("Flying to {name}"));
+        }
     }
 
     pub fn awaken(&mut self) {
@@ -355,7 +660,7 @@ impl Pantheon {
             ObjectRef::Planet(i) => i,
             ObjectRef::Moon(mi) => MOONS[mi].planet,
             _ => {
-                self.note("awakening needs a planet or moon focus");
+                self.note("Select a planet or moon first");
                 return;
             }
         };
@@ -404,53 +709,82 @@ impl Pantheon {
         self.clock.playing = true;
         // a legible default rate: moons visibly orbit, nothing teleports (UX C6)
         self.clock.rate = 3_600.0;
-        self.note(format!("{} system awakened — local N-body live", PLANETS[pi].name));
+        self.note(format!("Simulating the {} system with N-body gravity", PLANETS[pi].name));
     }
 
     // ------------------------------------------------------ frame build
 
     pub fn build_canvas(&mut self, w: f64, h: f64, target: &ViewTarget) {
-        self.dl.clear();
-        let inp = BuildIn {
-            u: &self.u,
-            cam: &self.cam,
-            clock: &self.clock,
-            modes: &self.modes,
-            focus: self.focus,
-            scene_exo: self.scene_exo,
-            island: self.island.as_ref(),
-            w,
-            h,
-            anim_t: self.anim_t,
-        };
-        if std::env::var("PANTHEON_DEBUG_CAM").is_ok() {
-            if let Some(obj) = self.focus {
-                let p = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref());
-                eprintln!(
-                    "cam-obj {:.0} m | jd {:.6}",
-                    (self.cam.center_root() - p).length(),
-                    self.clock.jd
-                );
+        let t = self.anim_t;
+        self.bank.pump(&self.gpu, t);
+        let mut guard = 0;
+        let fo = loop {
+            self.dl.clear();
+            let inp = BuildIn {
+                u: &self.u,
+                cam: &self.cam,
+                clock: &self.clock,
+                modes: &self.modes,
+                focus: self.focus,
+                scene_exo: self.scene_exo,
+                island: self.island.as_ref(),
+                w,
+                h,
+                anim_t: self.anim_t,
+                ppp: self.ppp,
+                tex: &self.bank.status,
+            };
+            let fo = build(&inp, &mut self.dl);
+            for t in std::mem::take(&mut self.dl.want_tex) {
+                self.bank.want(t);
             }
-        }
-        let fo = build(&inp, &mut self.dl);
+            guard += 1;
+            // exports wait for imagery so a shot never catches a half-loaded surface
+            if self.immediate && self.bank.busy() && guard < 4 {
+                self.bank.finish_loading(&self.gpu);
+                continue;
+            }
+            break fo;
+        };
         // keep a copy of pickables for next frame's input hit tests
         self.picks.clear();
         self.picks.extend(fo.picks.iter().map(|p| Pickable { pos: p.pos, r: p.r, obj: p.obj }));
         let uni = fo.uni;
         self.fo = Some(fo);
-        self.pipes.render(&self.gpu, target, &self.dl, &uni);
+        self.pipes.render(&self.gpu, target, &self.dl, &uni, &mut self.bank);
     }
 
     // -------------------------------------------------------------- input
 
+    /// What's under a canvas point: a label first (they're the bigger target),
+    /// then the nearest body. A click anywhere on a large disc still lands on it.
+    fn pick_at(&self, sp: [f32; 2], rect: Rect) -> Option<ObjectRef> {
+        let pos = egui::pos2(rect.left() + sp[0], rect.top() + sp[1]);
+        if let Some((_, obj)) = self.label_hits.iter().find(|(r, _)| r.contains(pos)) {
+            return Some(*obj);
+        }
+        let mut best: Option<(f32, ObjectRef)> = None;
+        for pk in &self.picks {
+            let d = (pk.pos[0] - sp[0]).hypot(pk.pos[1] - sp[1]);
+            if d < pk.r.max(11.0) {
+                // tiny things sitting on big things should win the click
+                let score = d / pk.r.max(11.0) + pk.r.min(4000.0) * 1e-4;
+                if best.map(|(b, _)| score < b).unwrap_or(true) {
+                    best = Some((score, pk.obj));
+                }
+            }
+        }
+        best.map(|(_, o)| o)
+    }
+
     pub fn handle_input(&mut self, ctx: &egui::Context, resp: &egui::Response, rect: Rect) {
-        let (scroll, pointer, any_down, dbl) = ctx.input(|i| {
+        let (scroll, zoom_mul, pointer, shift, dt) = ctx.input(|i| {
             (
-                i.smooth_scroll_delta.y,
+                i.raw_scroll_delta,
+                i.zoom_delta(),
                 i.pointer.hover_pos(),
-                i.pointer.any_down(),
-                i.pointer.button_double_clicked(egui::PointerButton::Primary),
+                i.modifiers.shift,
+                i.stable_dt as f64,
             )
         });
         let proj = crate::frames::Proj::new(
@@ -459,147 +793,277 @@ impl Pantheon {
             rect.height() as f64,
             &self.u.gal,
         );
-        // wheel zoom anchored at the cursor — solved against the NEW basis,
-        // which can rotate with scale (AUDIT FND-022)
-        if scroll.abs() > 0.01 && resp.hovered() {
-            let f = (-scroll as f64 * 0.0022).exp();
-            let new = (self.cam.mpp * f).clamp(crate::frames::MPP_MIN, crate::frames::MPP_MAX);
-            if let Some(p) = pointer {
-                let sx = (p.x - rect.left()) as f64;
-                let sy = (p.y - rect.top()) as f64;
+        let sp = pointer.map(|p| [p.x - rect.left(), p.y - rect.top()]);
+
+        // ---- hover: name it and show the pointer can act on it
+        self.hover = None;
+        if resp.hovered() || resp.dragged() {
+            if let (Some(s), false) = (sp, resp.dragged()) {
+                self.hover = self.pick_at(s, rect);
+            }
+            ctx.set_cursor_icon(if resp.dragged() {
+                egui::CursorIcon::Grabbing
+            } else if self.hover.is_some() {
+                egui::CursorIcon::PointingHand
+            } else {
+                egui::CursorIcon::Grab
+            });
+        }
+
+        // ---- zoom: a notch is ~0.2 decades, Shift for fine control. Pinch too.
+        let notch = (scroll.y + if shift { scroll.x } else { 0.0 }) as f64;
+        let mut dex = -notch * 0.005 * if shift { 0.2 } else { 1.0 };
+        if zoom_mul != 1.0 {
+            dex -= (zoom_mul as f64).log10();
+        }
+        if dex.abs() > 1e-6 && resp.hovered() {
+            let world_anchor = sp.map(|s| {
+                let (sx, sy) = (s[0] as f64, s[1] as f64);
                 // local anchor math: full precision inside attached frames
                 let mut world = proj.unproject_local(sx, sy);
-                // guided zoom ("zoom gravity"): when diving in, the anchor
-                // leans toward the nearest point of interest near the cursor,
-                // so repeated scrolling converges on it instead of demanding
-                // pixel-perfect aim across 19 orders of magnitude
-                if new < self.cam.mpp {
+                // guided zoom: diving in, the anchor leans toward the nearest
+                // point of interest, so repeated scrolling converges on it
+                // instead of demanding pixel-perfect aim across 20 decades
+                if dex < 0.0 {
                     let mut best: Option<(f32, ObjectRef)> = None;
                     for pk in &self.picks {
-                        let d = ((pk.pos[0] - sx as f32).powi(2)
-                            + (pk.pos[1] - sy as f32).powi(2))
-                        .sqrt();
+                        let d = (pk.pos[0] - s[0]).hypot(pk.pos[1] - s[1]);
                         if d < 150.0 && best.map(|(b, _)| d < b).unwrap_or(true) {
                             best = Some((d, pk.obj));
                         }
                     }
                     if let Some((d, obj)) = best {
-                        let poi = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref())
-                            - proj.origin;
-                        // stronger pull the closer the cursor already is
+                        let poi = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref()) - proj.origin;
                         let k = (0.45 * (1.0 - (d as f64 / 150.0))).clamp(0.0, 0.45);
                         world = world + (poi - world) * k;
                     }
                 }
-                self.cam.mpp = new;
-                let proj2 = crate::frames::Proj::new(
-                    &self.cam,
-                    rect.width() as f64,
-                    rect.height() as f64,
-                    &self.u.gal,
-                );
-                self.cam.center = world
-                    - proj2.right * ((sx - proj2.w * 0.5) * new)
-                    - proj2.up * ((proj2.h * 0.5 - sy) * new);
-            } else {
-                self.cam.mpp = new;
-            }
+                (sx, sy, world)
+            });
+            self.zoom_pending += dex;
+            self.zoom_anchor = world_anchor;
             self.cam.anim = None;
             self.play = None;
-            self.sync_follow();
+            self.pan_vel = [0.0, 0.0];
+            self.dismiss_intro();
         }
-        // drag pan / tilt
-        if resp.dragged_by(egui::PointerButton::Primary) {
+
+        // ---- drag: pan with left (coasts on release); orbit with right or Shift
+        let orbiting = resp.dragged_by(egui::PointerButton::Secondary)
+            || (shift && resp.dragged_by(egui::PointerButton::Primary));
+        if orbiting {
+            let d = resp.drag_delta();
+            self.cam.tilt = (self.cam.tilt + d.y as f64 * 0.005).clamp(-1.2, 1.45);
+            self.cam.yaw -= d.x as f64 * 0.005;
+            self.cam.anim = None;
+            self.pan_vel = [0.0, 0.0];
+        } else if resp.dragged_by(egui::PointerButton::Primary) {
             let d = resp.drag_delta();
             self.cam.center -= proj.right * (d.x as f64 * self.cam.mpp);
             self.cam.center += proj.up * (d.y as f64 * self.cam.mpp);
             self.cam.anim = None;
             self.play = None;
+            self.pan_vel = [0.0, 0.0];
+            self.zoom_pending = 0.0;
+            self.zoom_anchor = None;
             self.sync_follow();
+            // track release velocity; ignore frames where the hand stopped
+            let inst = [d.x as f64 / dt.max(1e-3), d.y as f64 / dt.max(1e-3)];
+            self.drag_vel = [self.drag_vel[0] * 0.55 + inst[0] * 0.45, self.drag_vel[1] * 0.55 + inst[1] * 0.45];
+            if d != egui::Vec2::ZERO {
+                self.last_drag = self.anim_t;
+            }
+            self.dismiss_intro();
+        } else {
+            if resp.drag_stopped() && self.anim_t - self.last_drag < 0.08 {
+                let speed = self.drag_vel[0].hypot(self.drag_vel[1]);
+                if speed > 40.0 {
+                    let cap = (2600.0 / speed).min(1.0);
+                    self.pan_vel = [self.drag_vel[0] * cap, self.drag_vel[1] * cap];
+                }
+            }
+            self.drag_vel = [0.0, 0.0];
         }
-        if resp.dragged_by(egui::PointerButton::Secondary) {
-            let d = resp.drag_delta();
-            self.cam.tilt = (self.cam.tilt + d.y as f64 * 0.004).clamp(-0.2, 1.30);
+
+        // ---- click: select. Double-click: fly there, or zoom in on empty space.
+        if resp.drag_started() {
+            self.pan_vel = [0.0, 0.0];
         }
-        // click select / double-click dive
-        if (resp.clicked() || dbl) && !any_down {
-            if let Some(p) = pointer {
-                let sp = [(p.x - rect.left()), (p.y - rect.top())];
-                let mut best: Option<(f32, ObjectRef)> = None;
-                for pk in &self.picks {
-                    let dx = pk.pos[0] - sp[0];
-                    let dy = pk.pos[1] - sp[1];
-                    let d = (dx * dx + dy * dy).sqrt();
-                    if d < pk.r.max(12.0) && best.map(|(b, _)| d < b).unwrap_or(true) {
-                        best = Some((d, pk.obj));
+        if let Some(s) = sp {
+            let hit = self.pick_at(s, rect);
+            if resp.double_clicked() {
+                self.pan_vel = [0.0, 0.0];
+                match hit {
+                    Some(obj) => self.dive_to(obj),
+                    None => {
+                        let world = proj.unproject(s[0] as f64, s[1] as f64);
+                        self.follow = None;
+                        let mpp = self.cam.mpp / 2.5;
+                        self.cam.fly_to(world, mpp, rect.width() as f64, 0.7);
                     }
                 }
-                match best {
-                    Some((_, obj)) => {
-                        if dbl {
-                            self.dive_to(obj, rect.width() as f64, rect.height() as f64);
-                        } else {
-                            self.focus = Some(obj);
-                        }
-                    }
-                    None => {
-                        // standard map behavior (UX C5): empty double-click
-                        // zooms in at the cursor; empty click deselects
-                        if dbl {
-                            let sx = (p.x - rect.left()) as f64;
-                            let sy = (p.y - rect.top()) as f64;
-                            let world = proj.unproject(sx, sy);
-                            self.follow = None;
-                            self.cam.fly_to(
-                                world,
-                                self.cam.mpp / 2.5,
-                                rect.width() as f64,
-                                0.7,
-                            );
-                        } else {
-                            self.focus = None;
-                        }
-                    }
+            } else if resp.clicked() {
+                self.pan_vel = [0.0, 0.0];
+                self.focus = hit;
+                // following continues only for the thing already being followed
+                if self.follow.map(|(o, _)| Some(o) != hit).unwrap_or(false) {
+                    self.follow = None;
                 }
             }
         }
-        // keys — suppressed while a text field is focused
-        let typing = ctx.memory(|m| m.focused().is_some());
-        if typing {
+
+        // ---- keys, suppressed while typing
+        self.key_pan = [0.0, 0.0];
+        if ctx.wants_keyboard_input() {
             return;
         }
-        ctx.input(|i| {
-            if i.key_pressed(egui::Key::Escape) {
-                self.focus = None;
-                self.follow = None;
+        use egui::Key as K;
+        let (mut actions, held) = ctx.input(|i| {
+            let mut a: Vec<KeyAction> = Vec::new();
+            for (key, act) in [
+                (K::Escape, KeyAction::Escape),
+                (K::L, KeyAction::TogglePlay),
+                (K::Space, KeyAction::TogglePlay),
+                (K::T, KeyAction::Truth),
+                (K::G, KeyAction::Gravity),
+                (K::Y, KeyAction::SystemView),
+                (K::H, KeyAction::Home),
+                (K::Backspace, KeyAction::Back),
+                (K::N, KeyAction::Now),
+                (K::M, KeyAction::Ambience),
+                (K::F, KeyAction::FlyToSelection),
+                (K::Num0, KeyAction::LevelView),
+                (K::OpenBracket, KeyAction::Slower),
+                (K::CloseBracket, KeyAction::Faster),
+            ] {
+                if i.key_pressed(key) {
+                    a.push(act);
+                }
             }
-            if i.key_pressed(egui::Key::L) {
-                self.modes.living = !self.modes.living;
-                self.clock.playing = self.modes.living;
+            if i.key_pressed(K::Slash) {
+                // "?" is Shift+/ on most layouts
+                a.push(if i.modifiers.shift { KeyAction::Help } else { KeyAction::Search });
             }
-            if i.key_pressed(egui::Key::T) {
-                self.modes.truth = !self.modes.truth;
+            if i.modifiers.command && i.key_pressed(K::K) {
+                a.push(KeyAction::Search);
             }
-            if i.key_pressed(egui::Key::G) {
-                self.modes.gravity = !self.modes.gravity;
+            for e in &i.events {
+                if let egui::Event::Text(t) = e {
+                    if t == "?" {
+                        a.push(KeyAction::Help);
+                    }
+                }
             }
-            if i.key_pressed(egui::Key::Y) {
-                self.modes.system_view = !self.modes.system_view;
+            let mut held = (0.0f64, 0.0f64, 0.0f64);
+            if i.key_down(K::ArrowLeft) || i.key_down(K::A) {
+                held.0 += 1.0;
             }
-            if i.key_pressed(egui::Key::Slash) {
-                self.search_open = true;
+            if i.key_down(K::ArrowRight) || i.key_down(K::D) {
+                held.0 -= 1.0;
             }
-            if i.key_pressed(egui::Key::H) {
-                let jd = self.clock.jd;
-                self.push_history();
-                self.focus = Some(ObjectRef::Planet(2));
-                self.follow = Some((ObjectRef::Planet(2), DVec3::ZERO));
-                self.cam.fly_to(sim::body_pos(2, jd), 3.6e7 / rect.width() as f64, rect.width() as f64, 2.4);
+            if i.key_down(K::ArrowUp) || i.key_down(K::W) {
+                held.1 += 1.0;
             }
-            if i.key_pressed(egui::Key::Backspace) {
-                self.go_back(rect.width() as f64);
+            if i.key_down(K::ArrowDown) || i.key_down(K::S) {
+                held.1 -= 1.0;
             }
+            if i.key_down(K::Plus) || i.key_down(K::Equals) {
+                held.2 -= 1.0;
+            }
+            if i.key_down(K::Minus) {
+                held.2 += 1.0;
+            }
+            (a, held)
         });
+        self.key_pan = [held.0 * 520.0, held.1 * 520.0];
+        if held.2 != 0.0 {
+            self.zoom_pending += held.2 * 1.35 * dt;
+            let (cx, cy) = (rect.width() as f64 * 0.5, rect.height() as f64 * 0.5);
+            self.zoom_anchor = Some((cx, cy, proj.unproject_local(cx, cy)));
+            self.cam.anim = None;
+            self.dismiss_intro();
+        }
+        actions.dedup_by(|a, b| std::mem::discriminant(a) == std::mem::discriminant(b));
+        for act in actions {
+            self.key_action(act);
+        }
+    }
+
+    fn key_action(&mut self, act: KeyAction) {
+        match act {
+            KeyAction::Escape => {
+                if self.show_help {
+                    self.show_help = false;
+                } else if self.show_layers {
+                    self.show_layers = false;
+                } else {
+                    self.focus = None;
+                    self.follow = None;
+                }
+            }
+            KeyAction::TogglePlay => {
+                self.clock.playing = !self.clock.playing;
+                self.modes.living = self.clock.playing;
+            }
+            KeyAction::Truth => self.modes.truth = !self.modes.truth,
+            KeyAction::Gravity => {
+                if matches!(self.focus, Some(ObjectRef::Planet(_)) | Some(ObjectRef::Moon(_))) {
+                    self.modes.gravity = !self.modes.gravity;
+                } else {
+                    self.modes.gravity = false;
+                    self.note("Select a planet or moon to see its gravity field");
+                }
+            }
+            KeyAction::SystemView => {
+                if self.scene_exo.is_some() {
+                    self.modes.system_view = !self.modes.system_view;
+                } else {
+                    self.note("System view is for exoplanet systems: search for one to fly there");
+                }
+            }
+            KeyAction::Search => self.search.open_palette(),
+            KeyAction::Help => self.show_help = !self.show_help,
+            KeyAction::Home => self.go_home(),
+            KeyAction::Back => self.go_back(),
+            KeyAction::Now => {
+                self.clock.jd = jd_now();
+                self.note("Back to the present moment");
+            }
+            KeyAction::Ambience => self.toggle_ambience(),
+            KeyAction::FlyToSelection => {
+                if let Some(obj) = self.focus {
+                    self.dive_to(obj);
+                }
+            }
+            KeyAction::LevelView => {
+                let (c, mpp) = (self.cam.center_root(), self.cam.mpp);
+                self.cam.fly_to_view(c, mpp, 0.0, 0.0, self.view_w, 0.5);
+            }
+            KeyAction::Slower => self.step_rate(-1),
+            KeyAction::Faster => self.step_rate(1),
+        }
+    }
+
+    pub fn toggle_ambience(&mut self) {
+        if self.ambience_available == Some(false) {
+            self.note("No audio output was found, so ambience is unavailable");
+            return;
+        }
+        if !cfg!(feature = "audio") {
+            self.note("This build has no audio support");
+            return;
+        }
+        self.settings.ambience_on = !self.settings.ambience_on;
+        self.save_settings();
+    }
+
+    pub fn step_rate(&mut self, dir: i32) {
+        let i = ui::RATES
+            .iter()
+            .position(|(_, r)| (self.clock.rate - r).abs() / r < 0.01)
+            .unwrap_or(3) as i32;
+        let n = (i + dir).clamp(0, ui::RATES.len() as i32 - 1) as usize;
+        self.clock.rate = ui::RATES[n].1;
     }
 
     fn sync_follow(&mut self) {
@@ -607,12 +1071,25 @@ impl Pantheon {
             let p = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref());
             let off = self.cam.center_root() - p;
             // release once the subject is far outside the view
-            if off.length() > 12.0 * self.cam.mpp * 1600.0 {
+            if off.length() > 12.0 * self.cam.mpp * self.view_w {
                 self.follow = None;
             } else {
                 self.follow = Some((obj, off));
             }
         }
+    }
+
+    /// True while something on screen is moving and needs every frame drawn.
+    pub fn animating(&self) -> bool {
+        self.cam.anim.is_some()
+            || self.zoom_pending != 0.0
+            || self.pan_vel != [0.0, 0.0]
+            || self.key_pan != [0.0, 0.0]
+            || self.clock.playing
+            || self.bank.busy()
+            || self.play.is_some()
+            || self.bank.status.fade.iter().any(|f| *f > 0.0 && *f < 1.0)
+            || self.pres_moving
     }
 
     // ----------------------------------------------------------- overlay
@@ -628,742 +1105,84 @@ impl Pantheon {
         });
         let mut placed: Vec<Rect> = Vec::new();
         let mut placed_texts: std::collections::HashSet<String> = Default::default();
+        let mut hits: Vec<(Rect, ObjectRef)> = Vec::new();
+        let show = self.modes.labels;
         for i in order {
             let l = &fo.labels[i];
+            if !show && l.priority < 90 {
+                continue;
+            }
+            if l.color[3] < 0.02 {
+                continue;
+            }
             let pos = egui::pos2(rect.left() + l.pos[0], rect.top() + l.pos[1]);
-            let w = l.text.chars().count() as f32 * l.size * 0.52 + 6.0;
+            let w = l.text.chars().count() as f32 * l.size * 0.5 + 6.0;
             let r = Rect::from_center_size(pos, egui::vec2(w, l.size + 5.0));
             if !rect.intersects(r) || placed.iter().any(|p| p.intersects(r)) {
                 continue;
             }
             placed.push(r);
             placed_texts.insert(l.text.clone());
-            let col = theme::col32([l.color[0], l.color[1], l.color[2]], l.color[3]);
-            let font = FontId::new(l.size, FontFamily::Proportional);
-            painter.text(
-                pos + egui::vec2(0.8, 0.8),
-                Align2::CENTER_CENTER,
-                &l.text,
-                font.clone(),
-                Color32::from_black_alpha(200),
-            );
-            painter.text(pos, Align2::CENTER_CENTER, &l.text, font, col);
+            if let Some(o) = l.obj {
+                hits.push((r, o));
+            }
+            let hovered = l.obj.is_some() && l.obj == self.hover;
+            let col = if hovered {
+                theme::BRASS
+            } else {
+                theme::col32([l.color[0], l.color[1], l.color[2]], l.color[3])
+            };
+            let font = theme::serif(l.size);
+            ui::halo_text(&painter, pos, Align2::CENTER_CENTER, &l.text, font, col, l.color[3]);
         }
         self.sticky = placed_texts;
-        // focus reticle
+        self.label_hits = hits;
+
+        let proj = crate::frames::Proj::new(
+            &self.cam,
+            rect.width() as f64,
+            rect.height() as f64,
+            &self.u.gal,
+        );
+        // selection and hover: thin rings hugging the object, whatever its size
+        let body_r = |this: &Self, obj: ObjectRef| -> f32 {
+            this.picks.iter().find(|p| p.obj == obj).map(|p| p.r).unwrap_or(8.0)
+        };
+        if let Some(obj) = self.hover {
+            if Some(obj) != self.focus {
+                let p = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref());
+                let s = proj.px(p);
+                let c = egui::pos2(rect.left() + s[0], rect.top() + s[1]);
+                let r = body_r(self, obj).max(6.0) + 5.0;
+                if r < 90.0 {
+                    painter.circle_stroke(c, r, egui::Stroke::new(1.0, theme::col32(theme::INK_WHITE, 0.45)));
+                }
+            }
+        }
         if let Some(obj) = self.focus {
             let p = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref());
-            let proj = crate::frames::Proj::new(
-                &self.cam,
-                rect.width() as f64,
-                rect.height() as f64,
-                &self.u.gal,
-            );
             let s = proj.px(p);
             let c = egui::pos2(rect.left() + s[0], rect.top() + s[1]);
-            if rect.contains(c) {
-                let r = 14.0;
-                for (a0, a1) in [(0.1f32, 0.4f32), (1.67, 1.97), (3.24, 3.54), (4.81, 5.11)] {
-                    let pts: Vec<egui::Pos2> = (0..=8)
+            let r = body_r(self, obj).max(7.0) + 8.0;
+            // no reticle once the body is large: it's plainly the subject
+            if rect.expand(r).contains(c) && r < 70.0 {
+                let gap = 0.42f32;
+                for q in 0..4 {
+                    let a0 = q as f32 * std::f32::consts::FRAC_PI_2 + gap;
+                    let a1 = (q + 1) as f32 * std::f32::consts::FRAC_PI_2 - gap;
+                    let pts: Vec<egui::Pos2> = (0..=10)
                         .map(|k| {
-                            let a = a0 + (a1 - a0) * k as f32 / 8.0;
+                            let a = a0 + (a1 - a0) * k as f32 / 10.0;
                             egui::pos2(c.x + r * a.cos(), c.y + r * a.sin())
                         })
                         .collect();
-                    painter.add(egui::Shape::line(
-                        pts,
-                        egui::Stroke::new(1.0, theme::col32(theme::INK_GOLD, 0.85)),
-                    ));
+                    painter.add(egui::Shape::line(pts, egui::Stroke::new(1.2, theme::BRASS)));
                 }
             }
         }
     }
 
     // ------------------------------------------------------------ panels
-
-    /// Search over everything nameable: planets, moons, craft, named stars,
-    /// exoplanet hosts (UX C1).
-    fn search_results(&self) -> Vec<(String, ObjectRef)> {
-        let q = self.search_q.trim().to_lowercase();
-        if q.len() < 2 {
-            return Vec::new();
-        }
-        let mut out: Vec<(String, ObjectRef)> = Vec::new();
-        for (i, p) in PLANETS.iter().enumerate() {
-            if p.name.to_lowercase().contains(&q) {
-                out.push((format!("{} — planet", p.name), ObjectRef::Planet(i)));
-            }
-        }
-        for (i, m) in MOONS.iter().enumerate() {
-            if m.name.to_lowercase().contains(&q) {
-                out.push((
-                    format!("{} — moon of {}", m.name, PLANETS[m.planet].name),
-                    ObjectRef::Moon(i),
-                ));
-            }
-        }
-        for (i, c) in self.u.craft.iter().enumerate() {
-            if c.name.to_lowercase().contains(&q) {
-                out.push((format!("{} — spacecraft", c.name), ObjectRef::Craft(i)));
-            }
-        }
-        for (i, s) in self.u.stars.iter().enumerate() {
-            if let Some(n) = s.name {
-                if n.to_lowercase().contains(&q) {
-                    out.push((format!("{n} — star, {:.1} pc", s.dist_pc), ObjectRef::Star(i)));
-                }
-            }
-        }
-        let mut ex = 0;
-        for (i, e) in self.u.exos.iter().enumerate() {
-            if e.dist_pc.is_some() && e.host.to_lowercase().contains(&q) {
-                out.push((
-                    format!("{} — {} planets", e.host, e.planets.len()),
-                    ObjectRef::ExoHost(i),
-                ));
-                ex += 1;
-                if ex > 8 {
-                    break;
-                }
-            }
-        }
-        out.truncate(12);
-        out
-    }
-
-    fn search_panel(&mut self, ctx: &egui::Context, rect: Rect) {
-        let results = self.search_results();
-        let mut dive: Option<ObjectRef> = None;
-        let mut close = false;
-        egui::Area::new(egui::Id::new("search"))
-            .anchor(Align2::CENTER_TOP, [0.0, 56.0])
-            .show(ctx, |ui| {
-                egui::Frame::window(&ctx.style()).show(ui, |ui| {
-                    ui.set_width(330.0);
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("⌕").size(15.0).color(theme::GOLD));
-                        let te = ui.add(
-                            egui::TextEdit::singleline(&mut self.search_q)
-                                .hint_text("planet, moon, star, craft, exo system…")
-                                .desired_width(260.0),
-                        );
-                        te.request_focus();
-                        if ui.button("✕").clicked() {
-                            close = true;
-                        }
-                    });
-                    for (label, obj) in &results {
-                        if ui
-                            .selectable_label(false, egui::RichText::new(label).size(12.0))
-                            .clicked()
-                        {
-                            dive = Some(*obj);
-                        }
-                    }
-                    if results.is_empty() && self.search_q.trim().len() >= 2 {
-                        ui.label(
-                            egui::RichText::new("no match").size(11.0).color(theme::TEXT_DIM),
-                        );
-                    }
-                });
-            });
-        if close || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.search_open = false;
-        }
-        if let Some(obj) = dive {
-            self.search_open = false;
-            self.search_q.clear();
-            self.dive_to(obj, rect.width() as f64, rect.height() as f64);
-        }
-    }
-
-    pub fn draw_panels(&mut self, ctx: &egui::Context, rect: Rect) {
-        self.top_chip(ctx);
-        if self.cinema {
-            return;
-        }
-        if self.search_open {
-            self.search_panel(ctx, rect);
-        }
-        // persistent control hints (UX C2)
-        egui::Area::new(egui::Id::new("hints"))
-            .anchor(Align2::RIGHT_BOTTOM, [-14.0, -12.0])
-            .show(ctx, |ui| {
-                ui.label(
-                    egui::RichText::new(
-                        "scroll zoom · drag pan · double-click dive · right-drag tilt · / search",
-                    )
-                    .size(10.5)
-                    .color(theme::col32(theme::INK_FAINT, 1.0)),
-                );
-            });
-        self.mode_rail(ctx, rect);
-        if self.modes.ladder {
-            self.ladder(ctx, rect);
-        }
-        self.time_bar(ctx, rect);
-        if self.focus.is_some() {
-            self.object_card(ctx, rect);
-        }
-        if self.modes.truth {
-            self.truth_legend(ctx);
-        }
-        if self.show_capture {
-            self.capture_panel(ctx, rect);
-        }
-        if self.show_help {
-            egui::Area::new(egui::Id::new("help"))
-                .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    egui::Frame::window(&ctx.style()).show(ui, |ui| {
-                        ui.set_width(340.0);
-                        ui.label(
-                            egui::RichText::new("CONTROLS")
-                                .font(FontId::new(17.0, FontFamily::Name("heading".into())))
-                                .color(theme::GOLD),
-                        );
-                        for (k, v) in [
-                            ("wheel", "infinite zoom at the cursor"),
-                            ("left drag", "pan"),
-                            ("right drag ↕", "tilt the atlas plane"),
-                            ("click / double-click", "select / dive"),
-                            ("L", "Living Orbits (time animation)"),
-                            ("T", "Truth mode — ink by evidence"),
-                            ("G", "Gravity view (L-points, Hill, Roche)"),
-                            ("Y", "System View (log-spaced schematic)"),
-                            ("H", "home (Earth)"),
-                            ("Esc", "release selection"),
-                        ] {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    egui::RichText::new(k).size(12.0).color(theme::GOLD),
-                                );
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        ui.label(
-                                            egui::RichText::new(v)
-                                                .size(11.5)
-                                                .color(theme::TEXT_DIM),
-                                        );
-                                    },
-                                );
-                            });
-                        }
-                        if ui.button("close").clicked() {
-                            self.show_help = false;
-                        }
-                    });
-                });
-        }
-        if let Some((msg, _)) = &self.status {
-            let msg = msg.clone();
-            egui::Area::new(egui::Id::new("status"))
-                .anchor(Align2::CENTER_BOTTOM, [0.0, -64.0])
-                .show(ctx, |ui| {
-                    egui::Frame::window(&ctx.style()).show(ui, |ui| {
-                        ui.label(egui::RichText::new(msg).color(theme::GOLD).size(13.0));
-                    });
-                });
-        }
-    }
-
-    fn top_chip(&mut self, ctx: &egui::Context) {
-        let Some(fo) = &self.fo else { return };
-        let band = fo.band_name.clone();
-        let scale = fo.scale_text.clone();
-        egui::Area::new(egui::Id::new("chip"))
-            .anchor(Align2::LEFT_TOP, [14.0, 12.0])
-            .show(ctx, |ui| {
-                egui::Frame::window(&ctx.style()).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("PANTHEON")
-                                .font(FontId::new(19.0, FontFamily::Name("heading".into())))
-                                .color(theme::GOLD),
-                        );
-                        ui.add_space(6.0);
-                        ui.label(
-                            egui::RichText::new(&band)
-                                .size(13.5)
-                                .color(theme::TEXT),
-                        );
-                    });
-                    ui.label(egui::RichText::new(&scale).size(11.5).color(theme::TEXT_DIM));
-                    // active projection frame — the reorientation is deliberate,
-                    // so say so instead of feeling like a glitch (UX B4)
-                    let lw = self.cam.log_width(1600.0);
-                    let frame = if lw < 18.3 {
-                        "ecliptic frame"
-                    } else if lw < 19.3 {
-                        "reorienting → galactic"
-                    } else if lw < 22.3 {
-                        "galactic frame"
-                    } else if lw < 23.2 {
-                        "reorienting → supergalactic"
-                    } else {
-                        "supergalactic frame"
-                    };
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new(fmt_jd(self.clock.jd))
-                                .size(11.5)
-                                .color(theme::col32(theme::INK_BLUE, 0.9)),
-                        );
-                        ui.label(
-                            egui::RichText::new(format!("· {frame}"))
-                                .size(10.5)
-                                .color(theme::TEXT_DIM),
-                        );
-                    });
-                });
-            });
-    }
-
-    fn mode_rail(&mut self, ctx: &egui::Context, _rect: Rect) {
-        egui::Area::new(egui::Id::new("rail"))
-            .anchor(Align2::LEFT_TOP, [14.0, 118.0])
-            .show(ctx, |ui| {
-                egui::Frame::window(&ctx.style()).show(ui, |ui| {
-                    ui.set_width(118.0);
-                    let mut b = |ui: &mut egui::Ui, on: &mut bool, label: &str| {
-                        if ui.selectable_label(*on, label).clicked() {
-                            *on = !*on;
-                        }
-                    };
-                    let mut playing = self.clock.playing;
-                    b(ui, &mut playing, "⟳ Living Orbits");
-                    self.clock.playing = playing;
-                    b(ui, &mut self.modes.trails, "∿ Trails");
-                    // capability-aware: disabled with a reason, never silent (UX C4)
-                    let grav_ok = matches!(
-                        self.focus,
-                        Some(ObjectRef::Planet(_)) | Some(ObjectRef::Moon(_))
-                    );
-                    let r = ui
-                        .add_enabled(
-                            grav_ok,
-                            egui::SelectableLabel::new(self.modes.gravity, "◉ Gravity"),
-                        )
-                        .on_disabled_hover_text("select a planet or moon first");
-                    if r.clicked() {
-                        self.modes.gravity = !self.modes.gravity;
-                    }
-                    b(ui, &mut self.modes.truth, "◈ Truth");
-                    let sys_ok = self.scene_exo.is_some();
-                    let r = ui
-                        .add_enabled(
-                            sys_ok,
-                            egui::SelectableLabel::new(self.modes.system_view, "☰ System View"),
-                        )
-                        .on_disabled_hover_text("enter an exoplanet system first");
-                    if r.clicked() {
-                        self.modes.system_view = !self.modes.system_view;
-                    }
-                    b(ui, &mut self.modes.ladder, "☷ Ladder");
-                    b(ui, &mut self.show_capture, "✧ Capture");
-                    b(ui, &mut self.search_open, "⌕ Search");
-                    ui.separator();
-                    b(ui, &mut self.ambience_on, "♪ Ambience");
-                    if self.ambience_on {
-                        ui.add(
-                            egui::Slider::new(&mut self.ambience_vol, 0.0..=1.0)
-                                .show_value(false),
-                        );
-                    }
-                    b(ui, &mut self.show_help, "? Help");
-                    ui.separator();
-                    let back_ok = !self.history.is_empty();
-                    let r = ui
-                        .add_enabled(back_ok, egui::SelectableLabel::new(false, "⟵ Back"))
-                        .on_disabled_hover_text("no earlier viewpoint")
-                        .on_hover_text("Backspace");
-                    if r.clicked() {
-                        self.go_back(1600.0);
-                    }
-                    if ui.selectable_label(false, "⌂ Home (Earth)").clicked() {
-                        let jd = self.clock.jd;
-                        self.push_history();
-                        self.focus = Some(ObjectRef::Planet(2));
-                        self.follow = Some((ObjectRef::Planet(2), DVec3::ZERO));
-                        self.cam.fly_to(sim::body_pos(2, jd), 3.6e7 / 1600.0, 1600.0, 2.4);
-                    }
-                });
-            });
-    }
-
-    fn ladder(&mut self, ctx: &egui::Context, rect: Rect) {
-        egui::Area::new(egui::Id::new("ladder"))
-            .anchor(Align2::RIGHT_CENTER, [-12.0, 0.0])
-            .show(ctx, |ui| {
-                egui::Frame::window(&ctx.style()).show(ui, |ui| {
-                    let h = (rect.height() * 0.62).clamp(300.0, 620.0);
-                    let (resp, p) =
-                        ui.allocate_painter(egui::vec2(150.0, h), egui::Sense::click());
-                    let r = resp.rect;
-                    let (lo, hi) = (6.0f32, 26.5f32);
-                    let y_of = |lwv: f32| r.bottom() - (lwv - lo) / (hi - lo) * r.height();
-                    p.line_segment(
-                        [egui::pos2(r.left() + 12.0, r.top()), egui::pos2(r.left() + 12.0, r.bottom())],
-                        egui::Stroke::new(1.0, theme::GOLD_DIM),
-                    );
-                    let rungs: [(f32, &str); 11] = [
-                        (7.0, "Planet"),
-                        (9.0, "Moons"),
-                        (11.0, "Inner System"),
-                        (13.0, "Outer System"),
-                        (14.5, "Heliosphere"),
-                        (16.0, "Oort Cloud"),
-                        (17.5, "Near Stars"),
-                        (19.0, "Deep Stars"),
-                        (21.0, "Galaxy"),
-                        (23.0, "Local Group"),
-                        (24.8, "Cosmic Web"),
-                    ];
-                    for (lwv, name) in rungs {
-                        let y = y_of(lwv);
-                        p.line_segment(
-                            [egui::pos2(r.left() + 6.0, y), egui::pos2(r.left() + 18.0, y)],
-                            egui::Stroke::new(1.0, theme::GOLD_DIM),
-                        );
-                        p.text(
-                            egui::pos2(r.left() + 24.0, y),
-                            Align2::LEFT_CENTER,
-                            name,
-                            FontId::new(11.5, FontFamily::Proportional),
-                            theme::TEXT_DIM,
-                        );
-                        p.text(
-                            egui::pos2(r.right() - 4.0, y),
-                            Align2::RIGHT_CENTER,
-                            format!("10^{lwv:.0}"),
-                            FontId::new(9.5, FontFamily::Proportional),
-                            theme::col32(theme::INK_FAINT, 1.0),
-                        );
-                    }
-                    // current position marker
-                    let lw_now = self.cam.log_width(rect.width() as f64) as f32;
-                    let y = y_of(lw_now.clamp(lo, hi));
-                    p.circle_stroke(
-                        egui::pos2(r.left() + 12.0, y),
-                        5.0,
-                        egui::Stroke::new(1.4, theme::GOLD),
-                    );
-                    // click to jump — rungs carry semantic destinations, not
-                    // just a scale (AUDIT FND-021)
-                    if resp.clicked() {
-                        if let Some(pos) = resp.interact_pointer_pos() {
-                            let lwv = (lo + (r.bottom() - pos.y) / r.height() * (hi - lo)) as f64;
-                            let mpp = 10f64.powf(lwv) / rect.width() as f64;
-                            let anchor = if lwv < 16.0 {
-                                self.cam.center_root() // stay with the current subject
-                            } else if lwv < 20.0 {
-                                DVec3::ZERO // the Sun anchors stellar scales
-                            } else if lwv < 22.4 {
-                                self.u.gal.center // the Galaxy band
-                            } else {
-                                DVec3::ZERO // Local Group / web charts around the MW
-                            };
-                            self.push_history();
-                            self.follow = None;
-                            self.cam.fly_to(anchor, mpp, rect.width() as f64, 1.8);
-                        }
-                    }
-                    ui.label(
-                        egui::RichText::new("SCALE LADDER · log₁₀ view width (m)")
-                            .size(10.0)
-                            .color(theme::TEXT_DIM),
-                    );
-                });
-            });
-    }
-
-    fn time_bar(&mut self, ctx: &egui::Context, _rect: Rect) {
-        egui::Area::new(egui::Id::new("timebar"))
-            .anchor(Align2::CENTER_BOTTOM, [0.0, -12.0])
-            .show(ctx, |ui| {
-                egui::Frame::window(&ctx.style()).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        let play_label = if self.clock.playing { "⏸" } else { "▶" };
-                        if ui.button(play_label).clicked() {
-                            self.clock.playing = !self.clock.playing;
-                            if self.clock.playing {
-                                self.modes.living = true;
-                            }
-                        }
-                        if ui.button("now").clicked() {
-                            self.clock.jd = jd_now();
-                        }
-                        ui.separator();
-                        for (label, rate) in [
-                            ("1s", 1.0),
-                            ("1m", 60.0),
-                            ("1h", 3_600.0),
-                            ("1d", 86_400.0),
-                            ("1mo", 2.63e6),
-                            ("1yr", 3.156e7),
-                            ("1kyr", 3.156e10),
-                            ("1Myr", 3.156e13),
-                        ] {
-                            let on = (self.clock.rate - rate).abs() / rate < 0.01;
-                            if ui.selectable_label(on, label).clicked() {
-                                self.clock.rate = rate;
-                            }
-                        }
-                        ui.separator();
-                        // time machine scrub ±centuries; write back only on real
-                        // interaction (Slider display-rounding must never move time)
-                        let mut yr = 2000.0 + (self.clock.jd - J2000) / 365.25;
-                        let resp = ui.add(
-                            egui::Slider::new(&mut yr, 1600.0..=2500.0)
-                                .show_value(true)
-                                .custom_formatter(|v, _| format!("{v:.1}")),
-                        );
-                        if resp.changed() && (resp.dragged() || resp.clicked() || resp.has_focus())
-                        {
-                            self.clock.jd = J2000 + (yr - 2000.0) * 365.25;
-                        }
-                        // fine control: the slider is ~4.5 yr per pixel (UX C7)
-                        let mut yr_fine = 2000.0 + (self.clock.jd - J2000) / 365.25;
-                        let dv = ui.add(
-                            egui::DragValue::new(&mut yr_fine)
-                                .speed(0.02)
-                                .range(1600.0..=2500.0)
-                                .suffix(" yr"),
-                        );
-                        if dv.changed() && (dv.dragged() || dv.has_focus()) {
-                            self.clock.jd = J2000 + (yr_fine - 2000.0) * 365.25;
-                        }
-                    });
-                });
-            });
-    }
-
-    fn truth_legend(&mut self, ctx: &egui::Context) {
-        egui::Area::new(egui::Id::new("truthleg"))
-            .anchor(
-                Align2::RIGHT_TOP,
-                [if self.modes.ladder { -200.0 } else { -12.0 }, 12.0],
-            )
-            .show(ctx, |ui| {
-                egui::Frame::window(&ctx.style()).show(ui, |ui| {
-                    ui.label(
-                        egui::RichText::new("TRUTH MODE — ink by evidence")
-                            .size(12.0)
-                            .color(theme::GOLD),
-                    );
-                    // TRUTH-001: generated from what this frame actually drew;
-                    // absent classes never appear. Hover an entry for its record.
-                    let drawn: Vec<(crate::evidence::Ev, &'static str)> = self
-                        .fo
-                        .as_ref()
-                        .map(|f| f.evidence.clone())
-                        .unwrap_or_default();
-                    for p in [
-                        Prov::Measured,
-                        Prov::Modeled,
-                        Prov::Inferred,
-                        Prov::Procedural,
-                        Prov::Illustrative,
-                        Prov::Unknown,
-                    ] {
-                        let here: Vec<_> = drawn
-                            .iter()
-                            .filter(|(e, _)| crate::evidence::rec(*e).class == p)
-                            .collect();
-                        if here.is_empty() {
-                            continue;
-                        }
-                        ui.horizontal(|ui| {
-                            let (rc, _) =
-                                ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-                            ui.painter().circle_filled(rc.center(), 4.0, theme::col32(p.rgb(), 1.0));
-                            ui.label(egui::RichText::new(p.label()).size(11.5));
-                        });
-                        for (e, what) in here {
-                            let r = crate::evidence::rec(*e);
-                            ui.horizontal(|ui| {
-                                ui.add_space(16.0);
-                                ui.label(
-                                    egui::RichText::new(*what)
-                                        .size(10.5)
-                                        .color(theme::TEXT_DIM),
-                                )
-                                .on_hover_text(format!(
-                                    "{}\n{}\nframe: {}\n{}",
-                                    r.source, r.citation, r.frame, r.note
-                                ));
-                            });
-                        }
-                    }
-                    ui.label(
-                        egui::RichText::new(format!("data retrieved {}", self.u.retrieved))
-                            .size(10.5)
-                            .color(theme::TEXT_DIM),
-                    );
-                });
-            });
-    }
-
-    fn capture_panel(&mut self, ctx: &egui::Context, rect: Rect) {
-        egui::Area::new(egui::Id::new("capture"))
-            .anchor(Align2::RIGHT_BOTTOM, [-12.0, -70.0])
-            .show(ctx, |ui| {
-                egui::Frame::window(&ctx.style()).show(ui, |ui| {
-                    ui.set_width(240.0);
-                    ui.label(
-                        egui::RichText::new("CINEMATIC CAPTURE").size(12.5).color(theme::GOLD),
-                    );
-                    ui.label(
-                        egui::RichText::new(format!("{} keyframes", self.capture.len()))
-                            .size(11.0)
-                            .color(theme::TEXT_DIM),
-                    );
-                    ui.horizontal(|ui| {
-                        if ui.button("+ keyframe").clicked() {
-                            let host = match self.focus {
-                                Some(ObjectRef::ExoHost(i)) | Some(ObjectRef::ExoPlanet(i, _)) => {
-                                    Some(self.u.exos[i].host.clone())
-                                }
-                                _ => None,
-                            };
-                            let c = self.cam.center_root();
-                            self.capture.push(PathKey {
-                                center: [c.x, c.y, c.z],
-                                mpp: self.cam.mpp,
-                                tilt: self.cam.tilt,
-                                jd: self.clock.jd,
-                                dur: 4.0,
-                                hold: 1.0,
-                                at: None,
-                                host,
-                            });
-                        }
-                        if ui.button("clear").clicked() {
-                            self.capture.clear();
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        if ui.button("▶ play").clicked() && !self.capture.is_empty() {
-                            let keys = self.capture.clone();
-                            self.apply_key(&keys[0]);
-                            self.play = Some(PathPlay { keys, k: 0, t: 0.0 });
-                        }
-                        if ui.button("save path").clicked() {
-                            let dir = std::path::PathBuf::from("exports/paths");
-                            let stamp = crate::sim::fmt_jd(crate::sim::jd_now())
-                                .replace([' ', ':'], "-");
-                            let path = dir.join(format!("path_{stamp}.json"));
-                            match std::fs::create_dir_all(&dir)
-                                .map_err(anyhow::Error::from)
-                                .and_then(|_| Ok(serde_json::to_string_pretty(&self.capture)?))
-                                .and_then(|js| Ok(std::fs::write(&path, js)?))
-                            {
-                                Ok(()) => self.note(format!("saved {}", path.display())),
-                                Err(e) => self.note(format!("save failed: {e}")),
-                            }
-                        }
-                    });
-                    ui.label(
-                        egui::RichText::new("render: pantheon --path exports/paths/path.json")
-                            .size(10.0)
-                            .color(theme::TEXT_DIM),
-                    );
-                });
-            });
-        let _ = rect;
-    }
-
-    // -------------------------------------------------------- object card
-
-    fn object_card(&mut self, ctx: &egui::Context, rect: Rect) {
-        let Some(obj) = self.focus else { return };
-        let (title, subtitle, rows, provs, can_awaken) = self.card_data(obj);
-        let mut dive: Option<ObjectRef> = None;
-        egui::Area::new(egui::Id::new("card"))
-            .anchor(Align2::LEFT_BOTTOM, [14.0, -70.0])
-            .show(ctx, |ui| {
-                egui::Frame::window(&ctx.style()).show(ui, |ui| {
-                    ui.set_width(270.0);
-                    ui.label(
-                        egui::RichText::new(&title)
-                            .font(FontId::new(19.0, FontFamily::Name("heading".into())))
-                            .color(theme::GOLD),
-                    );
-                    ui.label(egui::RichText::new(&subtitle).size(11.5).color(theme::TEXT_DIM));
-                    ui.add_space(3.0);
-                    for (k, v) in &rows {
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new(k).size(11.0).color(theme::TEXT_DIM),
-                            );
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    ui.label(egui::RichText::new(v).size(11.5).color(theme::TEXT));
-                                },
-                            );
-                        });
-                    }
-                    ui.add_space(3.0);
-                    for (what, e) in &provs {
-                        // PROV-003: chips resolve evidence records — hover for
-                        // source, citation, frame, and retrieval date
-                        let r = crate::evidence::rec(*e);
-                        ui.horizontal(|ui| {
-                            let (rc, _) = ui
-                                .allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
-                            ui.painter()
-                                .circle_filled(rc.center(), 3.4, theme::col32(r.class.rgb(), 1.0));
-                            let retrieved = if r.fetched {
-                                format!("\nretrieved: {}", self.u.retrieved)
-                            } else {
-                                String::new()
-                            };
-                            ui.label(
-                                egui::RichText::new(format!("{} — {}", r.class.label(), what))
-                                    .size(10.5)
-                                    .color(theme::TEXT_DIM),
-                            )
-                            .on_hover_text(format!(
-                                "{}\n{}\nframe: {}\n{}{}",
-                                r.source, r.citation, r.frame, r.note, retrieved
-                            ));
-                        });
-                    }
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        if ui.button("◎ dive").clicked() {
-                            dive = Some(obj);
-                        }
-                        if can_awaken {
-                            let lbl = if self.island.is_some() { "☽ sleep" } else { "☀ awaken" };
-                            if ui.button(lbl).clicked() {
-                                if self.island.is_some() {
-                                    self.island = None;
-                                } else {
-                                    self.awaken();
-                                }
-                            }
-                        }
-                        if ui.button("✕").clicked() {
-                            self.focus = None;
-                            self.follow = None;
-                        }
-                    });
-                    if self.island_paused {
-                        ui.label(
-                            egui::RichText::new("island paused — time rate too high for N-body")
-                                .size(10.0)
-                                .color(theme::col32(Prov::Inferred.rgb(), 1.0)),
-                        );
-                    }
-                });
-            });
-        if let Some(obj) = dive {
-            self.dive_to(obj, rect.width() as f64, rect.height() as f64);
-        }
-    }
 
     fn card_data(
         &self,
@@ -1379,15 +1198,18 @@ impl Pantheon {
         let subtitle;
         match obj {
             ObjectRef::Sun => {
-                subtitle = "G2V star · the anchor of the atlas".into();
+                subtitle = "Our star, type G2V".into();
                 rows.push(("radius".into(), "695,700 km".into()));
                 rows.push(("GM".into(), "1.327e20 m³/s²".into()));
                 provs.push(("physical constants".into(), Ev::PhysicalConstants));
-                provs.push(("surface granulation".into(), Ev::ProceduralSurface));
+                if self.bank.status.on_disk(crate::engine::textures::TexId::Sun) {
+                    provs.push(("surface map".into(), Ev::SurfaceImagery));
+                }
+                provs.push(("corona and surface motion".into(), Ev::CoronaIllustrative));
             }
             ObjectRef::Planet(i) => {
                 let p = &PLANETS[i];
-                subtitle = "planet · Sol system".into();
+                subtitle = "Planet of the Solar System".into();
                 let pos = obj_pos(u, obj, jd, self.island.as_ref());
                 rows.push(("distance from Sun".into(), fmt_len(pos.length())));
                 rows.push(("semi-major axis".into(), format!("{:.3} AU", p.el[0])));
@@ -1413,17 +1235,24 @@ impl Pantheon {
                 } else {
                     provs.push(("state + orbit".into(), Ev::ApproxElements));
                 }
-                provs.push(("surface pattern".into(), Ev::ProceduralSurface));
+                let has_map = self.bank.status.any_planet_imagery() && p.name != "Pluto";
+                provs.push((
+                    "surface".into(),
+                    if has_map { Ev::SurfaceImagery } else { Ev::ProceduralSurface },
+                ));
                 provs.push(("orientation".into(), Ev::IauRotation));
+                provs.push(("atmosphere glow".into(), Ev::AtmosphereGlow));
                 if i == 2 {
-                    provs.push(("coastlines".into(), Ev::Coastlines));
-                    provs.push(("night lights".into(), Ev::LandLights));
+                    provs.push(("coastlines (Truth mode)".into(), Ev::Coastlines));
+                    if !self.bank.status.on_disk(crate::engine::textures::TexId::EarthNight) {
+                        provs.push(("night lights".into(), Ev::LandLights));
+                    }
                 }
                 can_awaken = true;
             }
             ObjectRef::Moon(mi) => {
                 let m = &MOONS[mi];
-                subtitle = format!("moon of {}", PLANETS[m.planet].name);
+                subtitle = format!("Moon of {}", PLANETS[m.planet].name);
                 rows.push(("semi-major axis".into(), format!("{:.0} km", m.a_km)));
                 rows.push(("period".into(), format!("{:.3} d", m.period_d.abs())));
                 rows.push(("radius".into(), format!("{:.0} km", m.radius_km)));
@@ -1456,10 +1285,9 @@ impl Pantheon {
             }
             ObjectRef::Craft(ci) => {
                 let c = &u.craft[ci];
-                subtitle = format!("spacecraft · {}", c.note);
+                subtitle = format!("Spacecraft: {}", c.note);
                 let pos = obj_pos(u, obj, jd, None);
-                rows.push(("distance from Sun".into(), fmt_len(pos.length())));
-                rows.push(("".into(), format!("{:.2} AU", pos.length() / AU)));
+                rows.push(("distance from Sun".into(), format!("{:.2} AU", pos.length() / AU)));
                 let (jd0, jd1) = c.track.span();
                 rows.push(("trajectory arc".into(), format!("{} → {}", &fmt_jd(jd0)[..11], &fmt_jd(jd1)[..11])));
                 provs.push(("trajectory".into(), Ev::HorizonsVectors));
@@ -1468,9 +1296,9 @@ impl Pantheon {
             ObjectRef::Star(si) => {
                 let s = &u.stars[si];
                 subtitle = if s.compiled {
-                    "star · compiled catalog".into()
+                    "Star, from a compiled catalog".into()
                 } else {
-                    "star · Gaia DR3".into()
+                    "Star, from Gaia DR3".into()
                 };
                 let dist = if s.dist_err_pc > 0.0 {
                     format!("{:.2} ± {:.2} pc", s.dist_pc, s.dist_err_pc)
@@ -1491,7 +1319,7 @@ impl Pantheon {
             }
             ObjectRef::ExoHost(ei) => {
                 let s = &u.exos[ei];
-                subtitle = format!("exoplanet host · {} planets", s.planets.len());
+                subtitle = format!("Star with {} known planets", s.planets.len());
                 if let Some(d) = s.dist_pc {
                     rows.push(("distance".into(), format!("{d:.1} pc")));
                 }
@@ -1513,7 +1341,7 @@ impl Pantheon {
             ObjectRef::ExoPlanet(ei, k) => {
                 let s = &u.exos[ei];
                 let p = &s.planets[k];
-                subtitle = format!("exoplanet · {} ({})", p.method, p.year.map(|y| y.to_string()).unwrap_or_default());
+                subtitle = format!("Exoplanet, found by {}{}", p.method.to_lowercase(), p.year.map(|y| format!(" in {y}")).unwrap_or_default());
                 if let Some(per) = p.per_d {
                     rows.push(("period".into(), format!("{per:.3} d")));
                     provs.push(("period".into(), Ev::ExoArchive));
@@ -1551,15 +1379,15 @@ impl Pantheon {
             }
             ObjectRef::Galaxy(gi) => {
                 let g = &u.galaxies[gi];
-                subtitle = if g.spiral { "spiral galaxy · Local Group".into() } else { "dwarf galaxy · Local Group".into() };
+                subtitle = if g.spiral { "Spiral galaxy in the Local Group".into() } else { "Dwarf galaxy in the Local Group".into() };
                 rows.push(("distance".into(), format!("{:.0} kpc", g.dist_kpc)));
                 rows.push(("size".into(), format!("~{:.1} kpc", g.size_kpc)));
                 provs.push(("position & distance".into(), Ev::CompiledCatalog));
-                provs.push(("glyph shape".into(), Ev::GlyphIllustrative));
+                provs.push(("appearance".into(), Ev::GlyphIllustrative));
             }
             ObjectRef::Node(ni) => {
                 let n = &u.nodes[ni];
-                subtitle = "galaxy cluster / attractor".into();
+                subtitle = "Galaxy cluster or attractor".into();
                 rows.push(("distance".into(), format!("{:.0} Mpc", n.dist_mpc)));
                 rows.push(("size".into(), format!("~{:.0} Mpc", n.size_mpc)));
                 provs.push(("position & distance".into(), Ev::CompiledCatalog));
@@ -1577,7 +1405,7 @@ pub struct GuiApp {
     rs: eframe::egui_wgpu::RenderState,
     canvas: Option<(ViewTarget, egui::TextureId)>,
     last: Instant,
-    #[cfg(windows)]
+    #[cfg(feature = "audio")]
     ambience: Option<crate::audio::Ambience>,
 }
 
@@ -1587,38 +1415,58 @@ impl GuiApp {
         let gpu = GpuContext::from_eframe(&rs);
         theme::install_fonts(&cc.egui_ctx);
         theme::apply(&cc.egui_ctx);
-        let app = Pantheon::new(gpu);
-        #[cfg(windows)]
-        let ambience = crate::audio::Ambience::start(if app.ambience_on {
-            app.ambience_vol
-        } else {
-            0.0
-        });
+        let mut app = Pantheon::new(gpu);
+        app.attach_settings(Settings::load());
         Self {
             app,
             rs,
             canvas: None,
             last: Instant::now(),
-            #[cfg(windows)]
-            ambience,
+            #[cfg(feature = "audio")]
+            ambience: None,
+        }
+    }
+
+    /// The audio device is opened the first time someone asks for sound, never before.
+    #[cfg(feature = "audio")]
+    fn drive_audio(&mut self) {
+        let want = self.app.settings.ambience_on;
+        if want && self.ambience.is_none() && self.app.ambience_available != Some(false) {
+            self.ambience = crate::audio::Ambience::start(self.app.settings.ambience_vol);
+            self.app.ambience_available = Some(self.ambience.is_some());
+            if self.ambience.is_none() {
+                self.app.settings.ambience_on = false;
+                self.app.status = Some((
+                    "No audio output was found, so ambience is unavailable".into(),
+                    self.app.anim_t + 6.0,
+                ));
+            }
+        }
+        if let Some(a) = &self.ambience {
+            a.set_gain(if want { self.app.settings.ambience_vol } else { 0.0 });
         }
     }
 }
 
 impl eframe::App for GuiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let dt = self.last.elapsed().as_secs_f64().min(0.1);
+        // a real long stall should not fast-forward the camera; a slow machine
+        // should still finish a flight in about the time it was meant to take
+        let dt = self.last.elapsed().as_secs_f64().min(0.25);
         self.last = Instant::now();
-        #[cfg(windows)]
-        if let Some(a) = &self.ambience {
-            a.set_gain(if self.app.ambience_on { self.app.ambience_vol } else { 0.0 });
-        }
+        #[cfg(feature = "audio")]
+        self.drive_audio();
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(Color32::BLACK))
             .show(ctx, |ui| {
                 let rect = ui.available_rect_before_wrap();
-                let (w, h) = (rect.width().max(64.0) as u32, rect.height().max(64.0) as u32);
-                // (re)create canvas target on resize
+                let ppp = ctx.pixels_per_point();
+                // the canvas renders in physical pixels (AUDIT FND-015); all
+                // geometry stays in logical points, the shaders know the scale
+                let (w, h) = (
+                    ((rect.width() * ppp).round() as u32).max(64),
+                    ((rect.height() * ppp).round() as u32).max(64),
+                );
                 let recreate = self
                     .canvas
                     .as_ref()
@@ -1633,10 +1481,13 @@ impl eframe::App for GuiApp {
                     let id = rend.register_native_texture(
                         &self.app.gpu.device,
                         &target.resolve_view,
-                        wgpu::FilterMode::Linear,
+                        wgpu::FilterMode::Nearest,
                     );
                     self.canvas = Some((target, id));
                 }
+                self.app.view_w = rect.width() as f64;
+                self.app.view_h = rect.height() as f64;
+                self.app.ppp = ppp;
                 let resp = ui.allocate_rect(rect, egui::Sense::click_and_drag());
                 self.app.handle_input(ctx, &resp, rect);
                 self.app.tick(dt);
@@ -1651,14 +1502,21 @@ impl eframe::App for GuiApp {
                 self.app.draw_overlay(ui, rect);
                 self.app.draw_panels(ctx, rect);
             });
-        ctx.request_repaint();
+        if self.app.animating() {
+            ctx.request_repaint();
+        } else {
+            // the Sun's surface and the clouds still drift, but gently
+            ctx.request_repaint_after(std::time::Duration::from_millis(40));
+        }
     }
 }
 
 pub fn run_gui() -> anyhow::Result<()> {
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([1680.0, 980.0])
-        .with_title("Pantheon — An Infinite Vector Atlas of the Living Universe");
+        .with_min_inner_size([560.0, 380.0])
+        .with_app_id("pantheon")
+        .with_title("Pantheon: an atlas of the universe");
     // window/taskbar icon from the generated atlas emblem
     let icon_path = crate::data::asset_root().join("icon.png");
     if let Ok(img) = image::open(&icon_path) {
@@ -1707,12 +1565,17 @@ impl Headless {
             crate::engine::gpu::SAMPLES,
             false,
         );
-        Ok(Self { app: Pantheon::new(gpu), ctx, rend, canvas: None, final_target: None })
+        let mut app = Pantheon::new(gpu);
+        app.immediate = true;
+        app.status = None;
+        Ok(Self { app, ctx, rend, canvas: None, final_target: None })
     }
 
     /// Advance dt and render one full frame (canvas + UI) at (w, h).
     /// `read = false` skips the GPU readback (settle frames).
     pub fn frame(&mut self, w: u32, h: u32, dt: f64, read: bool) -> anyhow::Result<Vec<u8>> {
+        self.app.view_w = w as f64;
+        self.app.view_h = h as f64;
         self.app.tick(dt);
         let recreate = self
             .canvas
@@ -1785,7 +1648,7 @@ impl Headless {
             &screen,
         );
         {
-            // egui's pipelines declare no depth state → depth-less pass
+            // egui's pipelines declare no depth state -> depth-less pass
             let mut pass = final_target
                 .begin_no_depth(&mut encoder, Some(wgpu::Color::BLACK))
                 .forget_lifetime();
@@ -1803,8 +1666,8 @@ impl Headless {
     }
 
     pub fn export_png(&mut self, w: u32, h: u32, path: &std::path::Path) -> anyhow::Result<()> {
-        // two settle frames (font atlas, band fades) without readback
-        for _ in 0..2 {
+        // settle frames (font atlas, imagery fades, presentation) without readback
+        for _ in 0..3 {
             let _ = self.frame(w, h, 0.05, false)?;
         }
         let px = self.frame(w, h, 0.05, true)?;
@@ -1834,6 +1697,8 @@ fn view(app: &mut Pantheon, center: DVec3, width_m: f64, focus: Option<ObjectRef
     app.cam.center = center;
     app.cam.mpp = width_m / 1600.0; // rescaled to the real export width in run_shots
     app.cam.anim = None;
+    app.cam.tilt = 0.0;
+    app.cam.yaw = 0.0;
     app.focus = focus;
     if let Some(ObjectRef::ExoHost(ei)) | Some(ObjectRef::ExoPlanet(ei, _)) = focus {
         app.scene_exo = Some(ei);
@@ -1846,11 +1711,10 @@ fn view(app: &mut Pantheon, center: DVec3, width_m: f64, focus: Option<ObjectRef
 pub const SHOTS: &[Shot] = &[
     Shot {
         name: "earth",
-        desc: "Earth close-up: vector coastlines, terminator, clouds",
+        desc: "Earth close-up: imagery, night lights, clouds, atmosphere",
         setup: |a| {
             let p = sim::body_pos(2, a.clock.jd);
             view(a, p, 3.4e7, Some(ObjectRef::Planet(2)));
-            a.cam.tilt = 0.35;
         },
     },
     Shot {
@@ -1896,7 +1760,6 @@ pub const SHOTS: &[Shot] = &[
         setup: |a| {
             let p = sim::body_pos(3, a.clock.jd);
             view(a, p, 1.9e7, Some(ObjectRef::Planet(3)));
-            a.cam.tilt = 0.3;
         },
     },
     Shot {
@@ -1910,7 +1773,7 @@ pub const SHOTS: &[Shot] = &[
     },
     Shot {
         name: "galaxy_close",
-        desc: "Galaxy at 3 kpc: fog resolving into stellar sparkle",
+        desc: "Galaxy at 3 kpc: glow resolving into individual stars",
         setup: |a| {
             let gc = crate::frames::galactic_frame().center;
             view(a, gc * 0.5, 2.0e20, None);
@@ -1918,19 +1781,71 @@ pub const SHOTS: &[Shot] = &[
     },
     Shot {
         name: "jupiter",
+        desc: "Jupiter, close",
+        setup: |a| {
+            let p = sim::body_pos(4, a.clock.jd);
+            view(a, p, 4.0e8, Some(ObjectRef::Planet(4)));
+        },
+    },
+    Shot {
+        name: "jupiter_moons",
         desc: "Jupiter and the Galilean moons",
         setup: |a| {
             let p = sim::body_pos(4, a.clock.jd);
-            view(a, p, 8.5e9, Some(ObjectRef::Planet(4)));
+            view(a, p, 5.0e9, Some(ObjectRef::Planet(4)));
+        },
+    },
+    Shot {
+        name: "saturn_moons",
+        desc: "Saturn and its moon system",
+        setup: |a| {
+            let p = sim::body_pos(5, a.clock.jd);
+            view(a, p, 3.6e9, Some(ObjectRef::Planet(5)));
+        },
+    },
+    Shot {
+        name: "sun",
+        desc: "The Sun: surface map, limb, corona",
+        setup: |a| view(a, DVec3::ZERO, 4.4e9, Some(ObjectRef::Sun)),
+    },
+    Shot {
+        name: "venus",
+        desc: "Venus, cloud-covered",
+        setup: |a| {
+            let p = sim::body_pos(1, a.clock.jd);
+            view(a, p, 3.2e7, Some(ObjectRef::Planet(1)));
+        },
+    },
+    Shot {
+        name: "mercury",
+        desc: "Mercury",
+        setup: |a| {
+            let p = sim::body_pos(0, a.clock.jd);
+            view(a, p, 1.3e7, Some(ObjectRef::Planet(0)));
+        },
+    },
+    Shot {
+        name: "uranus",
+        desc: "Uranus and its thin ring",
+        setup: |a| {
+            let p = sim::body_pos(6, a.clock.jd);
+            view(a, p, 2.4e8, Some(ObjectRef::Planet(6)));
+        },
+    },
+    Shot {
+        name: "neptune",
+        desc: "Neptune",
+        setup: |a| {
+            let p = sim::body_pos(7, a.clock.jd);
+            view(a, p, 1.4e8, Some(ObjectRef::Planet(7)));
         },
     },
     Shot {
         name: "saturn",
-        desc: "Saturn: engraved rings and moon system",
+        desc: "Saturn and its rings, with shadows",
         setup: |a| {
             let p = sim::body_pos(5, a.clock.jd);
-            view(a, p, 3.2e9, Some(ObjectRef::Planet(5)));
-            a.cam.tilt = 0.5;
+            view(a, p, 6.5e8, Some(ObjectRef::Planet(5)));
         },
     },
     Shot {
@@ -1940,7 +1855,7 @@ pub const SHOTS: &[Shot] = &[
     },
     Shot {
         name: "starfield",
-        desc: "Deep star field with exoplanet portals",
+        desc: "Star field and exoplanet hosts",
         setup: |a| view(a, DVec3::ZERO, 6.0e16, None),
     },
     Shot {
@@ -1994,6 +1909,8 @@ pub const SHOTS: &[Shot] = &[
 
 pub fn run_shots(which: &str, w: u32, h: u32, out: &std::path::Path) -> anyhow::Result<()> {
     let mut host = Headless::new()?;
+    host.app.view_w = w as f64;
+    host.app.view_h = h as f64;
     let mut done = 0;
     let mut failures: Vec<String> = Vec::new();
     for shot in SHOTS {
