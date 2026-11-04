@@ -1,5 +1,6 @@
 //! GPU context and offscreen render targets. Interactive canvas and headless
-//! export share this path (adapted from the proven revelatio harness).
+//! export share this path. Adapted from the harness in Revelatio Noetica,
+//! which is public at github.com/flintglade-tools/revelatio-noetica.
 
 use anyhow::{anyhow, Context, Result};
 use std::path::Path;

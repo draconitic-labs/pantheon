@@ -67,10 +67,11 @@ fn main() {
                     WebviewUrl::App("index.html".into())
                 }
             };
-            let mut window = WebviewWindowBuilder::new(app, "main", url)
-                .title("Pantheon 3D")
-                .inner_size(1600.0, 950.0)
-                .min_inner_size(640.0, 420.0);
+            // the window's size and limits live in tauri.conf.json; only its address is
+            // known here, because that depends on the port the backend got
+            let mut config = app.config().app.windows[0].clone();
+            config.url = url;
+            let mut window = WebviewWindowBuilder::from_config(app, &config)?;
             if let Some(dir) = webview_data_dir() {
                 window = window.data_directory(dir);
             }

@@ -160,7 +160,7 @@ body::before { content: ''; position: fixed; inset: 0 auto 0 0; width: 260px; z-
 .trate-text { color: var(--dim); font-size: 13px; min-width: 134px; }
 .tdate { font-size: 13.5px; font-variant-numeric: lining-nums tabular-nums; white-space: nowrap; min-width: 150px; text-align: right; }
 
-#credit { position: fixed; right: 20px; bottom: 46px; z-index: 10; font-size: 11.5px; color: var(--faint); text-shadow: var(--shadow); text-align: right; pointer-events: none; }
+#credit { position: fixed; right: 20px; bottom: 50px; z-index: 10; font-size: 13.5px; color: var(--bone); text-shadow: var(--shadow); text-align: right; pointer-events: none; }
 
 /* ---- center-line messages ---- */
 #toast, #banner, #hint, #tourbar { position: fixed; left: 50%; transform: translateX(-50%); z-index: 20; text-shadow: var(--shadow); text-align: center; }
@@ -190,7 +190,7 @@ body::before { content: ''; position: fixed; inset: 0 auto 0 0; width: 260px; z-
 .help-grid { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; }
 .help-k { color: var(--bone); white-space: nowrap; font-size: 13px; }
 .help-v { color: var(--dim); font-size: 13px; }
-.help-credits { margin: 12px 0 0; color: var(--faint); font-size: 12px; line-height: 1.4; }
+.help-credits { margin: 12px 0 0; color: var(--dim); font-size: 13px; line-height: 1.4; }
 .help-close { margin-top: 12px; }
 
 /* ---- hover + selection ---- */
@@ -216,7 +216,7 @@ body::before { content: ''; position: fixed; inset: 0 auto 0 0; width: 260px; z-
   #card { top: 46px; width: 268px; }
   #hint { font-size: 18px; }
   #place { max-width: 56vw; }
-  #credit { max-width: 36vw; bottom: 50px; }
+  #credit { max-width: 36vw; }
 }
 @media (max-width: 720px) { .tool:nth-child(3), .tool:nth-child(4) { display: none; } #timebar { flex-wrap: wrap; justify-content: flex-end; max-width: 42vw; } .tdate { min-width: 0; } }
 @media (prefers-reduced-motion: reduce) { .place-title.arrive { animation: none; } * { transition-duration: 0.01s !important; } }

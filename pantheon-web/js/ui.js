@@ -450,7 +450,7 @@ export function initUI(cb) {
     const g = el('div', 'help-grid', sec);
     for (const [k, v] of rows) { el('span', 'help-k', g, k); el('span', 'help-v', g, v); }
   }
-  el('p', 'help-credits', hp, 'Sky photograph: ESO/S. Brunier. Surface and ring maps: Solar System Scope, from NASA data. Stars: ESA Gaia. Exoplanets: NASA Exoplanet Archive. Both licensed sources are CC BY 4.0; see NOTICE.');
+  el('p', 'help-credits', hp, 'Sky photograph: ESO/S. Brunier, CC BY 4.0. Surface and ring maps: Solar System Scope, from NASA data, CC BY 4.0. Stars: ESA/Gaia/DPAC, CC BY-NC 3.0 IGO. Exoplanets: NASA Exoplanet Archive. Positions: NASA/JPL. See NOTICE.');
   btn('act act-strong help-close', hp, 'Close', () => setHelp(false));
   let helpOpen = false;
   function setHelp(open) {
