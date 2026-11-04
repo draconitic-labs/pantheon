@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import http.server
+import json
 import sys
 import tempfile
 import threading
@@ -146,6 +147,38 @@ class Fetch(unittest.TestCase):
 
     def test_a_missing_file_is_a_defect(self):
         self.assertEqual(fetch_data.defect(self.data / "nope", "nope", None), "missing")
+
+    def run_main(self, *items, args=()):
+        self.addCleanup(setattr, fetch_data, "manifest", fetch_data.manifest)
+        fetch_data.manifest = lambda: list(items)
+        argv = ["fetch_data.py", "--dest", str(self.data), *args]
+        self.addCleanup(setattr, sys, "argv", sys.argv)
+        sys.argv = argv
+        return fetch_data.main()
+
+    def test_dates_change_only_for_files_really_fetched(self):
+        fetch_data.SIZES = {"spice/good.bsp": len(Misbehaving.body), "spice/bad.bsp": len(Misbehaving.body)}
+        good = ("kernels", "spice/good.bsp", self.base + "/whole", 0.01, fetch_data.KERNEL)
+        bad = ("kernels", "spice/bad.bsp", self.base + "/short", 0.01, fetch_data.KERNEL)
+        kept = {"textures/old.jpg": "2026-07-11", "spice/good.bsp": "2020-01-01"}
+        (self.data / "fetched.json").write_text(json.dumps(kept))
+        provenance = self.data / "provenance.json"
+        provenance.write_text('{"retrieved": {"gaia_nearby.csv": "2026-07-11"}}')
+        before = provenance.read_bytes()
+
+        self.assertEqual(self.run_main(good, bad), 1)
+
+        dates = json.loads((self.data / "fetched.json").read_text())
+        self.assertEqual(dates["textures/old.jpg"], "2026-07-11", "a file not fetched kept its date")
+        self.assertNotEqual(dates["spice/good.bsp"], "2020-01-01", "the fetched file got today")
+        self.assertNotIn("spice/bad.bsp", dates, "a failed file has no date")
+        self.assertEqual(provenance.read_bytes(), before, "provenance.json is never written")
+
+    def test_a_run_that_fetches_nothing_new_dates_nothing(self):
+        fetch_data.SIZES = {"spice/bad.bsp": len(Misbehaving.body)}
+        bad = ("kernels", "spice/bad.bsp", self.base + "/short", 0.01, fetch_data.KERNEL)
+        self.assertEqual(self.run_main(bad), 1)
+        self.assertFalse((self.data / "fetched.json").exists())
 
     def test_every_pinned_size_is_a_file_in_the_manifest(self):
         rels = {item[1] for item in fetch_data.manifest()}

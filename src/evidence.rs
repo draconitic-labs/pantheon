@@ -50,8 +50,9 @@ pub struct EvidenceRec {
     pub citation: &'static str,
     pub frame: &'static str,
     pub note: &'static str,
-    /// retrieval date applies (fetched datasets, not embedded constants)
-    pub fetched: bool,
+    /// the dataset whose retrieval date applies (not embedded constants): a key of
+    /// `Universe::retrieved`
+    pub dataset: Option<&'static str>,
 }
 
 pub fn rec(e: Ev) -> EvidenceRec {
@@ -63,7 +64,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "Gaia Collaboration et al. 2023, A&A 674, A1",
             frame: "ICRS, epoch J2016.0",
             note: "positions/parallax/PM/photometry from the archive TAP",
-            fetched: true,
+            dataset: Some("gaia"),
         },
         Ev::GaiaCompiled => EvidenceRec {
             class: Measured,
@@ -71,7 +72,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "named-star table, van Leeuwen 2007 values",
             frame: "ICRS",
             note: "bright stars missing from Gaia DR3; V mag, B–V colour",
-            fetched: false,
+            dataset: None,
         },
         Ev::ExoArchive => EvidenceRec {
             class: Measured,
@@ -79,7 +80,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "IPAC/Caltech",
             frame: "per-publication orbital elements",
             note: "catalog values as published",
-            fetched: true,
+            dataset: Some("exoplanets"),
         },
         Ev::ExoDerivedSemiMajor => EvidenceRec {
             class: Inferred,
@@ -87,7 +88,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "from catalog period + stellar mass (1 M☉ prior if absent)",
             frame: "—",
             note: "shown when the archive lacks a measured semi-major axis",
-            fetched: false,
+            dataset: None,
         },
         Ev::ExoGeometry => EvidenceRec {
             class: Illustrative,
@@ -95,7 +96,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "nodes/inclination not in default columns",
             frame: "ecliptic plane at the host (convention)",
             note: "face-on presentation; real orientation unknown",
-            fetched: false,
+            dataset: None,
         },
         Ev::ExoPhase => EvidenceRec {
             class: Illustrative,
@@ -103,7 +104,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "no epoch of periastron in default columns",
             frame: "—",
             note: "period is real; position on the orbit is illustrative",
-            fetched: false,
+            dataset: None,
         },
         Ev::ExoUnknownValue => EvidenceRec {
             class: Unknown,
@@ -111,7 +112,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "—",
             frame: "—",
             note: "shown as an explicit unknown, never a default",
-            fetched: false,
+            dataset: None,
         },
         Ev::HorizonsVectors => EvidenceRec {
             class: Measured,
@@ -119,7 +120,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "Giorgini et al., JPL SSD",
             frame: "heliocentric ecliptic J2000, TDB epochs",
             note: "reconstructed/predicted trajectory solutions",
-            fetched: true,
+            dataset: Some("horizons"),
         },
         Ev::HorizonsInterp => EvidenceRec {
             class: Inferred,
@@ -127,7 +128,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "position+velocity interpolation",
             frame: "—",
             note: "refuses to extrapolate outside coverage",
-            fetched: false,
+            dataset: None,
         },
         Ev::De440 => EvidenceRec {
             class: Measured,
@@ -135,7 +136,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "Park et al. 2021, AJ 161:105",
             frame: "J2000 equatorial → ecliptic; TDB",
             note: "Chebyshev states evaluated from the kernel, 1850–2150",
-            fetched: false,
+            dataset: None,
         },
         Ev::SatelliteSpk => EvidenceRec {
             class: Measured,
@@ -143,7 +144,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "JPL SSD satellite solutions",
             frame: "planetocentric, J2000 → ecliptic",
             note: "real moon states; supersedes mean elements in coverage",
-            fetched: false,
+            dataset: None,
         },
         Ev::ApproxElements => EvidenceRec {
             class: Modeled,
@@ -151,7 +152,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "JPL SSD, 'Approximate Positions of the Planets'",
             frame: "heliocentric ecliptic J2000",
             note: "valid 1800–2050; fallback outside kernel coverage",
-            fetched: false,
+            dataset: None,
         },
         Ev::MoonMeanElements => EvidenceRec {
             class: Modeled,
@@ -159,7 +160,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "circular-inclined approximation",
             frame: "parent IAU equator + per-moon inclination",
             note: "fallback when no satellite kernel covers the moon",
-            fetched: false,
+            dataset: None,
         },
         Ev::LunaModel => EvidenceRec {
             class: Modeled,
@@ -167,7 +168,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "node 18.6 yr, perigee 8.85 yr",
             frame: "geocentric ecliptic",
             note: "fallback when de440s is absent",
-            fetched: false,
+            dataset: None,
         },
         Ev::IauRotation => EvidenceRec {
             class: Modeled,
@@ -175,7 +176,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "Archinal et al. 2018, WGCCRE report",
             frame: "pole RA/Dec + prime meridian W(t)",
             note: "small periodic series omitted",
-            fetched: false,
+            dataset: None,
         },
         Ev::PhysicalConstants => EvidenceRec {
             class: Measured,
@@ -183,7 +184,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "radii, GM values",
             frame: "—",
             note: "adopted constants",
-            fetched: false,
+            dataset: None,
         },
         Ev::Coastlines => EvidenceRec {
             class: Measured,
@@ -191,7 +192,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "naturalearthdata.com (public domain)",
             frame: "WGS84 → IAU Earth body-fixed",
             note: "generalized cartography",
-            fetched: true,
+            dataset: Some("natural-earth"),
         },
         Ev::LandLights => EvidenceRec {
             class: Illustrative,
@@ -199,7 +200,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "land polygons measured; light placement synthetic",
             frame: "WGS84 → IAU Earth body-fixed",
             note: "night-side lights are land-masked, not VIIRS data",
-            fetched: true,
+            dataset: Some("natural-earth"),
         },
         Ev::ProceduralSurface => EvidenceRec {
             class: Procedural,
@@ -207,7 +208,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "deterministic fBm, per-body parameters",
             frame: "body-fixed via IAU orientation",
             note: "patterns are synthetic; caps/maria placement stylized",
-            fetched: false,
+            dataset: None,
         },
         Ev::CompiledCatalog => EvidenceRec {
             class: Measured,
@@ -215,7 +216,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "Local Group / cluster distances, literature values",
             frame: "ICRS direction + scalar distance",
             note: "approximate sizes; no uncertainties yet",
-            fetched: false,
+            dataset: None,
         },
         Ev::GlyphIllustrative => EvidenceRec {
             class: Illustrative,
@@ -223,7 +224,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "deterministic procedural sampling",
             frame: "—",
             note: "shows that something is there, not what exactly; positions of named objects come from a catalog",
-            fetched: false,
+            dataset: None,
         },
         Ev::NBodyIsland => EvidenceRec {
             class: Modeled,
@@ -231,7 +232,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "authoritative GMs, momentum-zeroed init",
             frame: "heliocentric inertial",
             note: "energy drift shown live in the card",
-            fetched: false,
+            dataset: None,
         },
         Ev::MoonPhase => EvidenceRec {
             class: Illustrative,
@@ -239,7 +240,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "epoch anomaly chosen for legibility",
             frame: "—",
             note: "real phases appear once a satellite kernel covers the moon",
-            fetched: false,
+            dataset: None,
         },
         Ev::ProperMotion => EvidenceRec {
             class: Modeled,
@@ -247,7 +248,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "from Gaia PM + RV, epoch J2016",
             frame: "ICRS → ecliptic",
             note: "no perspective acceleration or binary motion",
-            fetched: false,
+            dataset: None,
         },
         Ev::GalaxyFog => EvidenceRec {
             class: Procedural,
@@ -255,7 +256,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "log-spiral arm model + fBm; pitch/scale stylized",
             frame: "galactocentric plane (Sgr A* position measured)",
             note: "an illustration of the Galaxy, not survey data; arm radii are stylized to pass near their real distances along the Sun's azimuth",
-            fetched: false,
+            dataset: None,
         },
         Ev::WebProcedural => EvidenceRec {
             class: Procedural,
@@ -263,7 +264,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "deterministic Voronoi noise in the supergalactic plane",
             frame: "supergalactic (illustrative volume)",
             note: "named clusters are catalog points; filaments are synthetic",
-            fetched: false,
+            dataset: None,
         },
         Ev::SurfaceImagery => EvidenceRec {
             class: Inferred,
@@ -271,7 +272,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "the publisher: based on NASA elevation and imagery data, colours tuned",
             frame: "equirectangular, read through the IAU body frame",
             note: "the publisher fills unmapped gaps with fictional terrain and saturates colours slightly; one mosaic, not today's weather or storm positions; relief shading comes from image brightness, not elevation",
-            fetched: true,
+            dataset: Some("maps"),
         },
         Ev::SkyPanorama => EvidenceRec {
             class: Measured,
@@ -279,7 +280,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "ESO/S. Brunier",
             frame: "galactic coordinates; shown through a nominal lens",
             note: "a real photograph of the sky, correct in direction; the atlas camera has no true field of view, so its scale is nominal",
-            fetched: true,
+            dataset: Some("eso-panorama"),
         },
         Ev::SkyProcedural => EvidenceRec {
             class: Procedural,
@@ -287,7 +288,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "a band and star grain generated in galactic coordinates",
             frame: "galactic coordinates; shown through a nominal lens",
             note: "stands in where the photograph doesn't apply: it isn't on disk, or the camera is too far from the Sun for it to be true",
-            fetched: false,
+            dataset: None,
         },
         Ev::AtmosphereGlow => EvidenceRec {
             class: Illustrative,
@@ -295,7 +296,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "colour by body, height exaggerated so it can be seen",
             frame: "lit from the real sun direction",
             note: "a look, not a radiative-transfer model",
-            fetched: false,
+            dataset: None,
         },
         Ev::CoronaIllustrative => EvidenceRec {
             class: Illustrative,
@@ -303,7 +304,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "procedural noise",
             frame: "—",
             note: "no solar observation behind these; brightness scaled for display",
-            fetched: false,
+            dataset: None,
         },
         Ev::RingProfile => EvidenceRec {
             class: Modeled,
@@ -311,7 +312,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "Saturn: Solar System Scope strip mapped to 74,658-140,680 km; otherwise the embedded ring zones",
             frame: "planet's IAU equatorial plane",
             note: "shadows computed from the real sun direction; no fine structure beyond the map",
-            fetched: true,
+            dataset: Some("maps"),
         },
         Ev::GravityModel => EvidenceRec {
             class: Modeled,
@@ -319,7 +320,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             citation: "circular restricted three-body approximation",
             frame: "instantaneous orbital plane (markers); screen plane (contours)",
             note: "contour field is a face-on approximation",
-            fetched: false,
+            dataset: None,
         },
     }
 }

@@ -352,11 +352,7 @@ const HTML: &[(&str, &str)] = &[("html", "text/html; charset=utf-8")];
 const CSS: &[(&str, &str)] = &[("css", "text/css; charset=utf-8")];
 const SCRIPT: &[(&str, &str)] = &[("js", "application/javascript; charset=utf-8")];
 const FONT: &[(&str, &str)] = &[("ttf", "font/ttf")];
-const CATALOG: &[(&str, &str)] = &[
-    ("csv", "text/csv"),
-    ("geojson", "application/json"),
-    ("json", "application/json"),
-];
+const CATALOG: &[(&str, &str)] = &[("csv", "text/csv"), ("geojson", "application/json")];
 const MAP: &[(&str, &str)] = &[("jpg", "image/jpeg"), ("png", "image/png")];
 
 /// Decide which file, if any, a request path may read. These are the folders and types
@@ -749,6 +745,7 @@ mod tests {
                 ("assets/data/stars.csv", "ra,dec"),
                 ("assets/data/land.geojson", "{}"),
                 ("assets/data/fetch_log.txt", SECRET),
+                ("assets/data/provenance.json", SECRET),
                 ("assets/data/spice/kernel.bsp", SECRET),
                 ("assets/data/spice/kernel.csv", SECRET),
                 ("assets/data/spacecraft/voyager1.txt", SECRET),
@@ -1023,6 +1020,7 @@ mod tests {
             "/data/spice/kernel.csv",
             "/data/spacecraft/voyager1.txt",
             "/data/fetch_log.txt",
+            "/data/provenance.json",
             "/fonts/OFL.txt",
             "/secret.txt",
             "/notes.md",

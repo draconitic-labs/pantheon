@@ -217,72 +217,20 @@ def download(url: str, dest: Path, rel: str, expect: bytes | None) -> tuple[bool
     return True, f"{size // 1000} kB"
 
 
-def write_provenance(data: Path) -> None:
+def record_fetched(data: Path, rels: list[str]) -> None:
+    """Note today's date for the files this run really fetched, and nothing else.
+
+    This is a separate, untracked file so a fetch never dirties provenance.json, which
+    describes each dataset and dates the catalogs that ship in the repository.
+    """
+    path = data / "fetched.json"
+    try:
+        dates = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        dates = {}
     today = dt.date.today().isoformat()
-    gaia = {
-        "source": "ESA Gaia DR3 (gaiadr3.gaia_source), ESA Gaia Archive TAP",
-        "frame": "ICRS epoch J2016.0",
-        "status": "measured",
-        "citation": "Gaia Collaboration et al. 2023, A&A 674, A1",
-        "license": "CC BY-NC 3.0 IGO",
-    }
-    prov = {
-        "retrieved": today,
-        "sources": {
-            "gaia_nearby.csv": {**gaia, "query": "nearest 12000 sources, parallax>12mas, parallax_over_error>10, G<16"},
-            "gaia_bright.csv": {**gaia, "query": "all sources G<6.0"},
-            "exoplanets.csv": {
-                "source": "NASA Exoplanet Archive, Planetary Systems (ps) table, default_flag=1",
-                "frame": "ICRS; orbital elements heterogeneous per publication",
-                "status": "measured/derived per-column",
-                "citation": "NASA Exoplanet Archive, IPAC/Caltech",
-                "license": "not stated; acknowledgment requested",
-            },
-            "ne_110m_coastline.geojson": {
-                "source": "Natural Earth 1:110m physical vectors v5",
-                "frame": "WGS84 lon/lat",
-                "status": "measured (generalized cartography)",
-                "citation": "naturalearthdata.com",
-                "license": "public domain",
-            },
-            "ne_110m_land.geojson": {
-                "source": "Natural Earth 1:110m physical vectors v5",
-                "frame": "WGS84 lon/lat",
-                "status": "measured (generalized cartography)",
-                "citation": "naturalearthdata.com",
-                "license": "public domain",
-            },
-            "spacecraft/*.txt": {
-                "source": "NASA/JPL Horizons System API",
-                "frame": "heliocentric ecliptic J2000 (Moon: geocentric)",
-                "status": "measured (reconstructed/predicted trajectory solutions)",
-                "citation": "Giorgini et al., JPL Horizons",
-                "license": "not found",
-            },
-            "spice/*": {
-                "source": "NASA NAIF generic kernels (DE440s, satellite SPKs, LSK)",
-                "frame": "J2000; TDB",
-                "status": "measured (ephemeris solutions)",
-                "citation": "NAIF; Park et al. 2021, AJ 161:105",
-                "license": "not stated for kernels; acknowledgment encouraged",
-            },
-            "textures/* (except eso_milkyway.jpg)": {
-                "source": "Solar System Scope texture pack",
-                "frame": "equirectangular",
-                "status": "NASA-based maps, colours tuned, gaps filled with fictional terrain",
-                "citation": "solarsystemscope.com/textures",
-                "license": "CC BY 4.0",
-            },
-            "textures/eso_milkyway.jpg": {
-                "source": "ESO Milky Way panorama, eso0932a",
-                "frame": "galactic, centred on the Galactic Centre",
-                "status": "photographic mosaic",
-                "citation": "ESO/S. Brunier",
-                "license": "CC BY 4.0",
-            },
-        },
-    }
-    (data / "provenance.json").write_text(json.dumps(prov, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    dates.update({rel: today for rel in rels})
+    path.write_text(json.dumps(dates, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def main() -> int:
@@ -315,6 +263,7 @@ def main() -> int:
     print(f"Fetching {len(todo)} files, about {total_mb:.0f} MB, into {data}")
     log = [f"fetch started {dt.datetime.now().isoformat(timespec='seconds')}"]
     failed: list[str] = []
+    fetched: list[str] = []
     for group, rel, url, _mb, expect in todo:
         print(f"  {rel}", flush=True)
         t0 = time.monotonic()
@@ -322,6 +271,7 @@ def main() -> int:
         log.append(f"{rel}: ok={ok} {detail} secs={time.monotonic() - t0:.0f}")
         if ok:
             print(f"    {detail}")
+            fetched.append(rel)
         else:
             print(f"    FAILED: {detail}")
             failed.append(rel)
@@ -329,7 +279,8 @@ def main() -> int:
             time.sleep(0.4)  # Horizons asks for gentle use
     log.append(f"fetch finished {dt.datetime.now().isoformat(timespec='seconds')}")
     (data / "fetch_log.txt").write_text("\n".join(log) + "\n", encoding="utf-8")
-    write_provenance(data)
+    if fetched:
+        record_fetched(data, fetched)
     if failed:
         print(f"\n{len(failed)} of {len(todo)} files failed. Pantheon runs without them; run this again to retry:")
         for rel in failed:

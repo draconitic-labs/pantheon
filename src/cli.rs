@@ -281,13 +281,15 @@ fn doctor() -> anyhow::Result<()> {
         println!("optional data is missing or damaged; run tools/fetch_data.py to download it");
     }
     println!(
-        "loaded:   {} stars, {} exo systems, {} craft, coast {} lines, retrieved {}",
+        "loaded:   {} stars, {} exo systems, {} craft, coast {} lines",
         u.stars.len(),
         u.exos.len(),
         u.craft.len(),
         u.coast.len(),
-        u.retrieved
     );
+    for (dataset, date) in &u.retrieved {
+        println!("retrieved: {dataset} {date}");
+    }
     let json = serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "lines": health.lines,

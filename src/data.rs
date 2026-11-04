@@ -661,7 +661,8 @@ pub struct Universe {
     pub night_lights: Vec<[f32; 2]>,
     pub galaxies: Vec<GalaxyDef>,
     pub nodes: Vec<CosmicNode>,
-    pub retrieved: String,
+    /// when each dataset was retrieved; datasets with no known date have no entry
+    pub retrieved: std::collections::BTreeMap<&'static str, String>,
     graph: std::sync::OnceLock<crate::entity::FrameGraph>,
 }
 
@@ -797,13 +798,7 @@ impl Universe {
                 size_mpc: *size,
             })
             .collect();
-        let retrieved = std::fs::read_to_string(root.join("data/provenance.json"))
-            .ok()
-            .and_then(|t| {
-                serde_json::from_str::<serde_json::Value>(t.trim_start_matches('\u{feff}')).ok()
-            })
-            .and_then(|v| v["retrieved"].as_str().map(String::from))
-            .unwrap_or_else(|| "unknown".into());
+        let retrieved = load_retrieved(&root);
         (
             Self {
                 gal,
@@ -854,6 +849,65 @@ impl Universe {
         let truth = t.pos_at(jd)?;
         Some((crate::sim::body_pos(pi, jd) - truth).length() / 1e3)
     }
+}
+
+/// The dataset a file under assets/data belongs to, as evidence records name it.
+fn dataset_of(file: &str) -> Option<&'static str> {
+    Some(match file {
+        "gaia_nearby.csv" | "gaia_bright.csv" => "gaia",
+        "exoplanets.csv" => "exoplanets",
+        "ne_110m_coastline.geojson" | "ne_110m_land.geojson" => "natural-earth",
+        "textures/eso_milkyway.jpg" => "eso-panorama",
+        _ if file.starts_with("textures/") => "maps",
+        _ if file.starts_with("spacecraft/") => "horizons",
+        _ if file.starts_with("spice/") => "kernels",
+        _ => return None,
+    })
+}
+
+fn date_map(path: &std::path::Path, key: Option<&str>) -> HashMap<String, String> {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let value: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+    let map = key.map_or(&value, |k| &value[k]);
+    map.as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(file, date)| Some((file.clone(), date.as_str()?.to_string())))
+        .collect()
+}
+
+/// When each dataset was retrieved. provenance.json dates the catalogs that ship in the
+/// repository; fetched.json, written by tools/fetch_data.py, dates what was downloaded
+/// on this computer, file by file. A dataset fetched across several days shows the range.
+fn load_retrieved(root: &std::path::Path) -> std::collections::BTreeMap<&'static str, String> {
+    let mut dates = date_map(&root.join("data/provenance.json"), Some("retrieved"));
+    dates.extend(date_map(&root.join("data/fetched.json"), None));
+    retrieved_by_dataset(&dates)
+}
+
+fn retrieved_by_dataset(
+    dates: &HashMap<String, String>,
+) -> std::collections::BTreeMap<&'static str, String> {
+    let mut range: std::collections::BTreeMap<&'static str, (&str, &str)> = Default::default();
+    for (file, date) in dates {
+        let Some(dataset) = dataset_of(file) else {
+            continue;
+        };
+        let r = range.entry(dataset).or_insert((date, date));
+        r.0 = r.0.min(date.as_str());
+        r.1 = r.1.max(date.as_str());
+    }
+    range
+        .into_iter()
+        .map(|(dataset, (first, last))| {
+            let shown = if first == last {
+                first.to_string()
+            } else {
+                format!("{first} to {last}")
+            };
+            (dataset, shown)
+        })
+        .collect()
 }
 
 /// Land polygon rings (outer + holes together; even-odd containment).
@@ -1007,4 +1061,69 @@ fn load_coast(root: &std::path::Path) -> Vec<Vec<[f32; 2]>> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dates(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(f, d)| (f.to_string(), d.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn each_dataset_keeps_its_own_retrieval_date() {
+        let got = retrieved_by_dataset(&dates(&[
+            ("gaia_nearby.csv", "2026-07-11"),
+            ("gaia_bright.csv", "2026-07-11"),
+            ("textures/8k_moon.jpg", "2026-11-04"),
+            ("textures/eso_milkyway.jpg", "2026-08-01"),
+            ("not_a_dataset.bin", "2020-01-01"),
+        ]));
+        assert_eq!(got["gaia"], "2026-07-11");
+        assert_eq!(got["maps"], "2026-11-04");
+        assert_eq!(got["eso-panorama"], "2026-08-01");
+        assert!(
+            !got.contains_key("horizons"),
+            "nothing dates the tracks here"
+        );
+        assert_eq!(got.len(), 3);
+    }
+
+    #[test]
+    fn a_dataset_fetched_across_days_shows_the_range() {
+        let got = retrieved_by_dataset(&dates(&[
+            ("spacecraft/voyager1.txt", "2026-07-11"),
+            ("spacecraft/pioneer10.txt", "2026-11-04"),
+            ("spacecraft/parker.txt", "2026-08-01"),
+        ]));
+        assert_eq!(got["horizons"], "2026-07-11 to 2026-11-04");
+    }
+
+    #[test]
+    fn every_evidence_record_names_a_dataset_that_exists() {
+        let mapped = [
+            "gaia_nearby.csv",
+            "exoplanets.csv",
+            "ne_110m_land.geojson",
+            "textures/8k_moon.jpg",
+            "textures/eso_milkyway.jpg",
+            "spacecraft/voyager1.txt",
+            "spice/de440s.bsp",
+        ]
+        .map(|f| dataset_of(f).unwrap());
+        for dataset in [
+            "gaia",
+            "exoplanets",
+            "natural-earth",
+            "maps",
+            "eso-panorama",
+            "horizons",
+        ] {
+            assert!(mapped.contains(&dataset), "{dataset}");
+        }
+    }
 }

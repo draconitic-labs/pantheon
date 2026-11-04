@@ -19,6 +19,7 @@ import {
 } from './scene/galaxy.js';
 import { LOCAL_GROUP, COSMIC_NODES, buildCosmicWeb, buildOort, buildDwarfStars, discBasis } from './scene/cosmos.js';
 import { Sky } from './scene/sky.js';
+import { setRetrieved } from './evidence.js';
 
 const AU = 1.495978707e11, PC = 3.0856775814913673e16, KPC = 1e3 * PC, MPC = 1e6 * PC, RSUN = 6.957e8;
 const DEG = Math.PI / 180;
@@ -1254,6 +1255,7 @@ async function boot() {
   try {
     const m = await (await fetch('/api/meta')).json();
     meta.spice = !!m.spice; meta.textures = m.textures || []; meta.kernelProblems = m.kernel_problems || [];
+    setRetrieved(m.retrieved);
     metaOk = true;
   } catch (e) { console.warn('meta', e); }
   textures.setAvailable(meta.textures);

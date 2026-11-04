@@ -1421,11 +1421,10 @@ impl Pantheon {
                                         ui.horizontal(|ui| {
                                             let (rc, _) = ui.allocate_exact_size(egui::vec2(8.0, 12.0), Sense::hover());
                                             ui.painter().circle_filled(rc.center(), 3.4, theme::col32(r.class.rgb(), 1.0));
-                                            let retrieved = if r.fetched {
-                                                format!("\nretrieved: {}", self.u.retrieved)
-                                            } else {
-                                                String::new()
-                                            };
+                                            let retrieved = r
+                                                .dataset
+                                                .and_then(|d| self.u.retrieved.get(d))
+                                                .map_or(String::new(), |date| format!("\nretrieved: {date}"));
                                             ui.label(RichText::new(what).size(11.5).color(theme::TEXT))
                                                 .on_hover_text(format!(
                                                     "{}\n{}\nframe: {}\n{}{}",
@@ -1557,19 +1556,18 @@ impl Pantheon {
                     let r = crate::evidence::rec(*e);
                     ui.horizontal(|ui| {
                         ui.add_space(16.0);
+                        let retrieved = r
+                            .dataset
+                            .and_then(|d| self.u.retrieved.get(d))
+                            .map_or(String::new(), |date| format!("\nretrieved: {date}"));
                         ui.label(RichText::new(*what).size(11.0).color(theme::TEXT_DIM))
                             .on_hover_text(format!(
-                                "{}\n{}\nframe: {}\n{}",
-                                r.source, r.citation, r.frame, r.note
+                                "{}\n{}\nframe: {}\n{}{}",
+                                r.source, r.citation, r.frame, r.note, retrieved
                             ));
                     });
                 }
             }
-            ui.label(
-                RichText::new(format!("Data retrieved {}", self.u.retrieved))
-                    .size(11.0)
-                    .color(theme::TEXT_DIM),
-            );
         });
     }
 

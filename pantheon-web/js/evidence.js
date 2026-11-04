@@ -8,37 +8,33 @@
 
 export const CLS_COLOR = { measured: '#7ea8d8', modeled: '#d8b36a', illustrative: '#9a8f7a' };
 
-// Retrieval date for fetched datasets: /data/provenance.json "retrieved",
-// read once at module init, with a static fallback.
-let RETRIEVED = '2026-07-11';
-fetch('/data/provenance.json')
-  .then(r => (r.ok ? r.json() : null))
-  .then(j => { if (j && typeof j.retrieved === 'string') RETRIEVED = j.retrieved; })
-  .catch(() => {});
+// When each dataset was retrieved, from /api/meta. A dataset with no known date has none.
+let RETRIEVED = {};
+export function setRetrieved(dates) { RETRIEVED = dates || {}; }
 
 const M = 'measured', MO = 'modeled', IL = 'illustrative';
-// [cls, source, citation, frame, note, fetched(bool: retrieval date applies)]
+// [cls, source, citation, frame, note, the dataset whose retrieval date applies, or false]
 const REG = {
   'gaia-dr3': [M,
     'ESA Gaia DR3 (gaiadr3.gaia_source)',
     'Gaia Collaboration et al. 2023, A&A 674, A1',
     'ICRS, epoch J2016.0',
-    'positions/parallax/PM/photometry from the archive TAP', true],
+    'positions/parallax/PM/photometry from the archive TAP', 'gaia'],
   'gaia-dr3-bright': [M,
     'ESA Gaia DR3 (gaiadr3.gaia_source), all sources G<6.0',
     'Gaia Collaboration et al. 2023, A&A 674, A1',
     'ICRS, epoch J2016.0',
-    'naked-eye backdrop; G<6 parallaxes less reliable', true],
+    'naked-eye backdrop; G<6 parallaxes less reliable', 'gaia'],
   'surface-imagery': [M,
     'Solar System Scope texture pack (NASA/USGS/ESA mission mosaics), CC BY 4.0',
     'solarsystemscope.com/textures; NASA Blue/Black Marble; USGS Astrogeology',
     'body-fixed IAU frame, equirectangular, lon 0 at prime meridian',
-    'mosaics from mission imagery; the publisher tunes colors and fills unmapped gaps with fictional terrain; fine detail close to the surface is synthetic', true],
+    'mosaics from mission imagery; the publisher tunes colors and fills unmapped gaps with fictional terrain; fine detail close to the surface is synthetic', 'maps'],
   'cloud-layer': [IL,
     'Solar System Scope 2K cloud map, CC BY 4.0',
     'solarsystemscope.com/textures',
     'one saved snapshot on a shell 29 km up; height exaggerated',
-    'real cloud shapes, but not today\'s weather; their drift is illustrative', true],
+    'real cloud shapes, but not today\'s weather; their drift is illustrative', 'maps'],
   'atmosphere-model': [MO,
     'single-scattering Rayleigh and Mie model, marched per pixel',
     "Earth's coefficients after Hillaire 2020; other worlds are tuned by eye to their known look",
@@ -48,7 +44,7 @@ const REG = {
     'Solar System Scope ring strip (from NASA imagery), CC BY 4.0',
     'solarsystemscope.com/textures',
     'radial profile; radii fitted to the Cassini Division and C ring edge',
-    'radial structure only; grain up close and backlit brightness are modeled', true],
+    'radial structure only; grain up close and backlit brightness are modeled', 'maps'],
   'ring-zones': [MO,
     'published ring zone radii (embedded)',
     'JPL ring tables',
@@ -93,7 +89,7 @@ const REG = {
     'ESO Milky Way panorama (Serge Brunier), CC BY 4.0',
     'ESO/S. Brunier, eso0932a',
     'galactic coordinates, plate carrée, GC at center',
-    'photographic all-sky mosaic; shown only near the Sun where parallax is negligible', true],
+    'photographic all-sky mosaic; shown only near the Sun where parallax is negligible', 'eso-panorama'],
   'gaia-compiled': [M,
     'Hipparcos-era compilation (embedded)',
     'named-star table, van Leeuwen 2007 values',
@@ -103,7 +99,7 @@ const REG = {
     'NASA Exoplanet Archive, Planetary Systems (default_flag=1)',
     'IPAC/Caltech',
     'per-publication orbital elements',
-    'catalog values as published', true],
+    'catalog values as published', 'exoplanets'],
   'exo-derived-semi-major': [MO,
     "derived via Kepler's third law",
     'from catalog period + stellar mass (1 M☉ prior if absent)',
@@ -128,7 +124,7 @@ const REG = {
     'NASA/JPL Horizons API (cached vector tables)',
     'Giorgini et al., JPL SSD',
     'heliocentric ecliptic J2000, TDB epochs',
-    'reconstructed/predicted trajectory solutions', true],
+    'reconstructed/predicted trajectory solutions', 'horizons'],
   'horizons-interp': [MO,
     'cubic Hermite between cached samples',
     'position+velocity interpolation',
@@ -173,12 +169,12 @@ const REG = {
     'Natural Earth 1:110m coastline',
     'naturalearthdata.com (public domain)',
     'WGS84 → IAU Earth body-fixed',
-    'generalized cartography', true],
+    'generalized cartography', 'natural-earth'],
   'land-lights': [IL,
     'Natural Earth 1:110m land mask + settlement prior',
     'land polygons measured; light placement synthetic',
     'WGS84 → IAU Earth body-fixed',
-    'night-side lights are land-masked, not VIIRS data', true],
+    'night-side lights are land-masked, not VIIRS data', 'natural-earth'],
   'procedural-surface': [IL,
     'procedural surface shader',
     'deterministic fBm, per-body parameters',
@@ -238,6 +234,6 @@ export function rec(key) {
   }
   return {
     cls: d[0], source: d[1], citation: d[2], frame: d[3], note: d[4],
-    fetched: d[5] ? RETRIEVED : null,
+    fetched: (d[5] && RETRIEVED[d[5]]) || null,
   };
 }

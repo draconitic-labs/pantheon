@@ -4,6 +4,7 @@
 /assets/data/spice/*.bsp
 /assets/data/textures/
 /assets/data/fetch_log.txt
+/assets/data/fetched.json
 /target-3d/
 /src-tauri/gen/
 *.part
