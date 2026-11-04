@@ -273,12 +273,10 @@ fn doctor() -> anyhow::Result<()> {
             ""
         }
     );
-    if optional > 0
-        || maps == 0
-        || crate::spice::spice().is_none()
-        || !crate::spice::problems().is_empty()
-    {
-        println!("optional data is missing or damaged; run tools/fetch_data.py to download it");
+    // a damaged kernel's own line above says what to do about it
+    let kernels_missing = crate::spice::spice().is_none() && crate::spice::problems().is_empty();
+    if optional > 0 || maps == 0 || kernels_missing {
+        println!("optional data is missing; run tools/fetch_data.py to download it");
     }
     println!(
         "loaded:   {} stars, {} exo systems, {} craft, coast {} lines",
