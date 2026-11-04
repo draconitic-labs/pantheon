@@ -46,14 +46,23 @@ fn parse_size(s: &str, require_even: bool) -> anyhow::Result<(u32, u32)> {
     let (Some(ws), Some(hs), None) = (it.next(), it.next(), it.next()) else {
         anyhow::bail!("--size must be WIDTHxHEIGHT, got '{s}'");
     };
-    let w: u32 = ws.trim().parse().map_err(|_| anyhow::anyhow!("bad width '{ws}'"))?;
-    let h: u32 = hs.trim().parse().map_err(|_| anyhow::anyhow!("bad height '{hs}'"))?;
+    let w: u32 = ws
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("bad width '{ws}'"))?;
+    let h: u32 = hs
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("bad height '{hs}'"))?;
     anyhow::ensure!(
         (16..=8192).contains(&w) && (16..=8192).contains(&h),
         "size {w}x{h} outside 16..=8192"
     );
     if require_even {
-        anyhow::ensure!(w % 2 == 0 && h % 2 == 0, "video frames need even dimensions, got {w}x{h}");
+        anyhow::ensure!(
+            w % 2 == 0 && h % 2 == 0,
+            "video frames need even dimensions, got {w}x{h}"
+        );
     }
     Ok((w, h))
 }
@@ -75,17 +84,17 @@ impl Flags {
                 .get(i + 1)
                 .filter(|v| !v.starts_with("--"))
                 .ok_or_else(|| anyhow::anyhow!("flag '{a}' needs a value"))?;
-            anyhow::ensure!(
-                !pairs.iter().any(|(k, _)| k == a),
-                "duplicate flag '{a}'"
-            );
+            anyhow::ensure!(!pairs.iter().any(|(k, _)| k == a), "duplicate flag '{a}'");
             pairs.push((a.clone(), v.clone()));
             i += 2;
         }
         Ok(Flags { pairs })
     }
     fn get(&self, name: &str) -> Option<&str> {
-        self.pairs.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+        self.pairs
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
     }
 }
 
@@ -140,7 +149,11 @@ fn run(args: &[String]) -> anyhow::Result<()> {
                 .filter(|a| !a.starts_with("--"))
                 .map(String::as_str)
                 .unwrap_or("all");
-            let skip = if args.get(1).map(|a| a.starts_with("--")).unwrap_or(true) { 1 } else { 2 };
+            let skip = if args.get(1).map(|a| a.starts_with("--")).unwrap_or(true) {
+                1
+            } else {
+                2
+            };
             let flags = Flags::parse(&args[skip..], &["--size", "--out"])?;
             let (w, h) = match flags.get("--size") {
                 Some(s) => parse_size(s, false)?,
@@ -207,7 +220,10 @@ fn doctor() -> anyhow::Result<()> {
             println!(
                 "spice:    OK — {} · planetary {y0:.0}–{y1:.0} · leap seconds {}",
                 s.kernel_summary(),
-                s.lsk.as_ref().map(|l| l.entries.len().to_string()).unwrap_or("MISSING".into())
+                s.lsk
+                    .as_ref()
+                    .map(|l| l.entries.len().to_string())
+                    .unwrap_or("MISSING".into())
             );
         }
         None => println!("spice:    not loaded — analytic elements only (optional)"),
@@ -216,10 +232,16 @@ fn doctor() -> anyhow::Result<()> {
     println!(
         "layers:   {} registered — {}",
         crate::atlas::LAYERS.len(),
-        crate::atlas::LAYERS.iter().map(|l| l.name).collect::<Vec<_>>().join(", ")
+        crate::atlas::LAYERS
+            .iter()
+            .map(|l| l.name)
+            .collect::<Vec<_>>()
+            .join(", ")
     );
     // ffmpeg
-    let ff = std::process::Command::new("ffmpeg").arg("-version").output();
+    let ff = std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .output();
     match ff {
         Ok(o) if o.status.success() => {
             let first = String::from_utf8_lossy(&o.stdout);
@@ -236,7 +258,8 @@ fn doctor() -> anyhow::Result<()> {
     for line in &health.lines {
         println!("  {line}");
         if line.contains("MISSING") || line.contains("INVALID") {
-            if line.starts_with("craft ") || line.starts_with("truth ") || line.starts_with("land/") {
+            if line.starts_with("craft ") || line.starts_with("truth ") || line.starts_with("land/")
+            {
                 optional += 1;
             } else {
                 bad += 1;
@@ -244,11 +267,18 @@ fn doctor() -> anyhow::Result<()> {
         }
     }
     let tex = crate::data::asset_root().join("data/textures");
-    let maps = crate::engine::textures::ALL_TEX.iter().filter(|t| tex.join(t.file()).is_file()).count();
+    let maps = crate::engine::textures::ALL_TEX
+        .iter()
+        .filter(|t| tex.join(t.file()).is_file())
+        .count();
     println!(
         "imagery:  {maps} of {} surface maps on disk{}",
         crate::engine::textures::ALL_TEX.len(),
-        if maps == 0 { " (bodies will be procedural)" } else { "" }
+        if maps == 0 {
+            " (bodies will be procedural)"
+        } else {
+            ""
+        }
     );
     if optional > 0 || maps == 0 || crate::spice::spice().is_none() {
         println!("optional data is missing; run tools/fetch_data.py to download it");
@@ -269,7 +299,10 @@ fn doctor() -> anyhow::Result<()> {
         "craft": u.craft.len(),
     });
     std::fs::create_dir_all("exports").ok();
-    std::fs::write("exports/DATA_HEALTH.json", serde_json::to_string_pretty(&json)?)?;
+    std::fs::write(
+        "exports/DATA_HEALTH.json",
+        serde_json::to_string_pretty(&json)?,
+    )?;
     println!("wrote exports/DATA_HEALTH.json");
     anyhow::ensure!(bad == 0, "{bad} required dataset problem(s) — see above");
     Ok(())
