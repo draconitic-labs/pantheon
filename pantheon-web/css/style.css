@@ -168,7 +168,7 @@ body::before { content: ''; position: fixed; inset: 0 auto 0 0; width: 260px; z-
 #toast.show { opacity: 1; }
 #banner { top: 16px; opacity: 0; pointer-events: none; transition: opacity 0.3s; color: var(--gilt); font-size: 15px; }
 #banner.show { opacity: 1; }
-#hint { bottom: 62px; width: min(1000px, 58vw); opacity: 0; pointer-events: none; transition: opacity 0.9s; font: 500 22px/1.25 var(--display); color: var(--bone); }
+#hint { bottom: 62px; width: min(620px, 38vw); opacity: 0; pointer-events: none; transition: opacity 0.9s; font: 500 22px/1.25 var(--display); color: var(--bone); }
 #hint.show { opacity: 0.94; }
 #tourbar { bottom: 22px; display: none; align-items: center; gap: 8px; }
 #tourbar.show { display: flex; }
@@ -206,6 +206,7 @@ body::before { content: ''; position: fixed; inset: 0 auto 0 0; width: 260px; z-
 #fps { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 40; font-size: 12.5px; color: var(--dim); font-variant-numeric: lining-nums tabular-nums; pointer-events: none; text-shadow: var(--shadow); text-align: center; white-space: pre; }
 
 /* ---- small windows ---- */
+@media (max-width: 1500px) { #hint { bottom: 196px; width: min(760px, 70vw); } }
 @media (max-height: 760px) { .rung[data-minor] { display: none; } #rail { bottom: 250px; } .place-title { font-size: 32px; } }
 @media (max-height: 560px) { #rail { display: none; } }
 @media (max-width: 1040px) {
@@ -213,7 +214,7 @@ body::before { content: ''; position: fixed; inset: 0 auto 0 0; width: 260px; z-
   #searchwrap { width: 200px; }
   .tool { padding: 3px 6px; font-size: 12.5px; }
   #card { top: 46px; width: 268px; }
-  #hint { bottom: 118px; font-size: 18px; max-width: 80vw; }
+  #hint { font-size: 18px; }
   #place { max-width: 56vw; }
   #credit { max-width: 36vw; bottom: 50px; }
 }
