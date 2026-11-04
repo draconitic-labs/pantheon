@@ -138,7 +138,10 @@ def manifest() -> list[tuple[str, str, str, float, bytes | None]]:
         ("saturn", "699"), ("uranus", "799"), ("neptune", "899"), ("pluto", "999"),
     ]:
         items.append(("tracks", f"spacecraft/planet_{name}.txt", horizons(cmd, "2025-07-01", "2027-07-01", "5d"), 0.03, b"$$EOE"))
-    items.append(("tracks", "spacecraft/moon_geo.txt", horizons("301", "2026-06-01", "2026-09-01", "6h", "500@399"), 0.08, b"$$EOE"))
+    # the Moon's true path around the day of the fetch: the atlas draws it while the date is in this window
+    today = dt.date.today()
+    moon_from, moon_to = today - dt.timedelta(days=46), today + dt.timedelta(days=46)
+    items.append(("tracks", "spacecraft/moon_geo.txt", horizons("301", moon_from.isoformat(), moon_to.isoformat(), "6h", "500@399"), 0.08, b"$$EOE"))
     items.extend(
         [
             ("kernels", "spice/naif0012.tls", f"{NAIF}/lsk/naif0012.tls", 0.01, b"KPL/LSK"),
@@ -288,7 +291,7 @@ def main() -> int:
         for rel in failed:
             print(f"  {rel}")
         return 1
-    print("\nDone. Check the result with: pantheon-cli --doctor")
+    print("\nDone. Check the result with: target/release/pantheon-cli --doctor")
     return 0
 
 

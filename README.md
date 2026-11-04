@@ -23,10 +23,10 @@ itself), a Vulkan driver, and these system packages:
 
 ```sh
 # Fedora
-sudo dnf install alsa-lib-devel libxkbcommon-devel wayland-devel libX11-devel
+sudo dnf install gcc pkgconf-pkg-config alsa-lib-devel libxkbcommon-devel wayland-devel libX11-devel
 
 # Debian, Ubuntu
-sudo apt install libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev
+sudo apt install build-essential pkg-config libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev
 ```
 
 Then:
@@ -49,8 +49,8 @@ tools/fetch_data.py --no-kernels  # planet maps and spacecraft tracks: about 60 
 tools/fetch_data.py --list        # see what's here and what isn't
 ```
 
-Python 3.9 or newer and nothing else is required. `pantheon-cli --doctor` checks
-the result. A dropped connection leaves no partial file behind, and running the script
+Python 3.9 or newer and nothing else is required. `target/release/pantheon-cli --doctor`
+checks the result. A dropped connection leaves no partial file behind, and running the script
 again fetches whatever is missing or truncated. If a kernel on disk is damaged anyway, both
 apps skip it, say so, and carry on with orbital elements.
 
@@ -109,7 +109,7 @@ card's "Where this comes from" gives source, citation and frame for each value.
 
 | You see | It is | Class |
 |---|---|---|
-| Planet and moon positions | JPL DE440s and satellite kernels, with Standish and mean elements outside coverage or without kernels. Our Moon's fallback is about 1° off on average, about 3° at worst | measured / modeled |
+| Planet and moon positions | JPL DE440s and satellite kernels, with Standish and mean elements outside coverage or without kernels. Our Moon's fallback is about 1° off on average from 1950 to 2050 (3.2° at worst), and worse outside that | measured / modeled |
 | The moons of Uranus | Always mean elements, because no Uranian kernel is downloaded. Where each sits along its orbit is chosen for legibility | modeled / illustrative |
 | Spacecraft paths | JPL Horizons vectors, Hermite-interpolated, never extrapolated | measured |
 | Nearby stars and the naked-eye sky | ESA Gaia DR3: the 12,000 largest parallaxes among sources brighter than G 16 with parallax known to 10%, which reach about 35 pc and leave out fainter stars inside that, plus every source brighter than G 6 | measured |
@@ -155,7 +155,8 @@ pantheon-cli ...                         the same, always with console output
 ```
 
 Record a flight from the view menu, save it, and render it with `--path`. Set
-`PANTHEON_ASSETS` to use a data directory elsewhere, and `PANTHEON_TEX_MAX` to cap
+`PANTHEON_ASSETS` to use assets kept elsewhere: it names the folder that holds `data` and
+`fonts`, the parent of what `tools/fetch_data.py --dest` takes. Set `PANTHEON_TEX_MAX` to cap
 map resolution on a small GPU.
 
 ## Pantheon 3D
@@ -201,8 +202,8 @@ is synthetic.
 **Without the downloads.** A fresh clone has no `assets/data/textures` or SPICE kernels. It
 still runs and says so on screen: planets become procedural, Earth is real outlines with
 painted colors, the sky is the illustrative Galaxy model, and positions come from mean
-elements, with our Moon on a simple model about a degree off. `tools/fetch_data.py` fetches
-the rest.
+elements, with our Moon on a simple model, about a degree off from 1950 to 2050 and worse
+outside that. `tools/fetch_data.py` fetches the rest.
 
 **Quality.** Automatic by default: it measures real frame cost and steps between four tiers,
 and the Quality menu shows the numbers or fixes a tier. For a frame readout on screen, run

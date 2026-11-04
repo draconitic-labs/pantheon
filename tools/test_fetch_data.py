@@ -180,6 +180,12 @@ class Fetch(unittest.TestCase):
         self.assertEqual(self.run_main(bad), 1)
         self.assertFalse((self.data / "fetched.json").exists())
 
+    def test_the_moon_track_is_around_today(self):
+        url = next(item[2] for item in fetch_data.manifest() if item[1] == "spacecraft/moon_geo.txt")
+        today = fetch_data.dt.date.today()
+        start = (today - fetch_data.dt.timedelta(days=46)).isoformat()
+        self.assertIn(start, url)
+
     def test_every_pinned_size_is_a_file_in_the_manifest(self):
         rels = {item[1] for item in fetch_data.manifest()}
         self.assertLessEqual(set(PINNED_SIZES), rels)
