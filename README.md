@@ -163,7 +163,10 @@ cd src-tauri && CARGO_TARGET_DIR=../target-3d cargo build --release
 ../target-3d/release/pantheon-3d
 ```
 
-`scripts/install-desktop.sh` builds it too and adds its own menu entry.
+`scripts/install-desktop.sh` builds it too and adds its own menu entry. The window keeps
+its small data (the first-run flag, WebKit's cache) beside the binary, so `--uninstall`
+leaves nothing of Pantheon's in your home folder. Your GPU driver's own shader caches
+under `~/.cache` are the driver's.
 
 **Getting around.** Drag to swing around what you are looking at. Scroll to zoom: one
 wheel goes from the ground to the cosmic web, and scrolling back returns you to where you

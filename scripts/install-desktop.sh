@@ -50,7 +50,10 @@ if [ "$uninstall" = 1 ]; then
   if [ -z "$(find "$hicolor" -type f ! -name icon-theme.cache -print -quit 2>/dev/null)" ]; then
     rm -f "$hicolor/icon-theme.cache"
   fi
-  rmdir -p --ignore-fail-on-non-empty "$icons" "$apps" 2>/dev/null || true
+  # Only folders this script makes, deepest first, and only if empty
+  for dir in "$icons" "$hicolor/256x256" "$hicolor" "$HOME/.local/share/icons" "$apps"; do
+    rmdir "$dir" 2>/dev/null || true
+  done
   echo "Removed the Pantheon menu entries and icons. Your checkout is untouched."
   exit 0
 fi
@@ -93,7 +96,7 @@ Exec="$atlas_bin"
 Path=$repo
 Icon=pantheon
 Terminal=false
-Categories=Education;Science;Astronomy;
+Categories=Science;Astronomy;
 Keywords=universe;space;planets;stars;galaxy;atlas;
 StartupWMClass=pantheon
 DESKTOP
@@ -110,7 +113,7 @@ Exec="$flight_bin"
 Path=$repo
 Icon=pantheon-3d
 Terminal=false
-Categories=Education;Science;Astronomy;
+Categories=Science;Astronomy;
 Keywords=universe;space;planets;stars;galaxy;3d;
 StartupWMClass=pantheon-3d
 DESKTOP

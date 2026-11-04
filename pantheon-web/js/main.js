@@ -1168,9 +1168,10 @@ function updateTruth(panoA) {
     add('Stars: Gaia DR3', 'gaia-dr3');
     if (panoA > 0.02) add('Sky: ESO photograph', 'milkyway-pano');
     if (!sky.hasPano) add('Sky band: illustrative model', 'galaxy-fog');
-    const real = rec && (rec.textured || near.body.name === 'Sun');
+    const real = rec && rec.textured;
     const where = kernels ? 'Real positions' : meta.spice ? 'Modeled positions at this time rate' : 'Modeled positions, no kernels loaded';
-    summary = real ? `${where}; real imagery, modeled lighting` : `${where}; surface is procedural`;
+    summary = real ? `${where}; real imagery, modeled lighting`
+      : rec && rec.paintedLand ? `${where}; real outlines, painted colors` : `${where}; surface is procedural`;
     cls = kernels && real ? 'measured' : 'modeled';
   } else if (dSun < 150 * PC) {
     add('Stars: Gaia DR3', 'gaia-dr3');
