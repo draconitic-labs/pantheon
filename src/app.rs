@@ -207,14 +207,10 @@ impl Pantheon {
         }
         let damaged = crate::spice::problems();
         data_gaps.extend(damaged.iter().cloned());
-        if crate::spice::spice().is_none() {
-            data_gaps.push(if damaged.is_empty() {
-                "JPL kernels are missing, so positions use approximate orbital elements.".into()
-            } else {
-                "Without it, positions use approximate orbital elements.".into()
-            });
-        } else if !damaged.is_empty() {
-            data_gaps.push("What it carries falls back to approximate orbital elements.".into());
+        if crate::spice::spice().is_none() && damaged.is_empty() {
+            data_gaps.push(
+                "JPL kernels are missing, so positions use approximate orbital elements.".into(),
+            );
         }
         if u.craft.is_empty() {
             data_gaps.push("Spacecraft tracks are missing.".into());
@@ -229,10 +225,7 @@ impl Pantheon {
             }
         }
         let status = match damaged.first() {
-            Some(problem) => Some((
-                format!("{problem} Open the view menu for what this changes."),
-                30.0,
-            )),
+            Some(problem) => Some((problem.clone(), 30.0)),
             None => (!data_gaps.is_empty()).then(|| {
                 (
                     "Running with basic data. Open the view menu to see what's missing."

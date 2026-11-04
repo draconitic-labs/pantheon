@@ -433,6 +433,10 @@ pub struct SpiceSet {
     pub jd1: f64,
 }
 
+/// What to do about a bad kernel. tools/fetch_data.py can't tell every kind of damage from a
+/// good file of the right size, but it always fetches a file that isn't there.
+const REPAIR: &str = "Delete it, run tools/fetch_data.py to get a new copy, then restart.";
+
 /// What was found in the kernel folder: the usable set, if any, and what was wrong.
 pub struct KernelScan {
     pub set: Option<SpiceSet>,
@@ -465,11 +469,33 @@ impl SpiceSet {
                         }
                         spks.push((name, spk));
                     }
-                    Err(e) => problems.push(format!("Kernel {name} can't be used: {e}.")),
+                    Err(e) => {
+                        let falls_back = if name.starts_with("de440") {
+                            "Every position falls back to orbital elements"
+                        } else {
+                            "The moons it carries fall back to mean elements"
+                        };
+                        problems.push(format!(
+                            "Kernel {name} can't be used: {e}. {falls_back}. {REPAIR}"
+                        ));
+                    }
                 }
             }
         }
         problems.sort();
+        let tls = dir.join("naif0012.tls");
+        let lsk = match Lsk::load(&tls) {
+            Ok(lsk) => Some(lsk),
+            Err(e) => {
+                if tls.exists() {
+                    problems.push(format!(
+                        "Leap-second kernel naif0012.tls can't be used: {e}. UTC times before \
+                         2017 can be up to half a minute off. {REPAIR}"
+                    ));
+                }
+                None
+            }
+        };
         let Some((et0, et1)) = planetary else {
             return KernelScan {
                 set: None,
@@ -478,7 +504,6 @@ impl SpiceSet {
         };
         // planetary kernel first so common lookups resolve in one probe
         spks.sort_by_key(|(n, _)| !n.starts_with("de440") as u8);
-        let lsk = Lsk::load(&dir.join("naif0012.tls")).ok();
         KernelScan {
             set: Some(SpiceSet {
                 spks,
@@ -752,6 +777,28 @@ mod tests {
         );
         assert!(
             scan.problems[0].contains("ends early"),
+            "{:?}",
+            scan.problems
+        );
+    }
+
+    #[test]
+    fn a_damaged_leap_second_kernel_is_reported() {
+        let dir = std::env::temp_dir().join(format!("pantheon-lsk-test-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let file = dir.join("naif0012.tls");
+        std::fs::write(&file, "not a leap-second table").unwrap();
+        let scan = SpiceSet::scan(&dir);
+        std::fs::remove_file(&file).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
+        assert_eq!(scan.problems.len(), 1, "{:?}", scan.problems);
+        assert!(
+            scan.problems[0].contains("naif0012.tls"),
+            "{:?}",
+            scan.problems
+        );
+        assert!(
+            scan.problems[0].contains("Delete it"),
             "{:?}",
             scan.problems
         );

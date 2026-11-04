@@ -324,3 +324,20 @@ pub fn rec(e: Ev) -> EvidenceRec {
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_uranus_note_is_on_the_moon_record_and_nowhere_else() {
+        assert!(rec(Ev::MoonMeanElements).note.contains("Uranus"));
+        assert!(!rec(Ev::GlyphIllustrative).note.contains("kernel"));
+    }
+
+    #[test]
+    fn the_lunar_model_states_its_accuracy() {
+        let note = rec(Ev::LunaModel).note;
+        assert!(note.contains("1°") && note.contains("3°"), "{note}");
+    }
+}

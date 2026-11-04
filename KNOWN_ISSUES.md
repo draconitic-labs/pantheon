@@ -34,7 +34,9 @@ apps running. The on-screen labels already say most of this where it applies.
 - **Downloads.** Kernels and maps are checked against their exact size. Catalogs and Horizons
   tables change with each fetch, so they are checked by what the server promised and by their
   markers, and a catalog truncated some other way wouldn't be noticed on a later run. There are
-  no checksums. Natural Earth comes from an unpinned `master` branch.
+  no checksums, so a kernel of the right size with a damaged body looks fine to the script. The
+  apps catch that one when they load it and say to delete it and fetch again. Natural Earth
+  comes from an unpinned `master` branch.
 - **Spacecraft tracks end on 2027-07-01** (Cassini in 2017). Past the end of a track, the atlas
   hides that spacecraft (Cassini stays as a dim marker), and in 3D its marker holds at the end
   and the card says so. Newer dates

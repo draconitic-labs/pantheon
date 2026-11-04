@@ -219,7 +219,7 @@ fn doctor() -> anyhow::Result<()> {
         None => println!("spice:    not loaded — analytic elements only (optional)"),
     }
     for problem in crate::spice::problems() {
-        println!("  {problem} tools/fetch_data.py replaces it.");
+        println!("  {problem}");
     }
     // layer registry
     println!(
@@ -290,19 +290,6 @@ fn doctor() -> anyhow::Result<()> {
     for (dataset, date) in &u.retrieved {
         println!("retrieved: {dataset} {date}");
     }
-    let json = serde_json::json!({
-        "version": env!("CARGO_PKG_VERSION"),
-        "lines": health.lines,
-        "stars": u.stars.len(),
-        "exo_systems": u.exos.len(),
-        "craft": u.craft.len(),
-    });
-    std::fs::create_dir_all("exports").ok();
-    std::fs::write(
-        "exports/DATA_HEALTH.json",
-        serde_json::to_string_pretty(&json)?,
-    )?;
-    println!("wrote exports/DATA_HEALTH.json");
     anyhow::ensure!(bad == 0, "{bad} required dataset problem(s) — see above");
     Ok(())
 }

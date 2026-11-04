@@ -1292,9 +1292,8 @@ async function boot() {
   const damaged = meta.kernelProblems.length > 0;
   lines.push(...meta.kernelProblems);
   const fallback = 'planets sit where mean orbital elements put them, thousands of kilometres off at best. Our Moon is about a degree off its real direction, and the other moons\' places on their orbits are illustrative.';
-  if (!meta.spice) lines.push(damaged ? `Without it, ${fallback}` : `No SPICE kernels in assets/data/spice: ${fallback}`);
-  else if (damaged) lines.push('What it carries falls back to mean orbital elements. Each card says what its numbers come from.');
-  if (lines.length) lines.push('Run tools/fetch_data.py to download what is missing or damaged, then restart.');
+  if (!meta.spice) lines.push(`${damaged ? 'No kernels are in use' : 'No SPICE kernels in assets/data/spice'}: ${fallback}`);
+  if (missingMaps || (!meta.spice && !damaged)) lines.push('Run tools/fetch_data.py to download them, then restart.');
   if (!metaOk) lines.unshift('The data server did not answer, so the catalogs may be missing too.');
   ui.setNotice(lines);
 

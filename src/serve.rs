@@ -47,7 +47,7 @@ enum Bound {
 }
 
 fn bind_or_find(port_req: u16) -> anyhow::Result<Bound> {
-    for cand in port_req..port_req.saturating_add(10) {
+    for cand in port_req..=port_req.saturating_add(9) {
         match TcpListener::bind(("127.0.0.1", cand)) {
             Ok(l) => {
                 // not `cand`: port 0 means the kernel chose one
@@ -84,7 +84,7 @@ fn run_loop(listener: TcpListener, port: u16, web: PathBuf) {
     let (uni, _health) = crate::data::Universe::load_with_health();
     let spice_loaded = crate::spice::spice().is_some();
     for problem in crate::spice::problems() {
-        eprintln!("pantheon: {problem} tools/fetch_data.py replaces it.");
+        eprintln!("pantheon: {problem}");
     }
     println!(
         "  web root {} · spice {} · {} stars · {} exo systems",
@@ -130,7 +130,7 @@ fn accept_loop(listener: TcpListener, uni: Arc<crate::data::Universe>, site: Arc
 /// waits in the accept backlog.
 pub fn spawn_background(port_req: u16) -> anyhow::Result<u16> {
     let web = web_root()?;
-    for cand in port_req..port_req.saturating_add(10) {
+    for cand in port_req..=port_req.saturating_add(9) {
         if let Ok(listener) = TcpListener::bind(("127.0.0.1", cand)) {
             // not `cand`: port 0 means the kernel chose one
             let port = listener.local_addr()?.port();
@@ -1258,6 +1258,17 @@ mod tests {
         let fx = Fixture::new();
         let port = fx.serve(false);
         assert!(existing_pantheon(port));
+    }
+
+    #[test]
+    fn the_top_of_the_port_range_is_a_range_too() {
+        assert_eq!((65535u16..=65535u16.saturating_add(9)).count(), 1);
+        // and 65535 itself is either bound or reported as taken, never an empty search
+        match bind_or_find(65535) {
+            Ok(Bound::Listener(_, port)) => assert_eq!(port, 65535),
+            Ok(Bound::Existing(port)) => assert_eq!(port, 65535),
+            Err(e) => assert!(e.to_string().contains("no free port"), "{e}"),
+        }
     }
 
     #[test]

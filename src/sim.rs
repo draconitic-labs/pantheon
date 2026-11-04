@@ -491,7 +491,10 @@ pub fn eph_is_spice(jd: f64) -> bool {
 /// kernel; falls back to the analytic elements outside coverage
 /// or when kernels are absent (Earth resolved to its true center).
 pub fn body_pos(i: usize, jd: f64) -> DVec3 {
-    if let Some(s) = crate::spice::spice() {
+    // Only inside de440s's coverage. Satellite kernels run past it and also carry a few
+    // planets, but the labels say elements out there, and a mix of the two would put Earth
+    // on one ephemeris and Venus on another.
+    if let Some(s) = crate::spice::spice().filter(|s| s.covers(jd)) {
         // true planet center when a satellite kernel carries it, else the
         // system barycenter from de440s (offset ≤ ~10³ km)
         if let Some(p) = s.helio_ecl_m(PLANET_CENTER_IDS[i], jd) {
@@ -1461,6 +1464,18 @@ mod far_date_tests {
                     p.name
                 );
             }
+        }
+    }
+
+    /// Past de440s, every planet is on elements, as the labels say. Without kernels this
+    /// holds trivially.
+    #[test]
+    fn planets_past_de440s_are_on_elements_as_labelled() {
+        let jd = J2000 + 226.0 * 365.25;
+        assert!(!eph_is_spice(jd));
+        assert_eq!(body_pos(2, jd), earth_center(jd));
+        for i in [0, 1, 3, 4, 5, 6, 7, 8] {
+            assert_eq!(body_pos(i, jd), planet_pos(i, jd), "{}", PLANETS[i].name);
         }
     }
 
