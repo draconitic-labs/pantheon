@@ -8,13 +8,20 @@
 #
 # The entries point at the binaries in this checkout, which is also where the
 # datasets live, so moving or deleting the checkout breaks them. Run this again
-# after moving it. Uninstalling leaves the checkout and its downloads untouched.
-# A menu entry or icon with the same name that this script didn't write is left alone.
+# after moving it. It refuses a checkout path with $ ` " \ or % in it, because a
+# menu entry can't name such a path reliably.
+#
+# It doesn't overwrite what it didn't write: a menu entry of the same name, or an icon
+# of the same name that differs from ours with no entry of ours beside it, stops the
+# install. Uninstalling removes only our entries and icons, then refreshes the shared
+# menu and icon caches so they stop listing Pantheon. The caches and folders stay, and
+# so do the checkout, its downloads, and your settings in ~/.config/pantheon.
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 apps="$HOME/.local/share/applications"
-icons="$HOME/.local/share/icons/hicolor/256x256/apps"
+hicolor="$HOME/.local/share/icons/hicolor"
+icons="$hicolor/256x256/apps"
 
 # Pantheon 3D's entry is named after the window's app id (identifier in tauri.conf.json):
 # on Wayland that name is how the desktop finds the window's icon and launcher.
@@ -35,7 +42,7 @@ remove_entry() {
   fi
 }
 
-# An icon is ours only if it still matches the file in this checkout.
+# An icon is ours for removal only if it still matches the file in this checkout.
 remove_icon() {
   if [ ! -e "$1" ]; then
     return 0
@@ -54,6 +61,16 @@ refuse_foreign_entry() {
   fi
 }
 
+# An icon that differs from ours is an older one of ours if our entry is beside it.
+# With no entry of ours, it belongs to something else.
+refuse_foreign_icon() {
+  if [ -e "$1" ] && ! cmp -s "$1" "$2" && ! { [ -e "$3" ] && our_entry "$3"; }; then
+    echo "$1 exists and wasn't written by this script." >&2
+    echo "Move it away, then run this again." >&2
+    exit 1
+  fi
+}
+
 build=1
 with_3d=1
 uninstall=0
@@ -63,7 +80,7 @@ for arg in "$@"; do
     --no-3d) with_3d=0 ;;
     --uninstall) uninstall=1 ;;
     -h | --help)
-      sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -74,9 +91,14 @@ for arg in "$@"; do
 done
 
 refresh_caches() {
-  command -v update-desktop-database >/dev/null && update-desktop-database "$apps" || true
-  command -v gtk-update-icon-cache >/dev/null &&
-    gtk-update-icon-cache -q -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+  if [ -d "$apps" ] && command -v update-desktop-database >/dev/null; then
+    update-desktop-database "$apps" || true
+  fi
+  # -f because it only compares the top two folder levels' times, so it would call the
+  # cache up to date after an icon goes from 256x256/apps
+  if [ -d "$hicolor" ] && command -v gtk-update-icon-cache >/dev/null; then
+    gtk-update-icon-cache -q -f -t "$hicolor" 2>/dev/null || true
+  fi
 }
 
 if [ "$uninstall" = 1 ]; then
@@ -85,19 +107,19 @@ if [ "$uninstall" = 1 ]; then
   remove_icon "$icons/pantheon.png" "$repo/assets/icon.png"
   remove_icon "$icons/pantheon-3d.png" "$repo/assets/icon-3d.png"
   refresh_caches
-  # Shared caches and folders go only if nothing else is left in them
-  ls "$apps"/*.desktop >/dev/null 2>&1 || rm -f "$apps/mimeinfo.cache"
-  hicolor="$HOME/.local/share/icons/hicolor"
-  if [ -z "$(find "$hicolor" -type f ! -name icon-theme.cache -print -quit 2>/dev/null)" ]; then
-    rm -f "$hicolor/icon-theme.cache"
-  fi
-  # Only folders this script makes, deepest first, and only if empty
-  for dir in "$icons" "$hicolor/256x256" "$hicolor" "$HOME/.local/share/icons" "$apps"; do
-    rmdir "$dir" 2>/dev/null || true
-  done
-  echo "Removed the Pantheon menu entries and icons. Your checkout is untouched."
+  echo "Removed the Pantheon menu entries and icons. Your checkout and settings are untouched."
   exit 0
 fi
+
+# A .desktop file can't name these reliably: Exec and Path treat them as expansions or
+# escapes, so the entry would be invalid or run something else.
+case "$repo" in
+  *'$'* | *'`'* | *'"'* | *'\'* | *'%'* | *$'\n'*)
+    echo "This checkout's path has a character a menu entry can't name: $repo" >&2
+    echo "Move it somewhere without \$ \` \" \\ or %, then run this again." >&2
+    exit 1
+    ;;
+esac
 
 command -v cargo >/dev/null || {
   echo "cargo was not found. Install Rust from https://rustup.rs, then run this again." >&2
@@ -107,6 +129,10 @@ command -v cargo >/dev/null || {
 # Before any build, so a clash doesn't cost a long compile first
 refuse_foreign_entry "$apps/pantheon.desktop"
 refuse_foreign_entry "$apps/app.pantheon.atlas3d.desktop"
+refuse_foreign_icon "$icons/pantheon.png" "$repo/assets/icon.png" "$apps/pantheon.desktop"
+if [ "$with_3d" = 1 ]; then
+  refuse_foreign_icon "$icons/pantheon-3d.png" "$repo/assets/icon-3d.png" "$apps/app.pantheon.atlas3d.desktop"
+fi
 
 if [ "$build" = 1 ]; then
   echo "Building Pantheon (release)..."
