@@ -8,8 +8,10 @@ apps running. The on-screen labels already say most of this where it applies.
 - **Fresh clone.** Without the kernels, planets use JPL's approximate orbital elements, and
   moons use mean elements. The app says so.
 - **Our Moon without a kernel.** A precessing ellipse with no periodic terms. From 1950 to
-  2050 its direction is about 1° from DE440s on average and about 3° at worst, which is up to
-  about 20,000 km, or a few hours of its motion, so a full or new moon can look hours early or late.
+  2050 its direction is about 1° from DE440s on average and 3.2° at worst, which is up to about
+  20,000 km, or a few hours of its motion, so a full or new moon can look hours early or late.
+  Outside that it is worse: about 2° on average and 4.6° at worst by 1850 and 2150, because its
+  rates are of-date and drift about 1.4° a century.
 - **The moons of Uranus.** `tools/fetch_data.py` downloads no Uranian kernel, so Miranda,
   Ariel, Umbriel, Titania and Oberon always use mean elements, and where each sits along its
   orbit is chosen for legibility rather than real. Their cards say this.

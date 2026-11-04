@@ -1020,7 +1020,7 @@ pub const MOON_GM: [f64; 21] = [
 /// Earth's Moon with precessing node (18.6 yr) and perigee (8.85 yr) —
 /// a readable mid-fidelity model (status=modeled). It leaves out evection and the
 /// other periodic terms: from 1950 to 2050 its direction is about 1° from DE440s on
-/// average and about 3° at worst, as the tests below hold it to.
+/// average and 3.2° at worst, as the tests below hold it to, and worse outside that.
 pub fn luna_rel(jd: f64) -> DVec3 {
     let d = jd - J2000;
     let a = 384_400.0e3;

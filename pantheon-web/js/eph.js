@@ -269,9 +269,9 @@ const URANUS = 6;
 MOONS.forEach((m, i) => { m.incl = m.parent === URANUS ? 180.0 - MOON_INCL[i] : MOON_INCL[i]; });
 
 // Earth's Moon with precessing node (18.6 yr) and perigee (8.85 yr) — the one moon
-// whose place on its orbit isn't illustrative: about 1° from DE440s on average, about
-// 3° at worst, from 1950 to 2050. Kept identical to luna_rel in src/sim.rs, whose tests
-// hold it to that.
+// whose place on its orbit isn't illustrative: about 1° from DE440s on average, 3.2° at
+// worst, from 1950 to 2050, and worse outside that. Kept identical to luna_rel in
+// src/sim.rs, whose tests hold it to that.
 export function lunaRel(jd) {
   const d = jd - J2000_JD;
   const a = 384400.0e3;

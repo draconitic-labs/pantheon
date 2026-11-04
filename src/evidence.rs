@@ -167,7 +167,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             source: "precessing-ellipse lunar model",
             citation: "node 18.6 yr, perigee 8.85 yr",
             frame: "geocentric ecliptic",
-            note: "used when de440s doesn't cover the date. Against de440s from 1950 to 2050 its direction is about 1° off on average and about 3° at worst",
+            note: "used when de440s doesn't cover the date, so with kernels only outside 1850-2150. Against de440s its direction is about 1° off on average from 1950 to 2050 (3.2° at worst), and worse outside that: about 2° on average by 1850 and 2150 (4.6° at worst), drifting about 1.4° a century beyond",
             dataset: None,
         },
         Ev::IauRotation => EvidenceRec {
@@ -338,6 +338,9 @@ mod tests {
     #[test]
     fn the_lunar_model_states_its_accuracy() {
         let note = rec(Ev::LunaModel).note;
-        assert!(note.contains("1°") && note.contains("3°"), "{note}");
+        assert!(
+            note.contains("1950 to 2050") && note.contains("worse outside"),
+            "{note}"
+        );
     }
 }

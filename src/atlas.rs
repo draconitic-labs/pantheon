@@ -885,9 +885,10 @@ fn body_caption(src: SurfaceSource) -> (&'static str, Prov) {
     match src {
         SurfaceSource::Sun => ("The surface is a tuned map. Its motion, prominences and corona are illustrative.", Prov::Illustrative),
         SurfaceSource::Map => ("The surface is a map built from NASA imagery, with tuned colour and some gaps filled. Atmosphere glow is illustrative.", Prov::Inferred),
+        SurfaceSource::Loading => ("This body's surface map is still loading.", Prov::Procedural),
         SurfaceSource::Procedural(Kernel) => ("The surface pattern is procedural: no map of this body is on this computer. Its position comes from a JPL kernel.", Prov::Procedural),
         SurfaceSource::Procedural(PlanetElements) => ("The surface pattern is procedural: no map of this body is on this computer. Its position comes from approximate orbital elements, not a JPL kernel.", Prov::Procedural),
-        SurfaceSource::Procedural(LunarModel) => ("The surface pattern is procedural: no map of this body is on this computer. Its position comes from a simple lunar model, about a degree off, not a JPL kernel.", Prov::Procedural),
+        SurfaceSource::Procedural(LunarModel) => ("The surface pattern is procedural: no map of this body is on this computer. Its position comes from a simple lunar model, about a degree off from 1950 to 2050 and worse outside that, not a JPL kernel.", Prov::Procedural),
         SurfaceSource::Procedural(MoonElements) => ("The surface pattern is procedural: no map of this body is on this computer. No kernel covers it at this date, so its place along its orbit is chosen for legibility and isn't where it really is.", Prov::Procedural),
     }
 }

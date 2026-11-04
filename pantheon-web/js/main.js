@@ -1299,7 +1299,7 @@ async function boot() {
   if (missingMaps) lines.push('No surface maps in assets/data/textures: planets are procedural, Earth is real outlines with painted colors, and the sky is the illustrative Galaxy model instead of a photograph.');
   const damaged = meta.kernelProblems.length > 0;
   lines.push(...meta.kernelProblems);
-  const fallback = 'planets sit where mean orbital elements put them, thousands of kilometres off at best. Our Moon is about a degree off its real direction, and the other moons\' places on their orbits are illustrative.';
+  const fallback = 'planets sit where mean orbital elements put them, thousands of kilometres off at best. Our Moon is about a degree off its real direction from 1950 to 2050 and worse outside that, and the other moons\' places on their orbits are illustrative.';
   if (!meta.spice) lines.push(`${damaged ? 'No kernels are in use' : 'No SPICE kernels in assets/data/spice'}: ${fallback}`);
   if (missingMaps || (!meta.spice && !damaged)) lines.push('Run tools/fetch_data.py to download them, then restart.');
   if (!metaOk) lines.unshift('The data server did not answer, so the catalogs may be missing too.');
