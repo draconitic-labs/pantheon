@@ -72,6 +72,8 @@ struct HistoryEntry {
     yaw: f64,
     focus: Option<ObjectRef>,
     follow: Option<(ObjectRef, DVec3)>,
+    /// the exoplanet system this view was in, so Back returns to it and not to empty space
+    scene_exo: Option<usize>,
 }
 
 /// The GM an object carries in a simulation: the same JPL values the gravity view uses.
@@ -323,6 +325,7 @@ impl Pantheon {
             yaw: self.cam.yaw,
             focus: self.focus,
             follow: self.follow,
+            scene_exo: self.scene_exo,
         });
         if self.history.len() > 32 {
             self.history.remove(0);
@@ -342,6 +345,7 @@ impl Pantheon {
         self.stop_motion();
         self.focus = h.focus;
         self.follow = h.follow;
+        self.scene_exo = h.scene_exo;
         let dur = self.cam.flight_seconds(h.center, h.mpp, self.view_w);
         self.cam
             .fly_to_view(h.center, h.mpp, h.tilt, h.yaw, self.view_w, dur);
@@ -355,7 +359,6 @@ impl Pantheon {
 
     /// Fly to Earth, the place everyone starts from.
     pub fn go_home(&mut self) {
-        self.scene_exo = None;
         self.dive_to(ObjectRef::Planet(2));
     }
 
@@ -411,24 +414,6 @@ impl Pantheon {
         self.modes.living = self.clock.playing;
         self.clock.tick(dt);
 
-        // follow a moving focus so Living Orbits keeps the subject centered
-        if self.cam.anim.is_none() {
-            if let Some((obj, off)) = self.follow {
-                let p = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref());
-                self.cam.center = (p + off) - self.cam.frame_origin;
-            }
-        }
-        // camera frame attachment: inside an exoplanet
-        // pocket the camera rebases to the host's frame so local precision
-        // is AU-scale, not 1e17-scale
-        let want_origin = self
-            .scene_exo
-            .map(|ei| self.u.exos[ei].pos)
-            .unwrap_or(DVec3::ZERO);
-        if (want_origin - self.cam.frame_origin).length() > 1e-3 {
-            self.cam.rebase(want_origin);
-        }
-
         // N-body island stepping
         let mut outrun = false;
         if self.modes.living && self.clock.playing {
@@ -467,6 +452,29 @@ impl Pantheon {
                 }
             }
         }
+        // follow a moving focus so Living Orbits keeps the subject centered
+        if self.cam.anim.is_none() {
+            if let Some((obj, off)) = self.follow {
+                let p = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref());
+                self.cam.center = (p + off) - self.cam.frame_origin;
+            }
+        }
+        // camera frame attachment: inside an exoplanet
+        // pocket the camera rebases to the host's frame so local precision
+        // is AU-scale, not 1e17-scale
+        let want_origin = self
+            .scene_exo
+            .map(|ei| self.u.exos[ei].pos)
+            .unwrap_or(DVec3::ZERO);
+        if (want_origin - self.cam.frame_origin).length() > 1e-3 {
+            // a zoom in progress holds a point in the old frame's coordinates
+            let delta = self.cam.frame_origin - want_origin;
+            if let Some(anchor) = &mut self.zoom_anchor {
+                anchor.2 += delta;
+            }
+            self.cam.rebase(want_origin);
+        }
+
         // a simulation only means something at the clock's date, so it ends rather than
         // showing bodies somewhere else: when time outruns it, or the clock jumps away
         if self.island.is_some() {
@@ -490,6 +498,16 @@ impl Pantheon {
             let d = (self.cam.center_root() - self.u.exos[ei].pos).length();
             if lw > 15.8 || d > crate::frames::PC {
                 self.scene_exo = None;
+            }
+        }
+        // and comes back when you scroll back to the system you still have selected
+        if let (None, None, Some(ObjectRef::ExoHost(ei) | ObjectRef::ExoPlanet(ei, _))) =
+            (self.scene_exo, &self.cam.anim, self.focus)
+        {
+            let lw = self.cam.log_width(self.view_w);
+            let d = (self.cam.center_root() - self.u.exos[ei].pos).length();
+            if lw < 15.6 && d < 0.5 * crate::frames::PC {
+                self.scene_exo = Some(ei);
             }
         }
         if let Some((_, until)) = self.status {
@@ -740,9 +758,11 @@ impl Pantheon {
     fn fly_to_object(&mut self, obj: ObjectRef, half_extent: f64) {
         self.push_history();
         self.stop_motion();
-        if let ObjectRef::ExoHost(ei) | ObjectRef::ExoPlanet(ei, _) = obj {
-            self.scene_exo = Some(ei);
-        }
+        // after the history entry above, which remembers the scene being left
+        self.scene_exo = match obj {
+            ObjectRef::ExoHost(ei) | ObjectRef::ExoPlanet(ei, _) => Some(ei),
+            _ => None,
+        };
         let pos = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref());
         let mpp = self.framing_mpp(half_extent);
         self.focus = Some(obj);
@@ -2384,6 +2404,156 @@ pub fn run_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A real app, without a window. Skips where there's no GPU adapter at all.
+    fn host() -> Option<Headless> {
+        match Headless::new() {
+            Ok(mut h) => {
+                h.app.view_w = 1600.0;
+                h.app.view_h = 900.0;
+                Some(h)
+            }
+            Err(e) => {
+                eprintln!("no GPU adapter here, test skipped: {e}");
+                None
+            }
+        }
+    }
+
+    const FRAME: f64 = 1.0 / 60.0;
+
+    fn land(a: &mut Pantheon) {
+        for _ in 0..2000 {
+            a.tick(FRAME);
+            if a.cam.anim.is_none() {
+                break;
+            }
+        }
+        assert!(a.cam.anim.is_none(), "the flight never landed");
+    }
+
+    /// One wheel notch at the middle of the view: that point stays put as the view scales.
+    fn scroll(a: &mut Pantheon, dex: f64) {
+        let proj = crate::frames::Proj::new(&a.cam, a.view_w, a.view_h, &a.u.gal);
+        let (cx, cy) = (a.view_w * 0.5, a.view_h * 0.5);
+        a.zoom_anchor = Some((cx, cy, proj.unproject_local(cx, cy)));
+        a.zoom_pending += dex;
+        a.cam.anim = None;
+    }
+
+    #[test]
+    fn scrolling_out_of_an_exoplanet_system_and_back_is_continuous() {
+        let Some(mut h) = host() else { return };
+        let a = &mut h.app;
+        // the window's zoom glides over several frames, which is what crosses the boundary
+        a.immediate = false;
+        let ei = a.u.find_system("TRAPPIST-1").unwrap();
+        a.dive_to(ObjectRef::ExoHost(ei));
+        land(a);
+        assert_eq!(a.scene_exo, Some(ei));
+        let start = a.cam.center_root();
+        let start_mpp = a.cam.mpp;
+        let watch = |a: &Pantheon, when: &str| {
+            let moved = (a.cam.center_root() - start).length();
+            let view = a.cam.mpp * a.view_w;
+            assert!(
+                moved < 0.02 * view,
+                "{when}: jumped {moved} m in a view {view} m wide"
+            );
+        };
+        let notches = 60;
+        // far enough out to cross the boundary at log width 15.8
+        for _ in 0..notches {
+            scroll(a, 0.1);
+            for _ in 0..6 {
+                a.tick(FRAME);
+                watch(a, "going out");
+            }
+        }
+        while a.zoom_pending != 0.0 {
+            a.tick(FRAME);
+            watch(a, "settling out");
+        }
+        assert!(
+            a.cam.log_width(a.view_w) > 15.8,
+            "never reached the boundary"
+        );
+        assert_eq!(a.scene_exo, None, "should have left the system");
+        // and all the way back
+        for _ in 0..notches {
+            scroll(a, -0.1);
+            for _ in 0..6 {
+                a.tick(FRAME);
+                watch(a, "coming back");
+            }
+        }
+        while a.zoom_pending != 0.0 {
+            a.tick(FRAME);
+            watch(a, "settling back");
+        }
+        assert!(
+            (a.cam.mpp / start_mpp - 1.0).abs() < 0.2,
+            "{} vs {start_mpp}",
+            a.cam.mpp
+        );
+        assert_eq!(
+            a.scene_exo,
+            Some(ei),
+            "scrolling back should show the system again"
+        );
+    }
+
+    #[test]
+    fn back_into_a_system_shows_the_system() {
+        let Some(mut h) = host() else { return };
+        let ei = h.app.u.find_system("TRAPPIST-1").unwrap();
+        h.app.dive_to(ObjectRef::ExoHost(ei));
+        land(&mut h.app);
+        h.app.go_home();
+        land(&mut h.app);
+        assert_eq!(h.app.scene_exo, None, "home is not in the system");
+        h.app.go_back();
+        land(&mut h.app);
+        assert_eq!(h.app.scene_exo, Some(ei));
+        assert_eq!(h.app.focus, Some(ObjectRef::ExoHost(ei)));
+        h.frame(800, 450, FRAME, false).unwrap();
+        let caption = &h.app.fo.as_ref().unwrap().caption.0;
+        assert!(caption.contains("Exoplanet Archive"), "{caption}");
+    }
+
+    #[test]
+    fn the_camera_stays_on_a_simulated_planet_at_every_rate() {
+        let Some(mut h) = host() else { return };
+        let a = &mut h.app;
+        a.dive_to(ObjectRef::Planet(2));
+        land(a);
+        a.awaken();
+        let check = |a: &Pantheon, rate: &str| {
+            let earth = obj_pos(&a.u, ObjectRef::Planet(2), a.clock.jd, a.island.as_ref());
+            let off = (a.cam.center_root() - earth).length();
+            let view = a.cam.mpp * a.view_w;
+            assert!(
+                off < 0.01 * view,
+                "at {rate}: {off} m off a view {view} m wide"
+            );
+            assert!(a.follow.is_some(), "at {rate}: the camera let go of Earth");
+        };
+        // the sequence that lost it: Simulate, then ] once, and on up while it runs
+        for _ in 0..60 {
+            a.tick(FRAME);
+            check(a, "the simulation's own rate");
+        }
+        for _ in 0..3 {
+            a.step_rate(1);
+            for _ in 0..60 {
+                a.tick(FRAME);
+                if a.island.is_none() {
+                    return;
+                }
+                check(a, "a faster rate");
+            }
+        }
+    }
 
     #[test]
     fn simulations_use_the_real_masses() {
