@@ -21,7 +21,7 @@ export const PLACES = [
 ];
 
 export const FACTS = {
-  Earth: 'The only world known to hold life. Night lights are real satellite imagery.',
+  Earth: 'The only world known to hold life.',
   Moon: 'About 384,400 km from Earth, and always showing it the same face.',
   Sun: 'Holds about 99.8% of the mass of the solar system.',
   Mercury: 'A year here lasts 88 Earth days.',
@@ -31,7 +31,7 @@ export const FACTS = {
   Saturn: 'Its main rings span about 270,000 km and are mostly far under a kilometre thick.',
   Uranus: 'Rolls around the Sun tipped almost onto its side.',
   Neptune: 'The fastest winds measured on any planet.',
-  Pluto: 'A dwarf planet at the inner edge of the Kuiper belt. No map here yet.',
+  Pluto: 'A dwarf planet in the Kuiper belt. There is no map of it here, so this surface is procedural.',
   Titan: 'The only moon with a thick atmosphere.',
   Europa: 'A salt-water ocean is thought to lie beneath its ice.',
   Io: 'The most volcanically active body known.',
@@ -39,7 +39,7 @@ export const FACTS = {
   'α Centauri': 'The nearest star system, 4.3 light-years from the Sun.',
   'TRAPPIST-1': 'Seven rocky planets around a dim red star, about 40 light-years away.',
   'Solar system': 'Orbits are real; the planets are too small to see at true scale, so they show as points.',
-  'Nearby stars': 'Every star here is a real Gaia measurement. The sky photograph fades as you leave the Sun.',
+  'Nearby stars': 'These stars are real measurements, from Gaia and older catalogs. The sky photograph fades as you leave the Sun.',
   'Milky Way': 'A few hundred billion stars. This portrait is an illustrative model, not a survey.',
   'Andromeda (M31)': 'About 2.5 million light-years away. Position and tilt are measured; the portrait is illustrative.',
   'Local Group': 'The Milky Way, Andromeda, Triangulum and their dwarf companions, at catalog positions.',

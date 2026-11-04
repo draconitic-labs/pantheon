@@ -178,12 +178,14 @@ runs a grand tour, `Space` pauses time, `?` lists every key. Esc always backs ou
 
 **What is real.** The line under the place name says what you are looking at, and every
 row on a card has a label you can hover for its source. Positions come from the SPICE
-kernels; surfaces, Earth's night lights and the sky photograph are real imagery. Modeled:
-atmospheres, ring lighting, eclipses (real geometry, modeled look). Illustrative, and
-labeled so: the Milky Way and galaxy portraits, the filaments of the cosmic web, field
-stars beyond the Gaia catalog, the Sun's corona, the surfaces of other stars. Cloud shapes
-are one saved snapshot, not today's weather. Heights of atmospheres are exaggerated about
-1.5x so the limb reads, and fine ground detail below a few hundred km is synthetic.
+kernels. The Sun, the planets, the Moon, Earth's night lights and the sky photograph are
+real imagery; Pluto and the other moons have no maps and are procedural, and marked so.
+Modeled: atmospheres, ring lighting, eclipses (real geometry, modeled look). Illustrative,
+and labeled so: the Milky Way and galaxy portraits, the filaments of the cosmic web, field
+stars beyond the Gaia catalog, the Sun's corona, the surfaces of other stars, and how
+exoplanets look. Cloud shapes are one saved snapshot, not today's weather. Earth's and Mars's
+atmospheres are about 1.5x too tall so the limb reads, and fine detail close to a surface
+is synthetic.
 
 **Without the downloads.** A fresh clone has no `assets/data/textures` or SPICE kernels. It
 still runs and says so on screen: planets become procedural, Earth is real outlines with
