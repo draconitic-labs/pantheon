@@ -7,18 +7,23 @@
 //!   PANTHEON_PORT       preferred backend port (default 8090)
 //!   PANTHEON_QA=1       enable the test hooks in the backend (see serve.rs)
 //!   PANTHEON_WEBVIEW_DATA  where WebKit keeps its data (default: webview-data beside the binary)
-//!   WEBKIT_DISABLE_DMABUF_RENDERER  set to 0 to keep the DMA-BUF renderer on Wayland
+//!   WEBKIT_DMABUF_RENDERER_FORCE_SHM  set by this app on NVIDIA unless you set it, or
+//!                       WEBKIT_DISABLE_DMABUF_RENDERER, yourself
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
-/// WebKitGTK's DMA-BUF renderer dies with Wayland "Error 71" on this NVIDIA
-/// driver. Runs before any thread exists; an explicit value from the user wins.
+/// On the NVIDIA driver, WebKitGTK can't hand frames over as GPU buffers: on Wayland it
+/// dies with "Error 71", and under X11 it logs "Failed to create GBM buffer" and leaves
+/// the window blank. Its shared-memory handover works on both. It also ran at 55-62 fps
+/// on Wayland, where WEBKIT_DISABLE_DMABUF_RENDERER=1 gave 40-48. Other drivers keep
+/// WebKit's defaults. Runs before any thread exists; a value set by the user wins.
 fn prepare_webkit_env() {
-    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some()
-        || std::env::var("XDG_SESSION_TYPE").is_ok_and(|s| s == "wayland");
-    if wayland && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    let nvidia = std::path::Path::new("/proc/driver/nvidia/version").exists();
+    let user_chose = std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_some()
+        || std::env::var_os("WEBKIT_DMABUF_RENDERER_FORCE_SHM").is_some();
+    if nvidia && !user_chose {
+        std::env::set_var("WEBKIT_DMABUF_RENDERER_FORCE_SHM", "1");
     }
 }
 

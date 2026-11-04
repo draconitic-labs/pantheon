@@ -75,7 +75,12 @@ DE440s when kernels are present and IAU 2015 rotation elements always.
 
 ## Pantheon 3D (2026-11-04)
 - The window is tested on Linux only (WebKitGTK 2.54, RTX 4060). The Windows build path
-  (WebView2 through Tauri) is untested since the move away from tao and wry.
+  (WebView2 through Tauri) is untested since the move away from tao and wry. Drivers other
+  than NVIDIA's keep WebKit's default frame handover, and that path is untested here.
+- At 1600×950 on that RTX 4060, on a busy machine, the window held 55-62 fps at High on
+  both Wayland and XWayland. That was with the shared-memory frame handover the app selects
+  on NVIDIA. With `WEBKIT_DISABLE_DMABUF_RENDERER=1` instead, Wayland ran at 40-48 fps.
+  Larger windows have not been measured.
 - WebKitGTK has no GPU timer and masks the adapter name. The frame readout's render figure
   is timed through `glFinish`, and it barely changed between quality tiers when measured,
   so treat it as rough. The frame interval is the reliable number. Headroom at 60 fps is

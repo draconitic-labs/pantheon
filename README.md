@@ -197,8 +197,11 @@ and the Quality menu shows the numbers or fixes a tier. For a frame readout on s
 `PANTHEON_START_URL='/?fps' pantheon-3d`. For the same as log lines, and scripted access
 to the open window, add `PANTHEON_QA=1` and use `'/?qa&fps'`; see the top of `src/serve.rs`.
 
-On Wayland the app sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` before the webview starts,
-because WebKitGTK's DMA-BUF path crashes there on NVIDIA. Export `=0` to override it.
+On NVIDIA's driver the app sets `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` before the webview
+starts, because WebKitGTK's GPU-buffer path crashes on Wayland and leaves a blank window
+under X11. If you set that or `WEBKIT_DISABLE_DMABUF_RENDERER` yourself, the app leaves it
+alone. If your WebKitGTK is too old to have the setting and the window dies with "Error 71",
+use `WEBKIT_DISABLE_DMABUF_RENDERER=1`.
 
 ## Layout of the code
 
