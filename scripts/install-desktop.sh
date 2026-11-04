@@ -121,10 +121,10 @@ case "$repo" in
     ;;
 esac
 
-command -v cargo >/dev/null || {
+if [ "$build" = 1 ] && ! command -v cargo >/dev/null; then
   echo "cargo was not found. Install Rust from https://rustup.rs, then run this again." >&2
   exit 1
-}
+fi
 
 # Before any build, so a clash doesn't cost a long compile first
 refuse_foreign_entry "$apps/pantheon.desktop"

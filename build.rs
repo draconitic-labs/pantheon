@@ -1,7 +1,9 @@
-// The pantheon-3d window binary imports WebView2Loader.dll (via wry →
-// webview2-com-sys, which ships the DLL in its build OUT_DIR but does not
-// place it beside our exe). A missing import DLL aborts process init before
-// main() — so copy it next to the artifacts on every build.
+// Windows only, for the pantheon-3d window in src-tauri, which builds this crate as a
+// dependency in its own target folder. Through tauri and wry it can import
+// WebView2Loader.dll, which webview2-com-sys leaves in its build OUT_DIR rather than beside
+// the exe, and a missing import DLL aborts before main(). So copy it there if it's been
+// built. Atlas-only builds find nothing and do nothing. Not tested since the window moved
+// to src-tauri: see the Windows section of KNOWN_ISSUES.md.
 fn main() {
     #[cfg(windows)]
     {
