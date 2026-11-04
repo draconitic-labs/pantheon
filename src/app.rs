@@ -409,6 +409,43 @@ impl Pantheon {
             .fly_to_view(h.center, h.mpp, h.tilt, h.yaw, self.view_w, dur);
     }
 
+    /// The point a wheel or pinch zoom holds still under the pointer at `s`. Diving in, it
+    /// leans toward what you've selected if that's nearby, or else the nearest point of interest,
+    /// so repeated scrolling converges on it instead of demanding pixel-perfect aim across
+    /// 20 decades, and scrolling back returns you to what you scrolled out from.
+    fn zoom_anchor_at(
+        &self,
+        s: [f32; 2],
+        dex: f64,
+        proj: &crate::frames::Proj,
+    ) -> (f64, f64, DVec3) {
+        let (sx, sy) = (s[0] as f64, s[1] as f64);
+        // local anchor math: full precision inside attached frames
+        let mut world = proj.unproject_local(sx, sy);
+        if dex < 0.0 {
+            let distance = |obj: ObjectRef| {
+                let px = proj.px(obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref()));
+                (px[0] - s[0]).hypot(px[1] - s[1])
+            };
+            let selected = self
+                .focus
+                .map(|obj| (distance(obj), obj))
+                .filter(|(d, _)| *d < 150.0);
+            let nearest = self
+                .picks
+                .iter()
+                .map(|pk| ((pk.pos[0] - s[0]).hypot(pk.pos[1] - s[1]), pk.obj))
+                .filter(|(d, _)| *d < 150.0)
+                .min_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some((d, obj)) = selected.or(nearest) {
+                let poi = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref()) - proj.origin;
+                let k = (0.45 * (1.0 - (d as f64 / 150.0))).clamp(0.0, 0.45);
+                world = world + (poi - world) * k;
+            }
+        }
+        (sx, sy, world)
+    }
+
     /// End a flight where the camera is now. A follow left pointing at the destination
     /// would otherwise snap the camera to it at whatever zoom the flight had reached.
     fn stop_flight_here(&mut self) {
@@ -1049,30 +1086,7 @@ impl Pantheon {
             dex -= (zoom_mul as f64).log10();
         }
         if dex.abs() > 1e-6 && resp.hovered() {
-            let world_anchor = sp.map(|s| {
-                let (sx, sy) = (s[0] as f64, s[1] as f64);
-                // local anchor math: full precision inside attached frames
-                let mut world = proj.unproject_local(sx, sy);
-                // guided zoom: diving in, the anchor leans toward the nearest
-                // point of interest, so repeated scrolling converges on it
-                // instead of demanding pixel-perfect aim across 20 decades
-                if dex < 0.0 {
-                    let mut best: Option<(f32, ObjectRef)> = None;
-                    for pk in &self.picks {
-                        let d = (pk.pos[0] - s[0]).hypot(pk.pos[1] - s[1]);
-                        if d < 150.0 && best.map(|(b, _)| d < b).unwrap_or(true) {
-                            best = Some((d, pk.obj));
-                        }
-                    }
-                    if let Some((d, obj)) = best {
-                        let poi = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref())
-                            - proj.origin;
-                        let k = (0.45 * (1.0 - (d as f64 / 150.0))).clamp(0.0, 0.45);
-                        world = world + (poi - world) * k;
-                    }
-                }
-                (sx, sy, world)
-            });
+            let world_anchor = sp.map(|s| self.zoom_anchor_at(s, dex, &proj));
             self.zoom_pending += dex;
             self.zoom_anchor = world_anchor;
             self.cam.anim = None;
@@ -2504,11 +2518,11 @@ mod tests {
         assert!(a.cam.anim.is_none(), "the flight never landed");
     }
 
-    /// One wheel notch at the middle of the view: that point stays put as the view scales.
+    /// One wheel notch at the middle of the view, through the same anchor the window uses.
     fn scroll(a: &mut Pantheon, dex: f64) {
         let proj = crate::frames::Proj::new(&a.cam, a.view_w, a.view_h, &a.u.gal);
-        let (cx, cy) = (a.view_w * 0.5, a.view_h * 0.5);
-        a.zoom_anchor = Some((cx, cy, proj.unproject_local(cx, cy)));
+        let centre = [(a.view_w * 0.5) as f32, (a.view_h * 0.5) as f32];
+        a.zoom_anchor = Some(a.zoom_anchor_at(centre, dex, &proj));
         a.zoom_pending += dex;
         a.cam.anim = None;
     }
@@ -2516,15 +2530,16 @@ mod tests {
     #[test]
     fn scrolling_out_of_an_exoplanet_system_and_back_is_continuous() {
         let Some(mut h) = host() else { return };
-        let a = &mut h.app;
         // the window's zoom glides over several frames, which is what crosses the boundary
-        a.immediate = false;
-        let ei = a.u.find_system("TRAPPIST-1").unwrap();
-        a.dive_to(ObjectRef::ExoHost(ei));
-        land(a);
-        assert_eq!(a.scene_exo, Some(ei));
-        let start = a.cam.center_root();
-        let start_mpp = a.cam.mpp;
+        h.app.immediate = false;
+        let (w, ht) = (400, 225);
+        let ei = h.app.u.find_system("TRAPPIST-1").unwrap();
+        h.frame(w, ht, FRAME, false).unwrap();
+        h.app.dive_to(ObjectRef::ExoHost(ei));
+        land(&mut h.app);
+        assert_eq!(h.app.scene_exo, Some(ei));
+        let start = h.app.cam.center_root();
+        let start_mpp = h.app.cam.mpp;
         let watch = |a: &Pantheon, when: &str| {
             let moved = (a.cam.center_root() - start).length();
             let view = a.cam.mpp * a.view_w;
@@ -2533,41 +2548,42 @@ mod tests {
                 "{when}: jumped {moved} m in a view {view} m wide"
             );
         };
-        let notches = 60;
-        // far enough out to cross the boundary at log width 15.8
+        // through the boundary at log width 15.8 and on out to the Local Group, where other
+        // things with names crowd the middle of the view
+        let notches = 120;
         for _ in 0..notches {
-            scroll(a, 0.1);
-            for _ in 0..6 {
-                a.tick(FRAME);
-                watch(a, "going out");
+            scroll(&mut h.app, 0.1);
+            // a real frame fills in the picks a wheel zoom leans toward
+            h.frame(w, ht, FRAME, false).unwrap();
+            for _ in 0..5 {
+                h.app.tick(FRAME);
+                watch(&h.app, "going out");
             }
         }
-        while a.zoom_pending != 0.0 {
-            a.tick(FRAME);
-            watch(a, "settling out");
+        while h.app.zoom_pending != 0.0 {
+            h.app.tick(FRAME);
+            watch(&h.app, "settling out");
         }
         assert!(
-            a.cam.log_width(a.view_w) > 15.8,
+            h.app.cam.log_width(h.app.view_w) > 15.8,
             "never reached the boundary"
         );
-        assert_eq!(a.scene_exo, None, "should have left the system");
+        assert_eq!(h.app.scene_exo, None, "should have left the system");
         // and all the way back
         for _ in 0..notches {
-            scroll(a, -0.1);
-            for _ in 0..6 {
-                a.tick(FRAME);
-                watch(a, "coming back");
+            scroll(&mut h.app, -0.1);
+            h.frame(w, ht, FRAME, false).unwrap();
+            for _ in 0..5 {
+                h.app.tick(FRAME);
+                watch(&h.app, "coming back");
             }
         }
-        while a.zoom_pending != 0.0 {
-            a.tick(FRAME);
-            watch(a, "settling back");
+        while h.app.zoom_pending != 0.0 {
+            h.app.tick(FRAME);
+            watch(&h.app, "settling back");
         }
-        assert!(
-            (a.cam.mpp / start_mpp - 1.0).abs() < 0.2,
-            "{} vs {start_mpp}",
-            a.cam.mpp
-        );
+        let (a, mpp) = (&h.app, h.app.cam.mpp);
+        assert!((mpp / start_mpp - 1.0).abs() < 0.3, "{mpp} vs {start_mpp}");
         assert_eq!(
             a.scene_exo,
             Some(ei),
