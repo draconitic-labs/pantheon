@@ -67,14 +67,15 @@ export class Governor {
     this.lastP80 = p80;
     if (this.mode !== 'auto') return;
     const i = ORDER.indexOf(this.tier);
-    // Long frames with cheap rendering are the machine busy elsewhere, and less
-    // quality would not help; only a long run of them is worth a step down.
+    // glFinish can under-report here, so the frame interval has the last word: costly
+    // frames step down fast, plainly slow ones soon, mildly slow ones if they persist
+    // (a brief run of those is usually the machine busy elsewhere).
     const costly = workMs > 17 || (p80 > 21 && workMs > 11);
-    const slow = p80 > 30;
-    if (costly || slow) {
+    if (costly || p80 > 21) {
       this.slowWindows++;
       this.goodSince = 0;
-      if (this.slowWindows >= (costly ? 2 : 5) && i > 0) { this.slowWindows = 0; this._setTier(ORDER[i - 1]); }
+      const need = costly ? 2 : p80 > 30 ? 4 : 8;
+      if (this.slowWindows >= need && i > 0) { this.slowWindows = 0; this._setTier(ORDER[i - 1]); }
     } else {
       this.slowWindows = 0;
       const headroom = workMs > 0 && workMs < 7.5 && p80 < 17.5;
