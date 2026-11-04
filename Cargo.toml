@@ -2,7 +2,7 @@
 name = "pantheon"
 version = "0.2.0"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.88"
 description = "Pantheon — An Infinite Vector Atlas of the Living Universe"
 license = "MIT"
 
