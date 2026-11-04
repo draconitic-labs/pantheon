@@ -117,22 +117,12 @@ fn run(args: &[String]) -> anyhow::Result<()> {
         }
         "--doctor" => doctor(),
         "--serve" => {
-            let mut rest: Vec<String> = args[1..].to_vec();
-            let mut take = |name: &str| match rest.iter().position(|a| a == name) {
-                Some(i) => {
-                    rest.remove(i);
-                    true
-                }
-                None => false,
-            };
-            let open = take("--open");
-            let app = take("--app");
-            let flags = Flags::parse(&rest, &["--port"])?;
+            let flags = Flags::parse(&args[1..], &["--port"])?;
             let port: u16 = match flags.get("--port") {
                 Some(p) => p.parse().map_err(|_| anyhow::anyhow!("bad port '{p}'"))?,
                 None => 8090,
             };
-            let r = crate::serve::serve(port, open, app);
+            let r = crate::serve::serve(port);
             if let Err(e) = &r {
                 // launched from a double-clicked shortcut, the console vanishes
                 // with the process — keep the error on screen long enough to read

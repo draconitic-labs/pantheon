@@ -4,3 +4,5 @@
 /assets/data/spacecraft/*.txt
 /assets/data/spice/*.bsp
 /assets/data/textures/
+/target-3d/
+/src-tauri/gen/

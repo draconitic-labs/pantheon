@@ -1,0 +1,23 @@
+# Pantheon 3D's native window. A detached crate (empty [workspace]) so the Tauri
+# and WebKitGTK dependency tree stays out of the native atlas's builds.
+#   CARGO_TARGET_DIR=../target-3d cargo build --release
+[package]
+name = "pantheon-3d"
+version = "0.2.0"
+edition = "2021"
+description = "Pantheon 3D: the free-flight universe explorer in a native Tauri window"
+license = "MIT"
+
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# custom-protocol makes a plain `cargo build --release` a production build too
+tauri = { version = "2", features = ["custom-protocol"] }
+pantheon = { path = ".." }
+
+[profile.release]
+opt-level = 3
+lto = "thin"

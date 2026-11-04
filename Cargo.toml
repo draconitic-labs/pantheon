@@ -47,7 +47,3 @@ opt-level = 2
 
 [target."cfg(unix)".dependencies]
 memmap2 = "0.9"
-
-[target."cfg(windows)".dependencies]
-tao = "0.35.3"
-wry = "0.55.1"

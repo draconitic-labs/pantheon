@@ -44,3 +44,42 @@ jobs:
         run: |
           python3 -m py_compile tools/fetch_data.py tools/make_icon.py
           bash -n scripts/install-desktop.sh
+
+  shell:
+    name: Build, lint (Pantheon 3D window)
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The window links WebKitGTK; the backend it embeds links the atlas's libraries
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev librsvg2-dev libasound2-dev libwayland-dev \
+            libxkbcommon-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev
+
+      - name: Install the pinned toolchain
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup component add clippy rustfmt
+
+      - name: Format
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      - name: Build
+        working-directory: src-tauri
+        run: cargo build --release --locked
+
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --locked -- -D warnings
+
+      - name: Check the web edition's JavaScript parses
+        run: |
+          for f in pantheon-web/js/*.js pantheon-web/js/scene/*.js; do
+            node --input-type=module --check < "$f"
+          done
