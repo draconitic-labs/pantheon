@@ -1457,13 +1457,6 @@ impl Pantheon {
                             }
                         }
                     });
-                    if self.island_paused && self.island_of(obj).is_some() {
-                        ui.label(
-                            RichText::new("Simulation paused: time is running too fast for it")
-                                .size(11.0)
-                                .color(theme::col32(Prov::Inferred.rgb(), 1.0)),
-                        );
-                    }
                 });
             })
             .response

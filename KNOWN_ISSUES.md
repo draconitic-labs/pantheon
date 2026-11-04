@@ -23,7 +23,7 @@ apps running. The on-screen labels already say most of this where it applies.
 - **Star motion.** Proper motion is linear, with no perspective acceleration or binary motion,
   and it stops being meaningful over thousands of years.
 - **N-body islands.** The substep is a fixed fraction of the shortest moon period, not an
-  adaptive scheme. When time runs too fast for it, the simulation pauses and says so.
+  adaptive scheme. When time runs too fast for it, the simulation ends and says so.
 
 ## Data
 

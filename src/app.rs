@@ -74,6 +74,16 @@ struct HistoryEntry {
     follow: Option<(ObjectRef, DVec3)>,
 }
 
+/// The GM an object carries in a simulation: the same JPL values the gravity view uses.
+fn island_gm(o: ObjectRef) -> f64 {
+    match o {
+        ObjectRef::Sun => sim::GM_SUN,
+        ObjectRef::Planet(i) => PLANETS[i].gm,
+        ObjectRef::Moon(mi) => sim::MOON_GM[mi],
+        _ => 0.0,
+    }
+}
+
 pub struct Pantheon {
     pub gpu: GpuContext,
     pub pipes: Pipelines,
@@ -87,7 +97,6 @@ pub struct Pantheon {
     pub scene_exo: Option<usize>,
     pub follow: Option<(ObjectRef, DVec3)>,
     pub island: Option<Island>,
-    pub island_paused: bool,
     pub capture: Vec<PathKey>,
     pub play: Option<PathPlay>,
     pub picks: Vec<Pickable>,
@@ -245,7 +254,6 @@ impl Pantheon {
             scene_exo: None,
             follow: Some((ObjectRef::Planet(2), DVec3::ZERO)),
             island: None,
-            island_paused: false,
             capture: Vec::new(),
             play: None,
             picks: Vec::new(),
@@ -313,6 +321,8 @@ impl Pantheon {
 
     /// Remember the current viewpoint before a jump (dive, rail, home).
     fn push_history(&mut self) {
+        // the first-run panel says "This is Earth", which stops being true on the way out
+        self.dismiss_intro();
         self.history.push(HistoryEntry {
             center: self.cam.center_root(),
             mpp: self.cam.mpp,
@@ -427,7 +437,7 @@ impl Pantheon {
         }
 
         // N-body island stepping
-        self.island_paused = false;
+        let mut outrun = false;
         if self.modes.living && self.clock.playing {
             let dt_sim = dt * self.clock.rate;
             if let Some(isl) = &mut self.island {
@@ -446,7 +456,7 @@ impl Pantheon {
                 };
                 let n = (dt_sim.abs() / dt_sub).ceil() as usize;
                 if n > 4000 {
-                    self.island_paused = true;
+                    outrun = true;
                 } else if n > 0 {
                     let h = dt_sim / n as f64;
                     for s in 0..n {
@@ -464,10 +474,19 @@ impl Pantheon {
                 }
             }
         }
-        // island invalidation when the clock is scrubbed away from it
-        if let Some(isl) = &self.island {
-            if (isl.jd - self.clock.jd).abs() > 0.5 {
+        // a simulation only means something at the clock's date, so it ends rather than
+        // showing bodies somewhere else: when time outruns it, or the clock jumps away
+        if self.island.is_some() {
+            let away = self
+                .island
+                .as_ref()
+                .is_some_and(|isl| (isl.jd - self.clock.jd).abs() > 0.5);
+            if outrun {
                 self.island = None;
+                self.note("Simulation ended: time is running too fast for it");
+            } else if away {
+                self.island = None;
+                self.note("Simulation ended: the clock moved away from it");
             }
         }
         self.update_presentation(dt);
@@ -803,20 +822,7 @@ impl Pantheon {
             let p1 = obj_pos(&self.u, *o, jd + dt / 86_400.0, None);
             pos.push(obj_pos(&self.u, *o, jd, None));
             vel.push((p1 - p0) / (2.0 * dt));
-            gm.push(match o {
-                ObjectRef::Sun => sim::GM_SUN,
-                ObjectRef::Planet(i) => PLANETS[*i].gm,
-                ObjectRef::Moon(mi) => {
-                    let m = &MOONS[*mi];
-                    let rho = if m.kind == 1.0 { 3300.0 } else { 1900.0 };
-                    6.674e-11
-                        * (4.0 / 3.0)
-                        * std::f64::consts::PI
-                        * (m.radius_km * 1e3).powi(3)
-                        * rho
-                }
-                _ => 0.0,
-            });
+            gm.push(island_gm(*o));
         }
         let n = ids.len();
         let mut sim = NBody {
@@ -2379,4 +2385,27 @@ pub fn run_path(
     )?;
     println!("frames in {}", out.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn simulations_use_the_real_masses() {
+        assert_eq!(MOONS[0].name, "Moon");
+        // a guess from radius and density gave 0.57 of this
+        assert_eq!(island_gm(ObjectRef::Moon(0)), 4.902_800_066e12);
+        for (mi, m) in MOONS.iter().enumerate() {
+            assert_eq!(
+                island_gm(ObjectRef::Moon(mi)),
+                sim::MOON_GM[mi],
+                "{}",
+                m.name
+            );
+            assert!(sim::MOON_GM[mi] > 0.0, "{}", m.name);
+        }
+        assert_eq!(island_gm(ObjectRef::Planet(2)), PLANETS[2].gm);
+        assert_eq!(island_gm(ObjectRef::Sun), sim::GM_SUN);
+    }
 }
