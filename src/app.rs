@@ -854,9 +854,9 @@ impl Pantheon {
             });
         }
 
-        // ---- zoom: a notch is ~0.2 decades, Shift for fine control. Pinch too.
+        // ---- zoom: a notch is ~0.25 decades, Shift for fine control. Pinch too.
         let notch = (scroll.y + if shift { scroll.x } else { 0.0 }) as f64;
-        let mut dex = -notch * 0.005 * if shift { 0.2 } else { 1.0 };
+        let mut dex = -notch * 0.0032 * if shift { 0.2 } else { 1.0 };
         if zoom_mul != 1.0 {
             dex -= (zoom_mul as f64).log10();
         }
@@ -919,7 +919,9 @@ impl Pantheon {
             }
             self.dismiss_intro();
         } else {
-            if resp.drag_stopped() && self.anim_t - self.last_drag < 0.08 {
+            // "still moving at release" must also hold on a slow machine, where a
+            // single frame can be longer than this window
+            if resp.drag_stopped() && self.anim_t - self.last_drag < 0.08f64.max(2.5 * dt) {
                 let speed = self.drag_vel[0].hypot(self.drag_vel[1]);
                 if speed > 40.0 {
                     let cap = (2600.0 / speed).min(1.0);

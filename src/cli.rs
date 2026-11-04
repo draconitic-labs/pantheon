@@ -227,15 +227,31 @@ fn doctor() -> anyhow::Result<()> {
         }
         _ => println!("ffmpeg:   not found (video assembly unavailable)"),
     }
-    // data health
+    // data health. The large downloads are optional: the atlas runs without
+    // them and says so. Only the catalogs that ship in the repo are required.
     let (u, health) = crate::data::Universe::load_with_health();
     let mut bad = 0;
+    let mut optional = 0;
     println!("assets:   root = {}", crate::data::asset_root().display());
     for line in &health.lines {
         println!("  {line}");
         if line.contains("MISSING") || line.contains("INVALID") {
-            bad += 1;
+            if line.starts_with("craft ") || line.starts_with("truth ") || line.starts_with("land/") {
+                optional += 1;
+            } else {
+                bad += 1;
+            }
         }
+    }
+    let tex = crate::data::asset_root().join("data/textures");
+    let maps = crate::engine::textures::ALL_TEX.iter().filter(|t| tex.join(t.file()).is_file()).count();
+    println!(
+        "imagery:  {maps} of {} surface maps on disk{}",
+        crate::engine::textures::ALL_TEX.len(),
+        if maps == 0 { " (bodies will be procedural)" } else { "" }
+    );
+    if optional > 0 || maps == 0 || crate::spice::spice().is_none() {
+        println!("optional data is missing; run tools/fetch_data.py to download it");
     }
     println!(
         "loaded:   {} stars, {} exo systems, {} craft, coast {} lines, retrieved {}",

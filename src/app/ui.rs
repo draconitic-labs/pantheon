@@ -640,7 +640,13 @@ impl Pantheon {
                 f64::MAX
             };
             let t = tx.min(ty);
-            let tip = egui::pos2((cx + ux * t) as f32, (cy + uy * t) as f32);
+            let mut tip = egui::pos2((cx + ux * t) as f32, (cy + uy * t) as f32);
+            // never on top of the card: slide along the edge of it
+            if let Some(card) = self.panel_rects.iter().find(|r| r.left() <= l.left_col.left() + 1.0 && r.top() > l.title.bottom()) {
+                if card.expand(16.0).contains(tip) {
+                    tip.x = card.right() + 22.0;
+                }
+            }
             let dist = (*p - self.cam.center_root()).length();
             let text = format!("{name}, {}", fmt_len(dist));
             let d = egui::vec2(ux as f32, uy as f32);
