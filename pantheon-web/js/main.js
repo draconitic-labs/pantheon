@@ -227,12 +227,7 @@ const named = data.NAMED_STARS.map(({ name, ra, dec, distPc, vmag, ci }) => {
   });
   namedSet = { count: n, positions: pos, colors: col, meta: named.map(s => ({ gmag: s.vmag, distPc: s.distPc })) };
 }
-const starMats = [];
-function addStars(set) {
-  const pts = makeStarPoints(set);
-  starMats.push(pts.material);
-  helioGroup.add(pts);
-}
+function addStars(set) { helioGroup.add(makeStarPoints(set)); }
 addStars(namedSet);
 // Distance rings around the Sun in the galactic plane: an engraved scale for the star
 // fields, where nothing else tells you how far anything is.
@@ -1050,6 +1045,7 @@ function buildLabels(systemView) {
   }
   if (dSun > 2e15 && dSun < 1200 * PC) {
     for (const s of named) {
+      if (pocket.active && pocket.active.name === s.name) continue;   // it has its own label up close
       const d = s.world.distanceTo(cam) / PC;
       const m = s.vmag + 5 * Math.log10(Math.max(d, 1e-3) / Math.max(s.distPc, 0.1));
       if (m < 5.2) add(`s:${s.name}`, s.name, 'star', 's', s.world, 0, 4 - m * 0.2, () => makeTarget(`star:${s.name}`));
@@ -1160,7 +1156,7 @@ function updateTruth(panoA) {
     const fb = nav.focus && nav.focus.radius && !nav.flight ? system.body(nav.focus.name) : null;
     const near = fb && fb.kind !== 'craft' ? { body: fb, dist: fb.world.distanceTo(cam) - fb.radius } : nearest;
     const rec = near.body && system.groups.get(near.body.name);
-    add(kernels ? 'Positions: DE440s and satellite kernels' : 'Positions: mean elements (no kernels)', stateEv);
+    add(kernels ? 'Positions: DE440s and satellite kernels' : meta.spice ? 'Positions: mean elements while time runs this fast' : 'Positions: mean elements (no kernels)', stateEv);
     if (near.dist < near.body.radius * 300) {
       if (rec && rec.textured) { add(`${near.body.name}: mission imagery`, 'surface-imagery'); credit = `Surface: Solar System Scope, NASA data. ${credit}`; }
       else if (near.body.name === 'Earth' && rec.paintedLand) add('Earth: real outlines, painted colors', 'coastlines');
@@ -1173,7 +1169,8 @@ function updateTruth(panoA) {
     if (panoA > 0.02) add('Sky: ESO photograph', 'milkyway-pano');
     if (!sky.hasPano) add('Sky band: illustrative model', 'galaxy-fog');
     const real = rec && (rec.textured || near.body.name === 'Sun');
-    summary = kernels && real ? 'Real positions and imagery; lighting modeled' : kernels ? 'Real positions; surfaces procedural here' : 'Modeled positions; no kernels loaded';
+    const where = kernels ? 'Real positions' : meta.spice ? 'Modeled positions at this time rate' : 'Modeled positions, no kernels loaded';
+    summary = real ? `${where}; real imagery, modeled lighting` : `${where}; surface is procedural`;
     cls = kernels && real ? 'measured' : 'modeled';
   } else if (dSun < 150 * PC) {
     add('Stars: Gaia DR3', 'gaia-dr3');
@@ -1355,8 +1352,8 @@ function frame(now) {
   const nearFade = haveSky ? sst(Math.log10(Math.max(dPc, 1e-6)), Math.log10(15), Math.log10(150)) : 1;
   // away from the Sun's glare the eye opens up: stars read brighter and hold on longer
   const starOpen = sst(Math.log10(Math.max(dPc, 1e-6)), Math.log10(0.3), Math.log10(9));
-  for (const m of starMats) m.uniforms.uGain.value = 1 + 1.9 * starOpen;
-  fieldPts.material.uniforms.uGain.value = (1 + 1.9 * starOpen) * sst(Math.log10(Math.max(dPc, 1e-6)), Math.log10(15), Math.log10(120));
+  starUniforms.uBoost.value = 1 + 2.6 * starOpen;
+  fieldPts.material.uniforms.uGain.value = sst(Math.log10(Math.max(dPc, 1e-6)), Math.log10(15), Math.log10(120));
   rings.update(dPc, cam);
   mwPts.material.uniforms.uB.value = 0.42 * sst(Math.log10(Math.max(dPc, 1e-6)), Math.log10(300), Math.log10(4000));
   oortPts.material.uniforms.uB.value = 0.3 * (1 - sst(dPc, 0.3, 3));

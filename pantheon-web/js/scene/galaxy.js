@@ -572,7 +572,7 @@ export class GalaxyVolume {
       // adapted to starlight, not to the whole galaxy at once
       const out = Math.max(Math.abs(v.z), Math.hypot(v.x, v.y) - 16);
       const inside = 1 - THREE.MathUtils.smoothstep(out, 0.4, 5);
-      u.uI.value[i] = g.I * f * (1 - 0.78 * inside);
+      u.uI.value[i] = g.I * f * (1 - 0.9 * inside);
       if (f > 0.001) any = true;
     });
     u.uFrame.value = (this.frame = (this.frame + 1) % 64);

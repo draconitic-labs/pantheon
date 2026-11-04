@@ -87,10 +87,19 @@ COMPILED TABLES (embedded in src/data.rs and src/sim.rs)
 
 VENDORED CODE
 
-  three.js (pantheon-web/lib), MIT License, Copyright 2010-2025 Three.js Authors.
+  three.js r180 with its post-processing addons (pantheon-web/lib), MIT License,
+  Copyright 2010-2025 Three.js Authors. Pantheon 3D's window uses Tauri (MIT or
+  Apache-2.0, downloaded by Cargo) and links the WebKitGTK your system provides
+  (LGPL, not included here).
 
   Rust dependencies are downloaded by Cargo and keep their own licenses, listed in
   each crate's metadata. Cargo.lock records the exact versions.
+
+  The bloom in pantheon-web/js/post.js follows Jimenez, "Next Generation Post
+  Processing in Call of Duty: Advanced Warfare", SIGGRAPH 2014, and its tone curve is
+  Stephen Hill's fit of ACES. The latitude-longitude lookup in
+  pantheon-web/js/scene/shaders.js uses Tarini's seam fix (JGT 2012). The atmosphere
+  there is a textbook single-scattering integral with published optical depths.
 
   The AgX tonemap in shaders/tonemap.wgsl follows the polynomial fit published by
   Benjamin Wrensch. The zoom-and-pan flight path in src/frames.rs follows van Wijk

@@ -152,8 +152,10 @@ map resolution on a small GPU.
 
 ## Pantheon 3D
 
-A second edition with true 3D free flight, in a native Tauri window. It lives in
-`src-tauri/` and `pantheon-web/`.
+The same universe in true 3D, in a native Tauri window (WebKitGTK on Linux). The window
+is `src-tauri/`, the renderer is `pantheon-web/` (three.js, vendored, no build step),
+and the backend in `src/serve.rs` runs inside the same process on 127.0.0.1. No browser
+is involved, and closing the window ends everything.
 
 ```sh
 sudo dnf install webkit2gtk4.1-devel        # Debian, Ubuntu: libwebkit2gtk-4.1-dev
@@ -162,6 +164,36 @@ cd src-tauri && CARGO_TARGET_DIR=../target-3d cargo build --release
 ```
 
 `scripts/install-desktop.sh` builds it too and adds its own menu entry.
+
+**Getting around.** Drag to swing around what you are looking at. Scroll to zoom: one
+wheel goes from the ground to the cosmic web, and scrolling back returns you to where you
+started. Click anything named to fly there. The ruler of places on the left is one-click
+travel, `/` searches planets, moons, stars, exoplanet hosts, galaxies and clusters, and
+Back and Home are always on screen. `F` or `W A S D` switches to free flight, where speed
+follows the distance to the nearest thing; `L` adds mouse-look and Esc releases it. `P`
+runs a grand tour, `Space` pauses time, `?` lists every key. Esc always backs out one step.
+
+**What is real.** The line under the place name says what you are looking at, and every
+row on a card has a label you can hover for its source. Positions come from the SPICE
+kernels; surfaces, Earth's night lights and the sky photograph are real imagery. Modeled:
+atmospheres, ring lighting, eclipses (real geometry, modeled look). Illustrative, and
+labeled so: the Milky Way and galaxy portraits, the filaments of the cosmic web, field
+stars beyond the Gaia catalog, the Sun's corona, the surfaces of other stars. Cloud shapes
+are one saved snapshot, not today's weather. Heights of atmospheres are exaggerated about
+1.5x so the limb reads, and fine ground detail below a few hundred km is synthetic.
+
+**Without the downloads.** A fresh clone has no `assets/data/textures` or SPICE kernels. It
+still runs and says so on screen: planets become procedural, Earth is real outlines with
+painted colors, the sky is the illustrative Galaxy model, and positions come from mean
+elements. `tools/fetch_data.py` fetches the rest.
+
+**Quality.** Automatic by default: it measures real frame cost and steps between four tiers,
+and the Quality menu shows the numbers or fixes a tier. For a frame readout on screen, run
+`PANTHEON_START_URL='/?fps' pantheon-3d`. For the same as log lines, and scripted access
+to the open window, add `PANTHEON_QA=1` and use `'/?qa&fps'`; see the top of `src/serve.rs`.
+
+On Wayland the app sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` before the webview starts,
+because WebKitGTK's DMA-BUF path crashes there on NVIDIA. Export `=0` to override it.
 
 ## Layout of the code
 

@@ -4,7 +4,8 @@
 // stars fade out continuously instead of popping, and bright ones bloom.
 import * as THREE from 'three';
 
-export const starUniforms = { uPR: { value: 1 } };
+// uBoost: how open the eye is. Near the Sun 1; out among the stars they carry the view.
+export const starUniforms = { uPR: { value: 1 }, uBoost: { value: 1 } };
 
 const VSH = /* glsl */`
   attribute vec3 col;
@@ -14,7 +15,7 @@ const VSH = /* glsl */`
   #endif
   varying vec3 vCol;
   varying float vPx, vI;
-  uniform float uPc, uGain, uPR, uMaxPx, uFloor;
+  uniform float uPc, uGain, uPR, uMaxPx, uFloor, uBoost;
   #include <common>
   #include <logdepthbuf_pars_vertex>
   void main() {
@@ -23,7 +24,7 @@ const VSH = /* glsl */`
     // divide BEFORE length: squaring meter-scale components overflows f32
     float dp = length(mv.xyz / uPc);
     float F = lum / max(dp * dp * 0.01, 1e-9);     // flux relative to magnitude 0
-    float b = pow(F, 0.34);
+    float b = pow(F, 0.34) * uBoost;
     float fade = smoothstep(uFloor, uFloor * 6.0, b);
     float px = min(1.9 + 3.0 * pow(b, 0.85), uMaxPx);
     vPx = px;
@@ -85,7 +86,7 @@ export function makeStarPoints(starSet, { perVertexVis = false, gain = 1.0, maxP
     defines: perVertexVis ? { PER_VERTEX_VIS: 1 } : {},
     uniforms: {
       uPc: { value: 3.0856775814913673e16 }, uGain: { value: gain }, uMaxPx: { value: maxPx },
-      uFloor: { value: floor }, uPR: starUniforms.uPR,
+      uFloor: { value: floor }, uPR: starUniforms.uPR, uBoost: starUniforms.uBoost,
     },
     blending: THREE.AdditiveBlending, depthWrite: false, depthTest: true, transparent: true,
   });

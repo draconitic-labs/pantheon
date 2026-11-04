@@ -72,3 +72,16 @@ DE440s when kernels are present and IAU 2015 rotation elements always.
   REND-024 partial (char-count label widths). Plus: window/taskbar/shortcut icon
   (assets/icon.ico via tools/make_icon.ps1) and a dependency-free generative
   ambience engine (src/audio.rs, winmm waveOut; GUI-only, rail toggle + volume).
+
+## Pantheon 3D (2026-11-04)
+- The window is tested on Linux only (WebKitGTK 2.54, RTX 4060). The Windows build path
+  (WebView2 through Tauri) is untested since the move away from tao and wry.
+- WebKitGTK has no GPU timer and masks the adapter name, so the frame readout's render
+  figure is timed through `glFinish` and may read low; the frame interval is the truth.
+- Under heavy load from other programs, Automatic quality can step down although the
+  GPU has headroom, because frame cost timed through `glFinish` includes CPU waits.
+- First approach to an 8K map uploads over about 16 frames; the largest single frame
+  measured was about 80 ms, so a small hitch remains during that flight.
+- All Local Group spirals share one illustrative structure, oriented from the literature.
+  The Sun's own map does not rotate, and star surfaces, corona and prominences are generic.
+- Cloud shapes are one saved snapshot. Their drift is illustrative.

@@ -290,7 +290,9 @@ export const RING_FSH = /* glsl */`
     float r = length(vP.xy);
     vec4 t = texture2D(uMap, vec2((r - uInner) / (uOuter - uInner), 0.5));
     float a = t.a;
-    if (uClose > 0.001) a *= 1.0 + uClose * (vnoise(vec3(r * 900.0, 0.0, 0.0)) - 0.5) * 0.5;
+    // fine grain only where the screen can resolve it, or it beats into moire
+    float grainW = fwidth(r) * 900.0;
+    if (uClose > 0.001 && grainW < 1.0) a *= 1.0 + uClose * (1.0 - smoothstep(0.25, 1.0, grainW)) * (vnoise(vec3(r * 900.0, 0.0, 0.0)) - 0.5) * 0.5;
     if (a <= 0.004 || r < uInner || r > uOuter) discard;
     vec3 L = uSunObj;
     vec3 V = normalize(uCamObj - vec3(vP.xy, 0.0));

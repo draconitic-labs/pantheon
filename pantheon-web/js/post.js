@@ -91,7 +91,7 @@ const COMPOSITE_FSH = /* glsl */`
     if (uWarp > 0.004) {
       // flight streaks: radial blur from the vanishing point, strongest at the rim
       vec2 d = vUv - uWarpC;
-      float k = uWarp * 0.16 * smoothstep(0.05, 0.75, length(d));
+      float k = uWarp * 0.075 * smoothstep(0.05, 0.75, length(d));
       c = vec3(0.0);
       for (int i = 0; i < 9; i++) c += texture2D(tHdr, uWarpC + d * (1.0 - k * (float(i) + noise) / 9.0)).rgb;
       c /= 9.0;
