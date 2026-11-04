@@ -1,0 +1,97 @@
+Pantheon
+Copyright (c) 2026 Flintglade
+
+The MIT license in LICENSE covers Pantheon's source code. It does not cover the
+datasets, imagery, fonts and vendored libraries listed here, which keep their
+own terms. Some of those terms are narrower than MIT: see the note on Gaia below.
+
+Licenses were read from each source's own page on 2026-11-04. Where a source
+states no license, this file says so rather than guessing.
+
+
+FONTS (assets/fonts, included in this repository)
+
+  SIL Open Font License 1.1. The license text is in assets/fonts/OFL.txt.
+
+  Spectral               Copyright 2017 The Spectral Project Authors
+  Cormorant Garamond     Copyright 2015 The Cormorant Project Authors
+  Inter                  Copyright 2016 The Inter Project Authors
+  Noto Sans Math         Copyright 2022 Google LLC
+
+
+DATA INCLUDED IN THIS REPOSITORY (assets/data)
+
+  gaia_nearby.csv, gaia_bright.csv
+    ESA Gaia DR3, from the Gaia Archive. "Gaia data are distributed under the
+    CC BY-NC 3.0 IGO license."
+    https://www.cosmos.esa.int/web/gaia-users/license
+    Credit: ESA/Gaia/DPAC. Citation: Gaia Collaboration et al. 2023, A&A 674, A1.
+    NON-COMMERCIAL. This is the narrowest term in the project. Anyone using
+    Pantheon commercially should read ESA's terms for its space science archives
+    first, or remove these two files.
+
+  exoplanets.csv
+    NASA Exoplanet Archive, Planetary Systems table, operated by the California
+    Institute of Technology under contract with NASA.
+    LICENSE NOT STATED. The archive's page asks for an acknowledgment and states
+    no license: https://exoplanetarchive.ipac.caltech.edu/docs/acknowledge.html
+    Acknowledgment: This research has made use of the NASA Exoplanet Archive,
+    which is operated by the California Institute of Technology, under contract
+    with the National Aeronautics and Space Administration under the Exoplanet
+    Exploration Program.
+
+  ne_110m_coastline.geojson, ne_110m_land.geojson
+    Natural Earth, public domain ("No permission is needed to use Natural Earth").
+    https://www.naturalearthdata.com/about/terms-of-use/
+
+  spice/naif0012.tls
+    NASA NAIF leap-second kernel. See "NAIF SPICE kernels" below.
+
+
+DATA DOWNLOADED BY tools/fetch_data.py (not in this repository)
+
+  NAIF SPICE kernels: de440s, mar099, jup365, sat441, nep097, plu060
+    NASA/JPL Navigation and Ancillary Information Facility.
+    LICENSE NOT STATED FOR THE KERNELS. NAIF's rules page sets out a "SPICE
+    Software License" and encourages acknowledgment of NAIF and of the teams that
+    made the kernels; it does not name a license for kernel data.
+    https://naif.jpl.nasa.gov/naif/rules.html
+    Pantheon reads kernels with its own reader and includes no SPICE software.
+
+  JPL Horizons vector tables (assets/data/spacecraft)
+    NASA/JPL Solar System Dynamics. Citation: Giorgini et al., JPL Horizons.
+    LICENSE NOT FOUND. No license or terms appear on the Horizons page as fetched:
+    https://ssd.jpl.nasa.gov/horizons/
+    That page relies on JavaScript, so this is what was not found, not proof that
+    none exists.
+
+  Planet, Sun and ring maps (assets/data/textures)
+    Solar System Scope, https://www.solarsystemscope.com/textures/
+    "Distributed under Attribution 4.0 International license" (CC BY 4.0).
+    Credit: Solar System Scope. The publisher states the maps are based on NASA
+    elevation and imagery data with colours tuned and slightly saturated, and that
+    unmapped gaps are filled with fictional terrain.
+
+  Milky Way panorama (assets/data/textures/eso_milkyway.jpg)
+    eso0932a, https://www.eso.org/public/images/eso0932a/
+    Credit: ESO/S. Brunier. CC BY 4.0 (https://www.eso.org/public/outreach/copyright/).
+    ESO requires the credit to be clear and visible; the app shows it on screen.
+
+
+COMPILED TABLES (embedded in src/data.rs and src/sim.rs)
+
+  Named stars, Local Group galaxies, galaxy clusters, moon elements, planet
+  elements, and IAU rotation elements are facts compiled from the literature and
+  from JPL's public tables, as cited in src/evidence.rs. Sizes are approximate.
+
+
+VENDORED CODE
+
+  three.js (pantheon-web/lib), MIT License, Copyright 2010-2025 Three.js Authors.
+
+  Rust dependencies are downloaded by Cargo and keep their own licenses, listed in
+  each crate's metadata. Cargo.lock records the exact versions.
+
+  The AgX tonemap in shaders/tonemap.wgsl follows the polynomial fit published by
+  Benjamin Wrensch. The zoom-and-pan flight path in src/frames.rs follows van Wijk
+  and Nuij, "Smooth and efficient zooming and panning", IEEE InfoVis 2003.
