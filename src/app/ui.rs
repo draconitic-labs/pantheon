@@ -1447,7 +1447,7 @@ impl Pantheon {
                             moons = true;
                         }
                         if can_awaken {
-                            let lbl = if self.island.is_some() { "Stop simulation" } else { "Simulate" };
+                            let lbl = if self.island_of(obj).is_some() { "Stop simulation" } else { "Simulate" };
                             if ui
                                 .button(lbl)
                                 .on_hover_text("Run this planet and its moons as a live N-body gravity simulation")
@@ -1457,7 +1457,7 @@ impl Pantheon {
                             }
                         }
                     });
-                    if self.island_paused {
+                    if self.island_paused && self.island_of(obj).is_some() {
                         ui.label(
                             RichText::new("Simulation paused: time is running too fast for it")
                                 .size(11.0)
@@ -1475,7 +1475,7 @@ impl Pantheon {
             self.follow = None;
         }
         if awaken {
-            if self.island.is_some() {
+            if self.island_of(obj).is_some() {
                 self.island = None;
             } else {
                 self.awaken();

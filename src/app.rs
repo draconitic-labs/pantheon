@@ -765,6 +765,18 @@ impl Pantheon {
         }
     }
 
+    /// The running simulation, if it's the one this object belongs to.
+    pub fn island_of(&self, obj: ObjectRef) -> Option<&Island> {
+        let planet = match obj {
+            ObjectRef::Planet(i) => i,
+            ObjectRef::Moon(mi) => MOONS[mi].planet,
+            _ => return None,
+        };
+        self.island
+            .as_ref()
+            .filter(|isl| isl.anchor == ObjectRef::Planet(planet))
+    }
+
     pub fn awaken(&mut self) {
         let Some(focus) = self.focus else { return };
         let pi = match focus {
@@ -1396,7 +1408,7 @@ impl Pantheon {
                     provs.push(("Horizons cross-check".into(), Ev::HorizonsVectors));
                     provs.push(("residual interpolation".into(), Ev::HorizonsInterp));
                 }
-                if let Some(isl) = &self.island {
+                if let Some(isl) = self.island_of(obj) {
                     let e = isl.sim.energy_scaled();
                     let drift = if isl.e0.abs() > 0.0 {
                         (e - isl.e0) / isl.e0.abs()
