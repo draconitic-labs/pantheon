@@ -19,7 +19,7 @@ const DEG = Math.PI / 180;
 const TAU = Math.PI * 2;
 
 // u_ecl = M * u_icrs, rows [1,0,0],[0,cos e,sin e],[0,-sin e,cos e] — Rx(−ε).
-// FND-001: the transposed version is a known past bug; do not "fix" this.
+// The transposed version is a known past bug; do not "fix" this.
 function icrsToEclVec(x, y, z) {
   const c = Math.cos(OBLIQUITY_DEG * DEG), s = Math.sin(OBLIQUITY_DEG * DEG);
   return new THREE.Vector3(x, c * y + s * z, -s * y + c * z);
@@ -86,7 +86,7 @@ const P = (name, el, rate, radiusKm, gm, obliquityDeg, rotHours, color, color2, 
 
 // JPL SSD "Approximate Positions of the Planets" Table 1 (Standish), 1800–2050.
 // el: a(AU), e, I(deg), L(deg), long.peri(deg), long.node(deg); rate: per century.
-// FND-003: the "Earth" row is the Earth–Moon barycenter.
+// The "Earth" row is the Earth–Moon barycenter.
 export const PLANETS = [
   P('Mercury',
     [0.38709927, 0.20563593, 7.00497902, 252.25032350, 77.45779628, 48.33076593],
@@ -176,7 +176,7 @@ export function planetPos(i, jd) {
 // GM_moon / (GM_earth + GM_moon): Earth-center offset fraction from the EMB.
 const MU_MOON_FRAC = 4.9028e12 / (3.986004418e14 + 4.9028e12);
 
-// FND-003: Earth center = EMB minus the mass-weighted geocentric Moon vector.
+// Earth center = EMB minus the mass-weighted geocentric Moon vector.
 export function earthCenter(jd) {
   return planetPos(2, jd).addScaledVector(lunaRel(jd), -MU_MOON_FRAC);
 }
@@ -232,7 +232,7 @@ const Mn = (parent, name, aKm, period, radiusKm, e, phase, color, color2, kind) 
 // JPL planetary satellite mean elements, circular-inclined approximation
 // (orbital plane = parent equator + incl; phases illustrative except the Moon).
 // a in m, period in days, incl deg to parent equator, phase = M0 deg at J2000.
-// SCI-026: Triton's retrograde sense lives ONLY in the 156.9° inclination —
+// Triton's retrograde sense lives ONLY in the 156.9° inclination —
 // its period stays positive; never encode retrograde twice.
 export const MOONS = [
   Mn(2, 'Moon', 384400.0, 27.321661, 1737.4, 0.0549, 135.27, [0.62, 0.62, 0.6], [0.42, 0.42, 0.42], 5.0),
@@ -288,7 +288,7 @@ export function moonRel(mi, jd) {
 }
 
 // Sampled moon orbit relative to planet; the Moon samples the same precessing
-// model as its position (SCI-028: line matches marker).
+// model as its position (line matches marker).
 export function moonOrbit(mi, jd, n = 128) {
   const m = MOONS[mi];
   if (m.name === 'Moon') {

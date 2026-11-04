@@ -1,6 +1,6 @@
 // js/scene/galaxy.js — deterministic particle galaxies (Milky Way + generic discs).
 // buildMilkyWay returns GALACTOCENTRIC meters pre-rotated into ecliptic-aligned
-// axes (SPEC "Galactic frame"); main.js places the cloud group at the
+// axes; main.js places the cloud group at the
 // galactic-center world position. buildGalaxyDisc returns a local-frame disc
 // (plane = local XY) that the caller orients and positions.
 import * as THREE from 'three';
@@ -29,9 +29,9 @@ export function gauss(rand) {
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(TAU * rand());
 }
 
-// RA/Dec (deg, ICRS) -> ecliptic unit vector, using the exact SPEC matrix
+// RA/Dec (deg, ICRS) -> ecliptic unit vector, using the exact matrix
 // u_ecl = M u_icrs (rows [1,0,0],[0,c,s],[0,-s,c]) — transposing it is known
-// past bug FND-001.
+// past bug.
 export function icrsToEclUnit(raDeg, decDeg) {
   const ra = (raDeg * Math.PI) / 180, dec = (decDeg * Math.PI) / 180;
   const x = Math.cos(dec) * Math.cos(ra);

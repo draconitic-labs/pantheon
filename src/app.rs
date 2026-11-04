@@ -111,7 +111,7 @@ pub struct Pantheon {
     pub persist_settings: bool,
     /// None until the audio engine has been tried; Some(false) = no device found
     pub ambience_available: Option<bool>,
-    /// glide the clock during path playback instead of jumping (AUDIT UI-020)
+    /// glide the clock during path playback instead of jumping
     pub jd_glide: Option<f64>,
     pub search: SearchState,
     /// the canvas in logical pixels, and the display's scale
@@ -120,7 +120,7 @@ pub struct Pantheon {
     pub ppp: f32,
     /// what's under the pointer right now
     pub hover: Option<ObjectRef>,
-    /// labels placed last frame, for clicks and hysteresis (UX B3)
+    /// labels placed last frame, for clicks and hysteresis
     sticky: std::collections::HashSet<String>,
     label_hits: Vec<(Rect, ObjectRef)>,
     panel_rects: Vec<Rect>,
@@ -415,7 +415,7 @@ impl Pantheon {
                 self.cam.center = (p + off) - self.cam.frame_origin;
             }
         }
-        // camera frame attachment (FRAMEGRAPH-003): inside an exoplanet
+        // camera frame attachment: inside an exoplanet
         // pocket the camera rebases to the host's frame so local precision
         // is AU-scale, not 1e17-scale
         let want_origin = self
@@ -579,7 +579,7 @@ impl Pantheon {
         }
         self.cam.mpp = new;
         if let Some((sx, sy, world)) = self.zoom_anchor {
-            // solved against the NEW basis, which can rotate with scale (AUDIT FND-022)
+            // solved against the NEW basis, which can rotate with scale
             let proj = crate::frames::Proj::new(&self.cam, self.view_w, self.view_h, &self.u.gal);
             self.cam.center = world
                 - proj.right * ((sx - proj.w * 0.5) * new)
@@ -671,14 +671,14 @@ impl Pantheon {
             }
         }
         self.follow = None;
-        // glide time with the camera instead of jumping (AUDIT UI-020)
+        // glide time with the camera instead of jumping
         self.jd_glide = Some(key.jd);
         let mut center = DVec3::new(key.center[0], key.center[1], key.center[2]);
         if let Some(name) = &key.at {
             if let Some(obj) = self.find_object(name) {
                 center = obj_pos(&self.u, obj, key.jd, None);
                 if key.host.is_none() {
-                    self.focus = Some(obj); // anchors refresh focus (AUDIT UI-021)
+                    self.focus = Some(obj); // anchors refresh focus
                 }
             } else if name.eq_ignore_ascii_case("galactic centre")
                 || name.eq_ignore_ascii_case("galactic center")
@@ -837,7 +837,7 @@ impl Pantheon {
         });
         self.modes.living = true;
         self.clock.playing = true;
-        // a legible default rate: moons visibly orbit, nothing teleports (UX C6)
+        // a legible default rate: moons visibly orbit, nothing teleports
         self.clock.rate = 3_600.0;
         self.note(format!(
             "Simulating the {} system with N-body gravity",
@@ -1256,7 +1256,7 @@ impl Pantheon {
         let painter = ui.painter_at(rect);
         let Some(fo) = &self.fo else { return };
         // labels with collision skip; last frame's winners get a hysteresis
-        // bonus so labels don't flicker as the camera drifts (UX B3)
+        // bonus so labels don't flicker as the camera drifts
         let mut order: Vec<usize> = (0..fo.labels.len()).collect();
         order.sort_by_key(|&i| {
             -(fo.labels[i].priority
@@ -1722,7 +1722,7 @@ impl eframe::App for GuiApp {
             .show(ctx, |ui| {
                 let rect = ui.available_rect_before_wrap();
                 let ppp = ctx.pixels_per_point();
-                // the canvas renders in physical pixels (AUDIT FND-015); all
+                // the canvas renders in physical pixels; all
                 // geometry stays in logical points, the shaders know the scale
                 let (w, h) = (
                     ((rect.width() * ppp).round() as u32).max(64),
@@ -1816,7 +1816,7 @@ pub struct Headless {
     ctx: egui::Context,
     rend: eframe::egui_wgpu::Renderer,
     canvas: Option<(ViewTarget, egui::TextureId)>,
-    // persistent final compositing target (AUDIT FND-025: no per-frame allocs)
+    // persistent final compositing target (no per-frame allocs)
     final_target: Option<ViewTarget>,
 }
 
@@ -1989,7 +1989,7 @@ fn view(app: &mut Pantheon, center: DVec3, width_m: f64, focus: Option<ObjectRef
     if let Some(ObjectRef::ExoHost(ei)) | Some(ObjectRef::ExoPlanet(ei, _)) = focus {
         app.scene_exo = Some(ei);
     }
-    // track the subject WITHOUT recentring on it (AUDIT FND-017: the offset
+    // track the subject WITHOUT recentring on it (the offset
     // preserves the shot's declared composition)
     app.follow = focus.map(|o| (o, center - obj_pos(&app.u, o, app.clock.jd, None)));
 }
@@ -2226,7 +2226,7 @@ pub fn run_shots(which: &str, w: u32, h: u32, out: &std::path::Path) -> anyhow::
             continue;
         }
         // reset ALL transient state between shots, deterministic procedural
-        // time included (AUDIT REND-033)
+        // time included
         reset_scene(&mut host);
         (shot.setup)(&mut host.app);
         if let Some(e) = host.app.setup_error.take() {
@@ -2234,7 +2234,7 @@ pub fn run_shots(which: &str, w: u32, h: u32, out: &std::path::Path) -> anyhow::
             continue;
         }
         // shots are framed for a 1600 px reference width; rescale so the
-        // physical view width is resolution-independent (AUDIT FND-016)
+        // physical view width is resolution-independent
         host.app.cam.mpp *= 1600.0 / w as f64;
         let path = out.join(format!("{}.png", shot.name));
         host.export_png(w, h, &path)?;

@@ -16,7 +16,7 @@ pub const GM_SUN: f64 = 1.327_124_400_18e20; // m^3/s^2
 
 /// TT−UTC = 32.184 s + 37 leap seconds (constant since 2017-01-01; no leap
 /// second is scheduled through the validity of this build). TDB−TT < 2 ms is
-/// neglected. AUDIT FND-002: the clock is now explicitly TDB internally;
+/// neglected. The clock is now explicitly TDB internally;
 /// display converts to UTC at the boundary.
 pub const TT_MINUS_UTC_S: f64 = 69.184;
 pub const DELTA_T_DAYS: f64 = TT_MINUS_UTC_S / 86_400.0;
@@ -433,7 +433,7 @@ pub fn planet_vel(i: usize, jd: f64) -> DVec3 {
 /// GM_moon / (GM_earth + GM_moon): Earth-center offset fraction from the EMB.
 pub const MU_MOON_FRAC: f64 = 4.902_8e12 / (3.986_004_418e14 + 4.902_8e12);
 
-/// AUDIT FND-003: the JPL table's "Earth" row is the Earth–Moon barycenter.
+/// The JPL table's "Earth" row is the Earth–Moon barycenter.
 /// The Earth **center** is EMB minus the mass-weighted geocentric Moon vector.
 pub fn earth_center(jd: f64) -> DVec3 {
     planet_pos(2, jd) - luna_rel(jd) * MU_MOON_FRAC
@@ -457,7 +457,7 @@ pub fn eph_is_spice(jd: f64) -> bool {
 }
 
 /// Heliocentric position of a body by index. Prefers the DE440s SPICE
-/// kernel (EPH-004); falls back to the analytic elements outside coverage
+/// kernel; falls back to the analytic elements outside coverage
 /// or when kernels are absent (Earth resolved to its true center).
 pub fn body_pos(i: usize, jd: f64) -> DVec3 {
     if let Some(s) = crate::spice::spice() {
@@ -773,7 +773,7 @@ pub const MOONS: [MoonDef; 21] = [
         kind: 5.0,
     },
     // retrograde motion is encoded by the 156.9° inclination in MOON_INCL,
-    // NOT by a negative period (audit SCI-026: never encode it twice)
+    // NOT by a negative period (never encode it twice)
     MoonDef {
         planet: 7,
         name: "Triton",
@@ -916,7 +916,7 @@ pub fn moon_rel(mi: usize, jd: f64) -> DVec3 {
 }
 
 /// Sampled moon orbit relative to planet. The Moon samples the same
-/// precessing model as its position (AUDIT SCI-028: line matches marker).
+/// precessing model as its position (line matches marker).
 pub fn moon_orbit(mi: usize, jd: f64, n: usize) -> Vec<DVec3> {
     let m = &MOONS[mi];
     if m.name == "Moon" {
@@ -940,7 +940,7 @@ pub fn moon_orbit(mi: usize, jd: f64, n: usize) -> Vec<DVec3> {
 }
 
 /// Authoritative GMs (m³/s²) aligned with [`MOONS`] by index — JPL satellite
-/// solutions (AUDIT SCI-029: replaces radius/density guesses in islands).
+/// solutions (replaces radius/density guesses in islands).
 pub const MOON_GM: [f64; 21] = [
     4.902_800_066e12, // Moon
     7.112e5,          // Phobos
@@ -1180,7 +1180,6 @@ impl NBody {
     }
 
     /// Remove the total momentum so the island barycenter stays put
-    /// (AUDIT SIM-002).
     pub fn zero_momentum(&mut self) {
         let gm_total: f64 = self.gm.iter().sum();
         if gm_total <= 0.0 {

@@ -336,7 +336,7 @@ impl DrawList {
     }
 
     pub fn circle(&mut self, c: [f32; 2], r: f32, st: StrokeStyle) {
-        // ≤ ~4 px chords up to very large radii (AUDIT REND-006, partial)
+        // ≤ ~4 px chords up to very large radii
         let n = ((r * std::f32::consts::TAU / 4.0) as usize).clamp(24, 1024);
         let pts: Vec<[f32; 2]> = (0..n)
             .map(|i| {

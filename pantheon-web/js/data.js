@@ -1,10 +1,10 @@
 // Pantheon 3D — data.js: catalog loaders (Gaia nearby/bright CSV, NASA
 // Exoplanet Archive CSV, Natural Earth coastline GeoJSON, Horizons tracks).
-// All world positions heliocentric ecliptic J2000, meters (SPEC).
+// All world positions heliocentric ecliptic J2000, meters.
 
 import * as THREE from 'three';
 
-// SPEC constants used locally (eph.js owns the exported copies).
+// Constants used locally (eph.js owns the exported copies).
 const PC = 3.0856775814913673e16; // m
 const OBLIQUITY_DEG = 23.4392911;
 
@@ -12,7 +12,7 @@ const DEG = Math.PI / 180;
 const COS_E = Math.cos(OBLIQUITY_DEG * DEG);
 const SIN_E = Math.sin(OBLIQUITY_DEG * DEG);
 
-// u_ecl = M * u_icrs — this exact rotation, NOT its transpose (FND-001).
+// u_ecl = M * u_icrs — this exact rotation, NOT its transpose.
 export function icrsToEcl(raDeg, decDeg) {
   const a = raDeg * DEG, d = decDeg * DEG, cd = Math.cos(d);
   const x = cd * Math.cos(a), y = cd * Math.sin(a), z = Math.sin(d);
@@ -123,7 +123,7 @@ function buildStarSet(text, bright) {
     } else {
       continue; // nearby set: skip bad parallax
     }
-    // Catalog epoch J2016 position only — no per-frame proper motion (SPEC).
+    // Catalog epoch J2016 position only — no per-frame proper motion.
     const u = icrsToEcl(ra, dec), d = distPc * PC;
     pos.push(u.x * d, u.y * d, u.z * d);
     const bprp = num(row, col.bp_rp) ?? 0.8;

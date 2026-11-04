@@ -68,7 +68,7 @@ pub struct Island {
     pub anchor: ObjectRef,
     pub trails: Vec<Vec<DVec3>>,
     pub jd: f64,
-    /// initial scaled energy, for the drift diagnostic (AUDIT SIM-004)
+    /// initial scaled energy, for the drift diagnostic
     pub e0: f64,
 }
 
@@ -97,7 +97,7 @@ pub struct FrameOut {
     pub caption: (Cow<'static, str>, Prov),
     /// the biggest body on screen and how its surface was made
     largest: Option<(f32, SurfaceSource)>,
-    /// TRUTH-001: evidence actually drawn this frame (layer-granular) —
+    /// Evidence actually drawn this frame (layer-granular) —
     /// the truth legend is generated from this, never from a static list
     pub evidence: Vec<(crate::evidence::Ev, &'static str)>,
 }
@@ -136,8 +136,8 @@ pub struct BuildIn<'a> {
     pub clock: &'a Clock,
     pub modes: &'a Modes,
     pub focus: Option<ObjectRef>,
-    /// Active exoplanet pocket scene — independent of selection (AUDIT
-    /// FND-013: closing a card must not destroy the world around the camera).
+    /// Active exoplanet pocket scene — independent of selection (closing a card
+    /// must not destroy the world around the camera).
     pub scene_exo: Option<usize>,
     pub island: Option<&'a Island>,
     pub w: f64,
@@ -158,7 +158,7 @@ pub fn exo_plane(_u: &Universe, _ei: usize) -> (DVec3, DVec3) {
     (DVec3::X, DVec3::Y)
 }
 
-/// World-space offset of an exoplanet from its host (AUDIT FND-005: planets
+/// World-space offset of an exoplanet from its host (planets
 /// now have real positions — reticle, follow, dive, and paths all agree).
 /// Kepler-solved on the same conic the orbit engraving uses; phase is
 /// illustrative (no epoch of periastron in the default columns).
@@ -184,7 +184,7 @@ pub fn exo_planet_rel(u: &Universe, ei: usize, k: usize, jd: f64) -> Option<DVec
     Some(e1 * x + e2 * y)
 }
 
-/// Position resolution now routes through the frame graph (ENTITY-001):
+/// Position resolution now routes through the frame graph:
 /// hierarchical composition instead of special-case formulas, with a
 /// parity test in entity.rs guarding equivalence. Simulation islands
 /// still override their members.
@@ -548,7 +548,7 @@ fn seeded(i: usize, k: usize) -> f64 {
 
 // --------------------------------------------------------- layer registry
 
-/// ARCH-013 / LAYER-001: layers declare their scale window and gate instead
+/// Layers declare their scale window and gate instead
 /// of living as a hardcoded call sequence. `lw` is log10(view width in m);
 /// windows here are coarse skips — each layer still feathers internally.
 pub struct LayerDef {
@@ -742,7 +742,7 @@ pub fn build(inp: &BuildIn, dl: &mut DrawList) -> FrameOut {
         }
     }
 
-    // ---- registered layers (ARCH-013): declared scale windows + gates
+    // ---- registered layers: declared scale windows + gates
     for layer in LAYERS {
         if lw >= layer.lw.0 && lw <= layer.lw.1 && (layer.gate)(inp) {
             (layer.run)(inp, &proj, lw, dl, &mut out);
@@ -772,7 +772,7 @@ pub fn build(inp: &BuildIn, dl: &mut DrawList) -> FrameOut {
     }
 
     // focused Gaia star gets a local schematic scene so a dive never lands in
-    // a void (AUDIT FND-012)
+    // a void
     if let Some(ObjectRef::Star(si)) = inp.focus {
         focused_star_layer(inp, &proj, lw, si, dl, &mut out);
     }
@@ -1263,7 +1263,7 @@ fn draw_planet_disc(
         "Saturn" => 0.31,
         _ => 0.11 + i as f32 * 0.07,
     };
-    // per-body surface character (UX A4): ca.a = polar caps, cb.a = detail
+    // per-body surface character: ca.a = polar caps, cb.a = detail
     let (cap, det) = match p.name {
         "Mars" => (0.9, 1.15),
         "Mercury" => (0.0, 1.7),
@@ -1402,7 +1402,7 @@ fn draw_planet_disc(
         seen(out, Ev::AtmosphereGlow, "atmosphere glow");
     }
 
-    // mask the point-to-disc transition with a fading glow (UX B1)
+    // mask the point-to-disc transition with a fading glow
     if r_px < 3.2 {
         let a = ((3.2 - r_px) / 2.0).clamp(0.0, 1.0) * 1.2;
         dl.point_z(
@@ -1545,7 +1545,7 @@ fn moons_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
         let a_px = (m.a_km * 1e3 / cam.mpp) as f32;
         // the ORBIT is only worth drawing in a size window, but the BODY must
         // never be culled by its own orbit size (diving to a moon previously
-        // showed empty space — UX audit, found via the luna shot)
+        // showed empty space, found via the luna shot)
         if a_px < 5.0 {
             continue;
         }
@@ -1980,7 +1980,7 @@ fn craft_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             draw_curve(inp, proj, dl, st, &f, &one, 0.0, 1.0, seeds);
         }
         if jd >= jd0 {
-            // AUDIT SCI-018: no marker outside trajectory coverage. Cassini
+            // No marker outside trajectory coverage. Cassini
             // keeps a dimmed memorial at its final state (mission ended there).
             let past_horizon = jd > jd1;
             if past_horizon && c.name != "Cassini" {
@@ -2035,7 +2035,7 @@ fn stars_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
     let spike_w = 1.0 - smoothstep(17.7, 18.5, lw) as f32;
     let margin = 24.0f32;
     for (si, s) in u.stars.iter().enumerate() {
-        let pos = s.pos_at(inp.clock.jd); // one epoch-aware provider (FND-014)
+        let pos = s.pos_at(inp.clock.jd); // one epoch-aware provider
         let px = proj.px(pos);
         if !on_screen(px, inp.w, inp.h, margin) {
             continue;
@@ -2122,7 +2122,7 @@ fn stars_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
         }
     }
     // exoplanet hosts: small rings you can dive into, ranked rather than a wall
-    // of identical circles (UX A7): multi-planet systems first, then near centre
+    // of identical circles: multi-planet systems first, then near centre
     let pw = band(lw, 15.9, 18.8, 0.6);
     if pw > 0.02 {
         seen(out, crate::evidence::Ev::ExoArchive, "exoplanet hosts");
@@ -2606,7 +2606,7 @@ fn exo_layer(
     let (u, cam, jd, truth) = (inp.u, inp.cam, inp.clock.jd, inp.modes.truth);
     let s = &u.exos[ei];
     let host = s.pos;
-    // FRAMEGRAPH-003: when the camera is attached to this host's frame, all
+    // When the camera is attached to this host's frame, all
     // pocket geometry projects through frame-local coordinates — deep zoom
     // precision is AU-scale f64, never 1e17-scale
     let framed = (inp.cam.frame_origin - host).length() < 1.0;
@@ -2670,7 +2670,7 @@ fn exo_layer(
     }
 
     // host star — a measured radius earns a physical disc; an unknown radius
-    // gets an explicitly schematic glyph (AUDIT FND-020: never silently render
+    // gets an explicitly schematic glyph (never silently render
     // a default 1 R☉ as if measured).
     let rgb = s
         .st_teff
@@ -2743,7 +2743,7 @@ fn exo_layer(
     });
 
     // planets — world-space conics; the marker rides the same curve as the
-    // engraving (AUDIT FND-019).
+    // engraving.
     let (e1, e2) = exo_plane(u, ei);
     let mut prev_per: Option<f64> = None;
     let mut prev_a_px = 0.0f32;
@@ -2946,7 +2946,7 @@ fn gravity_layer(inp: &BuildIn, proj: &Proj, dl: &mut DrawList, out: &mut FrameO
             let m = &MOONS[mi];
             let pp = obj_pos(u, ObjectRef::Planet(m.planet), jd, inp.island);
             let mp = obj_pos(u, ObjectRef::Moon(mi), jd, inp.island);
-            // authoritative satellite GM (AUDIT SCI-029)
+            // authoritative satellite GM
             Some((pp, PLANETS[m.planet].gm, mp, sim::MOON_GM[mi], m.a_km * 1e3))
         }
         Some(ObjectRef::Planet(i)) => {
@@ -2969,8 +2969,8 @@ fn gravity_layer(inp: &BuildIn, proj: &Proj, dl: &mut DrawList, out: &mut FrameO
     out.uni.grav_a = [apx[0], apx[1], mu as f32, sep];
     out.uni.grav_b = [bpx[0], bpx[1], 1.0, 4.0];
 
-    // Lagrange point markers in the true 3D orbital plane (AUDIT SCI-039:
-    // the plane basis comes from the pair's relative angular momentum, then
+    // Lagrange point markers in the true 3D orbital plane
+    // (the plane basis comes from the pair's relative angular momentum, then
     // projects — correct under any camera tilt).
     let sep_m = (pb - pa).length().max(1.0);
     let e1w = (pb - pa) / sep_m;

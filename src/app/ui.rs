@@ -1108,7 +1108,7 @@ impl Pantheon {
 
     fn rail_go(&mut self, lw: f64) {
         let jd = self.clock.jd;
-        // rungs carry destinations, not just a scale (AUDIT FND-021)
+        // rungs carry destinations, not just a scale
         if lw < 10.4 {
             let subject = self.near_subject().unwrap_or(ObjectRef::Planet(2));
             let parent = match subject {
@@ -1416,7 +1416,7 @@ impl Pantheon {
                                 }
                                 if sources {
                                     for (what, e) in &provs {
-                                        // PROV-003: chips resolve evidence records
+                                        // chips resolve evidence records
                                         let r = crate::evidence::rec(*e);
                                         ui.horizontal(|ui| {
                                             let (rc, _) = ui.allocate_exact_size(egui::vec2(8.0, 12.0), Sense::hover());
@@ -1524,7 +1524,7 @@ impl Pantheon {
                     .font(theme::heading(19.0))
                     .color(theme::VELLUM),
             );
-            // TRUTH-001: generated from what this frame actually drew; absent
+            // Generated from what this frame actually drew; absent
             // classes never appear. Hover an entry for its record.
             let drawn: Vec<(crate::evidence::Ev, &'static str)> = self
                 .fo

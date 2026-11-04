@@ -1,4 +1,4 @@
-//! PROV-001..003: field-level evidence records.
+//! Field-level evidence records.
 //!
 //! Every provenance chip in an inspector now resolves through this registry
 //! instead of ad-hoc prose at call sites: one record per evidence source with

@@ -132,7 +132,7 @@ pub struct Star {
 
 impl Star {
     /// Epoch-aware position: J2016 catalog position propagated by proper
-    /// motion + radial velocity (AUDIT FND-014: one provider for rendering,
+    /// motion + radial velocity (one provider for rendering,
     /// picking, navigation, and cards).
     pub fn pos_at(&self, jd_tdb: f64) -> DVec3 {
         let dyr = (jd_tdb - crate::sim::J2000) / 365.25 - 16.0;
@@ -296,7 +296,7 @@ fn load_stars(root: &std::path::Path) -> (Vec<Star>, f64) {
             if s.name.is_some() {
                 continue;
             }
-            // tightened crossmatch (AUDIT DATA-012): ~0.11° cone, distance
+            // tightened crossmatch: ~0.11° cone, distance
             // within ~40%, magnitude within 2.5 (G vs V tolerance)
             let d = s.pos.normalize_or_zero().dot(dir);
             if d > 0.999_998 && (s.dist_pc / dist).ln().abs() < 0.35 && (s.gmag - vmag).abs() < 2.5
@@ -416,7 +416,7 @@ fn load_exo(root: &std::path::Path) -> Vec<ExoSystem> {
         });
     }
     let mut v: Vec<ExoSystem> = sys.into_values().collect();
-    // AUDIT FND-018: sort by one normalized semi-major-axis estimate — never
+    // sort by one normalized semi-major-axis estimate — never
     // compare AU against days.
     for s in &mut v {
         let planets = std::mem::take(&mut s.planets);
@@ -442,8 +442,8 @@ pub struct Track {
 }
 
 impl Track {
-    /// Cubic Hermite interpolation using Horizons velocities (AUDIT FND-004:
-    /// linear interpolation at multi-day cadence was wrong by up to ~1e6 km).
+    /// Cubic Hermite interpolation using Horizons velocities
+    /// (linear interpolation at multi-day cadence was wrong by up to ~1e6 km).
     /// Returns None outside the covered interval — never extrapolates.
     pub fn pos_at(&self, jd: f64) -> Option<DVec3> {
         let s = &self.samples;
@@ -487,7 +487,7 @@ pub fn load_horizons_pub(path: &std::path::Path, expect_center: &str) -> Result<
 }
 
 /// Parse a cached Horizons vector file, validating center and reference frame
-/// from the header (AUDIT SCI-016) and requiring monotonic finite samples.
+/// from the header and requiring monotonic finite samples.
 fn load_horizons(path: &std::path::Path, expect_center: &str) -> Result<Track, String> {
     let name = path
         .file_name()
@@ -676,7 +676,7 @@ pub struct Universe {
 }
 
 impl Universe {
-    /// The frame graph (ENTITY-001) — built lazily from the loaded catalogs;
+    /// The frame graph — built lazily from the loaded catalogs;
     /// the single authority for object positions via `atlas::obj_pos`.
     pub fn graph(&self) -> &crate::entity::FrameGraph {
         self.graph
@@ -693,8 +693,8 @@ impl Universe {
         Self::load_with_health().0
     }
 
-    /// Load all datasets, reporting each one explicitly (AUDIT DATA-001:
-    /// silent partial loads must be visible).
+    /// Load all datasets, reporting each one explicitly
+    /// (silent partial loads must be visible).
     pub fn load_with_health() -> (Self, DataHealth) {
         let mut health: Vec<String> = Vec::new();
         let root = asset_root();
@@ -835,7 +835,7 @@ impl Universe {
         if let Some(&i) = self.exo_by_host.get(name) {
             return Some(i);
         }
-        // case-insensitive host, then planet-name prefix (AUDIT UI-009)
+        // case-insensitive host, then planet-name prefix
         let lower = name.to_lowercase();
         if let Some(i) = self
             .exos

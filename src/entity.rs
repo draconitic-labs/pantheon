@@ -1,11 +1,11 @@
-//! ENTITY-001 / FRAMEGRAPH-001+002: the beginning of the real scene model.
+//! The beginning of the real scene model.
 //!
 //! A `FrameGraph` holds parent-linked frames whose origins resolve through
 //! time-dependent providers. Moons are children of planet frames, exoplanets
 //! children of host frames — positions compose hierarchically instead of
 //! being special-cased. `atlas::obj_pos` now routes through this graph
 //! (parity-tested against the legacy formulas below); camera-relative origin
-//! rebasing (FRAMEGRAPH-003) builds on this next.
+//! rebasing builds on this.
 
 use glam::DVec3;
 
@@ -146,7 +146,7 @@ impl FrameGraph {
         }
     }
 
-    /// Compose the transform chain down to the root (FRAMEGRAPH-002).
+    /// Compose the transform chain down to the root.
     pub fn origin_in_root(&self, u: &Universe, id: FrameId, jd: f64) -> DVec3 {
         let mut acc = DVec3::ZERO;
         let mut cur = Some(id);
@@ -179,7 +179,7 @@ mod tests {
         (a - b).length() <= 1e-6 * b.length().max(1.0)
     }
 
-    /// Migration parity (audit rule: never delete the old path before the
+    /// Migration parity (never delete the old path before the
     /// replacement proves equivalence): graph composition must reproduce the
     /// legacy special-case formulas exactly.
     #[test]

@@ -21,7 +21,7 @@ fn unit_radec(ra_deg: f64, dec_deg: f64) -> DVec3 {
 }
 
 /// Rotation taking ICRS/equatorial vectors to ecliptic J2000: Rx(−ε), so the
-/// north celestial pole maps to (0, +sin ε, +cos ε). (AUDIT FND-001: an extra
+/// north celestial pole maps to (0, +sin ε, +cos ε). (An extra
 /// `.transpose()` here previously mirrored every catalog latitude.)
 pub fn ecl_from_icrs() -> DMat3 {
     let eps = 23.439_291_1_f64.to_radians();
@@ -159,7 +159,7 @@ impl ZoomPan {
     }
 }
 
-/// FRAMEGRAPH-003: the camera is attached to a frame. `center` is a LOCAL
+/// The camera is attached to a frame. `center` is a LOCAL
 /// offset from `frame_origin` (root coords of the attached frame's origin).
 /// With the default root attachment (`frame_origin == 0`) everything behaves
 /// exactly as before; inside an exoplanet pocket the origin rebases to the
@@ -530,7 +530,7 @@ mod tests {
 
     #[test]
     fn local_frame_projection_survives_cosmic_origins() {
-        // FRAMEGRAPH-003: camera attached to a frame ~12 pc from the root.
+        // Camera attached to a frame ~12 pc from the root.
         // Local-path projection must keep centimeter precision where a
         // root-space subtraction quantizes at ~2^-52 · 1e17 ≈ 30 m.
         let mut cam = Camera::new();
