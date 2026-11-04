@@ -1,8 +1,0 @@
-{"slice":"REPO-002/003/004/005","objective":"toolchain pin, lib+CLI split, strict args, doctor","status":"pass","evidence":"pantheon-cli --doctor green; --help/--version; malformed sizes rejected"}
-{"slice":"FRAME-001/002","objective":"golden frame tests then remove ecliptic transpose","status":"pass","evidence":"5 golden tests pass (NCP, SgrA*, NGP, orthonormality, galactic frame)"}
-{"slice":"TIME-001/003","objective":"TDB clock, UTC display boundary","status":"pass","evidence":"roundtrip test; chip shows UTC; TT-UTC=69.184s"}
-{"slice":"EARTH-001/002/003","objective":"EMB vs Earth-center separation","status":"pass","evidence":"offset test 3800-5100km; residual 27515->11251 km"}
-{"slice":"EPH-002/003","objective":"Horizons velocities + Hermite + metadata/coverage validation","status":"pass","evidence":"synthetic midpoint <60km vs ~138000km linear; center/frame checked; refuses outside coverage"}
-{"slice":"EXO-fixes","objective":"world-space exoplanets, persistent pocket, conic markers, schematic unknowns, unit-safe sort","status":"pass","evidence":"trappist/kepler90 shots; scene survives deselection"}
-{"slice":"SHOT-fixes","objective":"resolution-independent framing, follow offset, deterministic anim_t, setup failures fail","status":"pass","evidence":"truth_inner keeps declared composition"}
-{"slice":"SIM/REND-quick","objective":"moon GMs, lunar line=model, 3D L-points, coverage gating, disc sort, ring split, persistent export targets","status":"pass","evidence":"saturn tilt shows near-ring over disc; tests green"}

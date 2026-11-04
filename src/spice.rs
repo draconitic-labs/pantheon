@@ -96,11 +96,13 @@ mod mapped {
     }
 }
 
-/// Kernel bytes: memory-mapped on Windows, heap-read elsewhere.
+/// Kernel bytes: memory-mapped where the platform allows, heap-read otherwise.
 enum Buffer {
     Heap(Vec<u8>),
     #[cfg(windows)]
     Map(mapped::Mmap),
+    #[cfg(unix)]
+    Unix(memmap2::Mmap),
 }
 
 impl Buffer {
@@ -111,6 +113,15 @@ impl Buffer {
                 return Ok(Buffer::Map(m));
             }
         }
+        #[cfg(unix)]
+        {
+            if let Ok(file) = std::fs::File::open(path) {
+                // SAFETY: the kernels are read-only data that nothing rewrites while the app runs.
+                if let Ok(map) = unsafe { memmap2::Mmap::map(&file) } {
+                    return Ok(Buffer::Unix(map));
+                }
+            }
+        }
         std::fs::read(path).map(Buffer::Heap).map_err(|e| format!("read {}: {e}", path.display()))
     }
     fn as_slice(&self) -> &[u8] {
@@ -118,6 +129,8 @@ impl Buffer {
             Buffer::Heap(v) => v,
             #[cfg(windows)]
             Buffer::Map(m) => m.as_slice(),
+            #[cfg(unix)]
+            Buffer::Unix(m) => m,
         }
     }
 }
