@@ -9,11 +9,50 @@
 # The entries point at the binaries in this checkout, which is also where the
 # datasets live, so moving or deleting the checkout breaks them. Run this again
 # after moving it. Uninstalling leaves the checkout and its downloads untouched.
+# A menu entry or icon with the same name that this script didn't write is left alone.
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 apps="$HOME/.local/share/applications"
 icons="$HOME/.local/share/icons/hicolor/256x256/apps"
+
+# Pantheon 3D's entry is named after the window's app id (identifier in tauri.conf.json):
+# on Wayland that name is how the desktop finds the window's icon and launcher.
+#
+# An entry is ours if it runs a Pantheon binary from a checkout's build folders, the
+# only Exec line this script writes. That still matches after the checkout has moved.
+our_entry() {
+  grep -qE '^Exec=".*/target(-3d)?/release/pantheon(-3d)?"$' "$1"
+}
+
+remove_entry() {
+  if [ ! -e "$1" ]; then
+    return 0
+  elif our_entry "$1"; then
+    rm -- "$1"
+  else
+    echo "Left in place, not written by this script: $1"
+  fi
+}
+
+# An icon is ours only if it still matches the file in this checkout.
+remove_icon() {
+  if [ ! -e "$1" ]; then
+    return 0
+  elif cmp -s "$1" "$2"; then
+    rm -- "$1"
+  else
+    echo "Left in place, differs from this checkout's icon: $1"
+  fi
+}
+
+refuse_foreign_entry() {
+  if [ -e "$1" ] && ! our_entry "$1"; then
+    echo "$1 exists and wasn't written by this script." >&2
+    echo "Move it away, then run this again." >&2
+    exit 1
+  fi
+}
 
 build=1
 with_3d=1
@@ -41,8 +80,10 @@ refresh_caches() {
 }
 
 if [ "$uninstall" = 1 ]; then
-  rm -f "$apps/pantheon.desktop" "$apps/pantheon-3d.desktop"
-  rm -f "$icons/pantheon.png" "$icons/pantheon-3d.png"
+  remove_entry "$apps/pantheon.desktop"
+  remove_entry "$apps/app.pantheon.atlas3d.desktop"
+  remove_icon "$icons/pantheon.png" "$repo/assets/icon.png"
+  remove_icon "$icons/pantheon-3d.png" "$repo/assets/icon-3d.png"
   refresh_caches
   # Shared caches and folders go only if nothing else is left in them
   ls "$apps"/*.desktop >/dev/null 2>&1 || rm -f "$apps/mimeinfo.cache"
@@ -62,6 +103,10 @@ command -v cargo >/dev/null || {
   echo "cargo was not found. Install Rust from https://rustup.rs, then run this again." >&2
   exit 1
 }
+
+# Before any build, so a clash doesn't cost a long compile first
+refuse_foreign_entry "$apps/pantheon.desktop"
+refuse_foreign_entry "$apps/app.pantheon.atlas3d.desktop"
 
 if [ "$build" = 1 ]; then
   echo "Building Pantheon (release)..."
@@ -103,7 +148,7 @@ DESKTOP
 
 if [ "$with_3d" = 1 ] && [ -x "$flight_bin" ]; then
   install -m 644 "$repo/assets/icon-3d.png" "$icons/pantheon-3d.png"
-  cat >"$apps/pantheon-3d.desktop" <<DESKTOP
+  cat >"$apps/app.pantheon.atlas3d.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
 Name=Pantheon 3D
@@ -118,7 +163,8 @@ Keywords=universe;space;planets;stars;galaxy;3d;
 StartupWMClass=pantheon-3d
 DESKTOP
 else
-  rm -f "$apps/pantheon-3d.desktop" "$icons/pantheon-3d.png"
+  remove_entry "$apps/app.pantheon.atlas3d.desktop"
+  remove_icon "$icons/pantheon-3d.png" "$repo/assets/icon-3d.png"
   [ "$with_3d" = 1 ] && echo "Skipping Pantheon 3D: $flight_bin was not found." >&2
 fi
 
