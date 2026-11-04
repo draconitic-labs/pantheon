@@ -1,141 +1,184 @@
-# PANTHEON
-### An Infinite Vector Atlas of the Living Universe
+# Pantheon
 
-A GPU-first desktop atlas that renders the universe as one continuous zoomable
-vector cosmogram (~19 orders of magnitude) — from the coastlines of Earth to the
-cosmic web — built on real astronomical data with source-aware evidence classes
-and per-dataset provenance. See `AUDIT_STATUS.md` for the verified state and
-`KNOWN_ISSUES.md` for the honest remainder; `SCIENTIFIC ACCURACY` below states
-what the numbers mean.
+An atlas of the universe as one continuous map. You start at Earth, where it is
+right now, and zoom out without a single cut: past the Moon's orbit, the planets,
+the edge of the solar wind, the nearest stars, the Milky Way, the Local Group, to
+the cosmic web. That is about 19 orders of magnitude on one camera.
 
-Zoom out from Earth and the view becomes an orbital-mechanics engraving; further,
-a data-backed Gaia star atlas; further, the luminous fog of the Milky Way; further,
-the Local Group and the filamentary cosmic web. Zoom *into* any gold portal ring in
-the star field and a real exoplanet system unfolds — worlds within worlds. All of it
-is one camera, one continuous scale, no cuts.
+It's a native Rust application (eframe, egui, wgpu). It uses real data wherever
+real data exists, and says so on screen when it doesn't.
 
-## Running
+![Earth, with the real sky behind it](docs/screenshots/earth.jpg)
 
-```
-pantheon                          launch the interactive atlas
-pantheon --list-shots             list the preset scenes
-pantheon --shot all               render every preset headlessly to exports/shots
-pantheon --shot saturn --size 1920x1080 --out exports/shots
-pantheon --path exports/paths/grand_tour.json --fps 30 --out exports/grand_tour
-```
-
-The `--path` renderer plays a cinematic keyframe file (same format the in-app
-Capture panel saves) and writes numbered PNG frames plus an ffmpeg one-liner to
-assemble a video.
-
-## Pantheon 3D — the web edition (free flight)
-
-```
-pantheon-cli --serve --open       serve pantheon-web/ on http://127.0.0.1:8090 and open the browser
-```
-
-A true-3D rebuild of the renderer in three.js (vendored in `pantheon-web/lib`,
-no CDN or Node needed), with the Rust binary as the scientific backend:
-`/api/states` streams SPICE-grade heliocentric states, `/api/tracks` the
-Horizons spacecraft arcs, `/data/*` the cached catalogs. Click the canvas for
-mouse-look, `W A S D` + `R/F` to fly (speed auto-scales with distance to the
-nearest surface), scroll to trim, double-click or `/`-search to autopilot
-anywhere from a coastline to the cosmic web, `P` runs the grand tour, `M`
-toggles the generative ambience, `?` lists everything. The desktop shortcut
-"Pantheon 3D" launches this edition; "Pantheon" remains the native atlas.
-
-## Controls
-
-| input | action |
+| | |
 |---|---|
-| mouse wheel | infinite zoom, anchored at the cursor |
-| left drag | pan |
-| right drag (vertical) | tilt the atlas plane |
-| click | select object (opens the inspector card) |
-| double-click | dive to the object |
-| `L` | Living Orbits (time animation) |
-| `T` | Truth mode (ink by evidence) |
-| `G` | Gravity view (Lagrange points, Hill spheres, potential contours) |
-| `Y` | System View (log-spaced schematic) |
-| `H` | home (Earth) |
-| `Esc` | release focus |
+| ![Saturn](docs/screenshots/saturn.jpg) | ![The Sun](docs/screenshots/sun.jpg) |
+| ![The nearest stars](docs/screenshots/stars.jpg) | ![The Milky Way](docs/screenshots/milkyway.jpg) |
+| ![The Local Group](docs/screenshots/localgroup.jpg) | ![The cosmic web](docs/screenshots/cosmic.jpg) |
 
-## The modes
+## Run it on Linux
 
-- **Free Infinite Zoom** — the default state; ~19 orders of magnitude of scale.
-- **Scale Ladder** — the log₁₀ rail on the right; click a rung to fly there.
-- **Object Awakening** — "awaken" on a planet card spins up a local N-body
-  island (Sun + planet + moons, leapfrog integrator) that visibly drifts from
-  the Keplerian engraving while the rest of the universe stays analytic.
-- **Living Orbits / Time Machine** — play or scrub time (1600–2500); planetary
-  elements are flagged as extrapolated outside 1800–2050; stars drift by real
-  Gaia proper motions at high time rates.
-- **Ephemeris Trail** — measured JPL Horizons arcs drawn dashed-blue against
-  the modeled gold orbits; every planet card shows the live Kepler-vs-JPL
-  residual in km.
-- **Gravity View** — CR3BP effective-potential contours engraved on the canvas,
-  L1–L5, Hill spheres, fluid Roche limits for the focused pair.
-- **Truth Mode** — every stroke re-inked by evidence class: measured / modeled /
-  inferred / procedural / illustrative / unknown, with retrieval dates.
-- **System View** — logarithmic orbit spacing for compact resonant systems.
-- **Cinematic Capture** — record keyframes in-app, save as JSON, replay live or
-  render headless.
+You need Rust ([rustup](https://rustup.rs) installs the pinned toolchain by
+itself), a Vulkan driver, and these system packages:
 
-## Data & provenance
+```sh
+# Fedora
+sudo dnf install alsa-lib-devel libxkbcommon-devel wayland-devel libX11-devel
 
-| dataset | source | status |
+# Debian, Ubuntu
+sudo apt install libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev
+```
+
+Then:
+
+```sh
+cargo build --release --bin pantheon --bin pantheon-cli
+./target/release/pantheon
+```
+
+That already works on a fresh clone. The star, exoplanet and coastline catalogs
+ship in the repository. Without the large downloads, planets have procedural
+surfaces, positions come from approximate orbital elements, and spacecraft are
+absent. The app tells you when that's the case, in its view menu.
+
+To add the rest:
+
+```sh
+tools/fetch_data.py               # everything: about 3 GB, mostly JPL kernels
+tools/fetch_data.py --no-kernels  # planet maps and spacecraft tracks: about 60 MB
+tools/fetch_data.py --list        # see what's here and what isn't
+```
+
+Python 3.9 or newer and nothing else is required. `pantheon-cli --doctor` checks
+the result.
+
+To add Pantheon to your application menu, under `~/.local` only:
+
+```sh
+scripts/install-desktop.sh              # build, then add menu entries and icons
+scripts/install-desktop.sh --uninstall  # take them away again
+```
+
+No sound is built in if you'd rather skip ALSA: build with
+`--no-default-features`. With sound compiled in, ambience stays off until you turn
+it on.
+
+## Moving around
+
+| Input | What it does |
+|---|---|
+| Scroll, or pinch | Zoom at the pointer. Hold Shift for fine control |
+| Drag | Move. A flick keeps drifting |
+| Right-drag, or Shift-drag | Tilt and turn the view |
+| Click | Select, and open the card. Names are clickable too |
+| Double-click | Fly there. On empty space, zoom in |
+| `/` or `Ctrl K` | Search for anything, then arrow keys and Enter |
+| The scale on the right | Click a name to go there, drag to scrub through all of it |
+| `H` | Fly home to Earth |
+| `Backspace` | Back to the previous view |
+| `+` `-`, arrows or `W A S D` | Zoom and move from the keyboard |
+| `F` | Fly to the selection |
+| `0` | Level the view |
+| `Space` | Run or pause time |
+| `[` `]` | Slower, faster |
+| `N` | Back to now |
+| `T` | Colour everything by evidence |
+| `G` | Gravity field of the selected body |
+| `Y` | Schematic spacing for exoplanet systems |
+| `M` | Ambience |
+| `Esc` | Close, or clear the selection |
+| `?` | All of this, in the app |
+
+The top left always says where you are, how wide the view is, how long light takes
+to cross it, and what the picture is made of. When something you selected, or the
+Sun, is off screen, an arrow at the edge points to it. Click the arrow to go there.
+
+## What's real and what isn't
+
+The project labels evidence, and the labels are on screen: the line under the
+place name states what the current view is made of. Pressing `T` re-inks every
+stroke by evidence class, and the legend lists only what's actually drawn. The
+card's "Where this comes from" gives source, citation and frame for each value.
+
+| You see | It is | Class |
 |---|---|---|
-| 12,000 nearest stars + naked-eye sky (G<6) | ESA Gaia DR3, Archive TAP | measured |
-| 6,300 confirmed exoplanets (default params) | NASA Exoplanet Archive `ps` | measured |
-| planetary orbits | JPL approximate elements (Standish), 1800–2050 | modeled |
-| planet/Moon reference ephemerides & residuals | JPL Horizons vectors, cached (Hermite-interpolated, coverage-gated) | ephemeris solution |
-| spacecraft trails (Voyagers, Pioneers, New Horizons, Parker, Cassini) | JPL Horizons | measured |
-| Earth coastlines | Natural Earth 1:110m | measured |
-| moons | JPL mean elements (circular-inclined approx.) | modeled |
-| Milky Way fog, cosmic filaments | procedural | procedural |
-| named star / Local Group / attractor tables | compiled catalogs | measured |
+| Planet and Moon positions | JPL DE440s and satellite kernels, with Standish elements outside coverage or without kernels | measured / modeled |
+| Spacecraft paths | JPL Horizons vectors, Hermite-interpolated, never extrapolated | measured |
+| Nearest 12,000 stars and the naked-eye sky | ESA Gaia DR3 | measured |
+| Exoplanet periods, sizes and hosts | NASA Exoplanet Archive | measured |
+| Orientation of exoplanet orbits, their phases | A convention. Most systems have no known orientation | illustrative |
+| Body orientation | IAU 2015 rotation elements, small terms omitted | modeled |
+| Planet, Moon and Sun surfaces | Solar System Scope maps, based on NASA data. The publisher tunes the colour and fills unmapped gaps with fictional terrain | inferred |
+| Clouds | One snapshot in the map set, not today's weather | inferred |
+| Moons other than ours, and Pluto | Procedural: no map | procedural |
+| Rings | Saturn's radial profile from a map, Uranus's from embedded zones. Shadows use the real sun direction | modeled |
+| The sky behind the solar system | ESO's all-sky photograph, correct in direction, seen through a nominal lens because the atlas camera has no true field of view | measured |
+| Atmosphere glow, the Sun's corona and motion | Shading choices, exaggerated to be visible | illustrative |
+| Relief on rocky bodies | Derived from image brightness, not elevation | illustrative |
+| Asteroid, Kuiper and Oort samples, the heliosphere's shape | Show where these are, not the rocks themselves. The Kirkwood gaps are in the right places | illustrative |
+| The Milky Way | An illustration. Arms are stylized to pass near their real distances along the Sun's azimuth | procedural |
+| Stars beyond 83 pc, distant galaxies | Illustrative dust, kept out of the sphere where this atlas has real Gaia data. A ring marks the edge | procedural |
+| Local Group and cluster positions | Compiled literature values, approximate sizes | measured |
+| Their appearance, halos, the cosmic web's filaments | Procedural, not a survey map | illustrative |
 
-Raw query results live in `assets/data/` with `provenance.json` recording source,
-query, frame, and retrieval date (2026-07-11). Re-run `tools/fetch_data.ps1` to
-refresh, then check `pantheon-cli --doctor` (validates every dataset, GPU, and
-ffmpeg; writes `exports/DATA_HEALTH.json`).
+Time is TDB internally and UTC on display. See `AUDIT_STATUS.md` and
+`KNOWN_ISSUES.md` for the verified state and the honest remainder.
 
-## Scientific accuracy
+## Graphics
 
-- Time: the clock is TDB internally; displays are UTC (TT−UTC = 69.184 s,
-  valid from 2017; no leap second scheduled as of this build).
-- Planet positions: JPL approximate elements (Standish), valid 1800–2050.
-  Earth is derived from the EMB row via the mass-weighted lunar offset. The
-  "model vs JPL" card row compares like centers against Hermite-interpolated
-  Horizons vectors: currently ≈1.1×10⁴ km for Earth, ≈2×10⁶ km for Saturn —
-  the intrinsic accuracy of the element tables, shown, not hidden.
-- Moon systems: circular-inclined mean elements in the parent's approximate
-  equatorial plane (the Moon itself uses a precessing-ellipse model). Body
-  orientations are not yet IAU pole models.
-- Exoplanet geometry: semi-major axes/periods/eccentricities are catalog
-  values; orbital orientation and phase are illustrative (no node data in the
-  default columns) and are marked as such. Unknown radii render as schematic
-  dashed glyphs, never as invented physical sizes.
-- `cargo test` runs the golden frame/time/ephemeris checks (11 tests).
+An HDR canvas (16-bit float, 4x MSAA) with a real depth buffer, a mip-chain bloom,
+and an AgX tonemap. It renders in physical pixels at any display scale. Orbit lines
+are tessellated adaptively in 64-bit and clipped before they become 32-bit, so they
+stay smooth at any zoom. Surface maps decode on worker threads and upload in slices
+so nothing stalls a frame. Measured headless on an RTX 4060 at 2560x1440, a full frame costs about
+1.5 to 5.5 ms depending on the scene. `pantheon --bench` measures your machine.
 
-## Architecture (src/)
-
-- `frames.rs` — f64 transform ladder; one orthographic camera whose view basis
-  slerps ecliptic → galactic → supergalactic as scale crosses bands.
-- `engine/` — wgpu 25 renderer: four pipelines (fullscreen band shader, AA glow
-  strokes, instanced star sprites, instanced procedural-surface discs), MSAA,
-  premultiplied luminous-ink blending; identical path drives the window and the
-  headless PNG exporter (full egui UI included in exports).
-- `sim.rs` — JD clock, Kepler propagation, precessing lunar model, N-body
-  leapfrog islands, Lagrange/Hill/Roche mechanics.
-- `data.rs` — dataset parsers + the provenance model.
-- `atlas.rs` — the scale-band layer compositor (the heart).
-- `app.rs` — shared GUI/headless shell, cards, ladder, capture.
-
-## Building (this machine)
+## Command line
 
 ```
-$env:Path = "$env:USERPROFILE\.cargo\bin;<llvm-mingw>\bin;$env:Path"
-$env:RUSTFLAGS = "-C target-feature=+crt-static"
-cargo +stable-x86_64-pc-windows-gnullvm build --release
+pantheon                                 the interactive atlas
+pantheon --list-shots                    preset scenes
+pantheon --shot NAME[,NAME] [--size WxH] [--out DIR]    render without a window
+pantheon --sweep [--size WxH] [--out DIR]   one frame per half decade, Earth to the web
+pantheon --bench [--size WxH] [--scenes a,b]   frame cost on this GPU
+pantheon --path FILE.json [--fps N] [--size WxH] [--out DIR]   render a recorded flight
+pantheon --doctor                        GPU, kernels, datasets
+pantheon-cli ...                         the same, always with console output
 ```
+
+Record a flight from the view menu, save it, and render it with `--path`. Set
+`PANTHEON_ASSETS` to use a data directory elsewhere, and `PANTHEON_TEX_MAX` to cap
+map resolution on a small GPU.
+
+## Pantheon 3D
+
+A second edition with true 3D free flight, in a native Tauri window. It lives in
+`src-tauri/` and `pantheon-web/`.
+
+```sh
+sudo dnf install webkit2gtk4.1-devel        # Debian, Ubuntu: libwebkit2gtk-4.1-dev
+cd src-tauri && CARGO_TARGET_DIR=../target-3d cargo build --release
+../target-3d/release/pantheon-3d
+```
+
+`scripts/install-desktop.sh` builds it too and adds its own menu entry.
+
+## Layout of the code
+
+- `src/frames.rs`: coordinate frames, the camera, the zoom-and-pan flight path.
+- `src/atlas.rs`: every scale band, composed into one frame.
+- `src/engine/`: the wgpu renderer and the surface map bank. `shaders/` holds WGSL.
+- `src/app.rs`, `src/app/`: state, input, the UI layout, search, settings.
+- `src/sim.rs`: time, Kepler propagation, N-body islands, gravity mechanics.
+- `src/spice.rs`: a dependency-free reader for NAIF kernels.
+- `src/data.rs`, `src/evidence.rs`: datasets, and the record behind each evidence label.
+- `tools/`: dataset and icon scripts. `scripts/`: the desktop installer.
+
+`cargo test --lib --bins` runs the checks, including golden frame and time tests
+and a test that panels never collide at any window size.
+
+## License
+
+The source code is under the MIT license (see `LICENSE`). Datasets, imagery and
+fonts keep their own terms, listed in `NOTICE`. Gaia data, which ships in this
+repository, is CC BY-NC 3.0 IGO: non-commercial.

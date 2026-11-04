@@ -16,12 +16,10 @@ current behavior).
   remains).
 
 ## Science (audit Phase 2–3, 7)
-- **SPICE** [High] No SPICE kernels; planetary states are Standish elements
-  (±~1e4 km inner, ±~2e6 km Saturn — displayed honestly). DE44x + LSK is the
-  planned foundation.
-- **SCI-024/025/026** [High] Body orientations are node-line obliquity tilts,
-  not IAU pole/prime-meridian models; Earth longitude uses an approximate
-  alignment constant. Surface orientation is decorative at close zoom.
+- **SCI-041** [Med] Without the kernels (a fresh clone), planetary states fall back
+  to Standish elements (about 1e4 km inner, 2e6 km Saturn). The app says so.
+- **SCI-024** [Low] IAU rotation omits small periodic terms; moons other than ours
+  use a mean tidal lock with no libration.
 - **SCI-027** [High] Non-lunar moon planes = parent equator approximation;
   Triton's true inclined retrograde plane not modeled.
 - **SIM-002/004** [Med] Island initialization does not zero total momentum;
@@ -44,20 +42,27 @@ current behavior).
   rows mix V/G photometry.
 
 ## Rendering (audit Phase 8)
-- **FND-009** [High] Still no depth buffer/HDR: disc sort + ring split are
-  painter-order mitigations. Points (stars/markers) still draw over discs.
-- **REND-003** [Med] LDR sRGB target; bulge handled by shader tonemap only.
-- **FND-015** [Med] GUI canvas sized in logical points (blurry at ppp>1;
-  this machine runs ppp=1). Headless is exact.
-- **REND-005/006** [Med] No joins/caps; fixed-count tessellation (256-segment
-  circles can facet at extreme radii).
 - **REND-008** [Low] Full buffer rebuild per frame (fine at current loads).
+- **REND-034** [Low] Moons don't cast shadows on their planets, and rings don't
+  shadow moons. Saturn's rings do shadow Saturn and Saturn shadows its rings.
+- **REND-035** [Low] Below about 5 km per pixel a surface map runs out of
+  resolution and goes soft. There is no streaming or finer data.
+- **REND-036** [Med] Bright stars sit on the sky by true direction, through a
+  nominal lens (the atlas camera is orthographic). Directions are right, angular
+  scale is not meaningful.
 
 ## UX / capture (audit Phase 11)
-- **UI-008** [Med] No search/command palette.
-- **UI-020** [Med] Path keys jump time/tilt rather than interpolating.
 - **UI-019/PATH-001** [Med] Path schema unversioned, partial state snapshot.
-- **UI-011** [Low] Fixed panel anchors can collide at small window sizes.
+- **UI-031** [Low] `T`, `G`, `Y` and other single-key shortcuts assume a Latin
+  layout, and `?` is read from text input so it does work across layouts.
+
+## Fixed in the Linux pass (2026-11-04)
+See UX_AUDIT.md for the field-test list. Closed here: FND-009 (depth + HDR were
+already in; the entry was stale), REND-003 (HDR, AgX), FND-015 (canvas in physical
+pixels), REND-005/006 (adaptive tessellation), UI-008 (search), UI-011 (layout is
+computed from the window size and tested not to collide), and the SPICE and IAU
+entries above, which predate the kernels and orientation work: planet states use
+DE440s when kernels are present and IAU 2015 rotation elements always.
 
 ## Fixed in the follow-up session (2026-07-11)
 - UI-007 help overlay; UI-009 case-insensitive lookup; UI-020 path time/tilt glide;
