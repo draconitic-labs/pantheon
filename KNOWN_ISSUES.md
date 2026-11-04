@@ -84,4 +84,7 @@ apps running. The on-screen labels already say most of this where it applies.
 ## Windows
 
 Pantheon was first built on Windows, and the code paths remain (kernel memory mapping,
-WebView2 through Tauri). The current tree is developed and tested only on Linux.
+WebView2 through Tauri), but the current tree is developed and tested only on Linux. The atlas
+passes `cargo check --target x86_64-pc-windows-gnullvm`, which only shows that it type-checks.
+Nobody has linked or run this version on Windows, and the 3D window hasn't even been
+type-checked for it, because its build script needs a Windows resource compiler.

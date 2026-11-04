@@ -4,8 +4,8 @@
 //!
 //! Environment:
 //!   PANTHEON_START_URL  page to open: full URL, or a path/query for the local server
-//!   PANTHEON_PORT       preferred backend port (default 8090)
-//!   PANTHEON_QA=1       enable the test hooks in the backend (see serve.rs)
+//!   PANTHEON_PORT       preferred backend port (default 8090; 0 lets the system pick)
+//!   PANTHEON_QA=1       enable the test hooks in the backend, only for exactly 1 (see serve.rs)
 //!   PANTHEON_WEBVIEW_DATA  where WebKit keeps its data (default: webview-data beside the binary)
 //!   WEBKIT_DMABUF_RENDERER_FORCE_SHM  set by this app on NVIDIA unless you set it, or
 //!                       WEBKIT_DISABLE_DMABUF_RENDERER, yourself
