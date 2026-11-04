@@ -145,7 +145,7 @@ fn galaxy_rgb(gi: vec2<f32>, kpp: f32) -> vec3<f32> {
     let arms = a.x * max(clump, 0.05) * radial;
 
     // cool young stars on the crests; a warm old disc everywhere between them
-    let young = vec3<f32>(0.50, 0.65, 1.0) * arms * 2.3;
+    let young = vec3<f32>(0.50, 0.65, 1.0) * arms * 2.9;
     let disc = vec3<f32>(0.98, 0.78, 0.58) * exp(-r / 4.1) * outer * (0.62 + 0.5 * n1);
     var col = young + disc * 0.62;
 
@@ -170,11 +170,11 @@ fn galaxy_rgb(gi: vec2<f32>, kpp: f32) -> vec3<f32> {
     let bar = exp(-pow(bx * bx / 12.0 + by * by / 1.3, 1.05));
     let bulge = exp(-pow(r0 / 1.15, 1.25));
     col = col + vec3<f32>(1.0, 0.72, 0.44) * bar * 0.62 * (0.82 + 0.36 * n2);
-    col = col + vec3<f32>(1.0, 0.82, 0.60) * bulge * 1.5;
+    col = col + vec3<f32>(1.0, 0.82, 0.60) * bulge * 1.9;
     // a faint stellar halo so the disc doesn't end on a hard edge
     col = col + vec3<f32>(0.72, 0.72, 0.82) * exp(-r0 / 9.0) * 0.012;
     // and the eye adapts: inside the bright disc the glow must not wash out
-    let adapted = smoothstep(0.1, 0.008, kpp);
+    let adapted = smoothstep(0.022, 0.004, kpp);
     col = col * mix(1.0, 0.22 + 1.3 * smoothstep(0.22, 0.8, micro), close) * mix(1.0, 0.2, adapted);
     // bright regions roll off harder up close, so stars stand out from the glow
     return col / (1.0 + adapted * 2.4 * dot(col, vec3<f32>(0.3, 0.5, 0.2)));
@@ -389,7 +389,7 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
         let det = determinant(m);
         let inv = mat2x2<f32>(vec2<f32>(m[1].y, -m[0].y), vec2<f32>(-m[1].x, m[0].x)) * (1.0 / det);
         let upp = sqrt(abs(det));
-        col = col + deep_field(d, upp, inv) * 0.5 * V.deep_a.w;
+        col = col + deep_field(d, upp, inv) * 0.75 * V.deep_a.w;
     }
 
     // the cosmic web, on the supergalactic plane

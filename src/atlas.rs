@@ -1994,8 +1994,8 @@ fn stars_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             continue;
         }
         let m = s.absmag;
-        let core = (1.45 - 0.09 * m).clamp(0.6, 2.9) * (0.72 + 0.28 * crowd);
-        let bright = (2.3 - 0.17 * m).clamp(0.28, 5.0)
+        let core = (1.6 - 0.09 * m).clamp(0.7, 3.1) * (0.72 + 0.28 * crowd);
+        let bright = (2.9 - 0.2 * m).clamp(0.36, 6.0)
             * w as f32
             * (crowd + (m < 1.0) as i32 as f32 * 0.5 * crowd);
         let rgb = crate::data::star_rgb(s.bp_rp);

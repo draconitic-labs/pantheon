@@ -73,7 +73,7 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     } else {
         // a galaxy's extended halo: no sharp edge, the faintest possible glow
         let n = fbm2(g * 3.0 + seed * 13.0);
-        col = in.tint.rgb * exp(-r * r * 4.2) * (0.72 + 0.56 * n) * 0.10;
+        col = in.tint.rgb * exp(-r * r * 4.2) * (0.72 + 0.56 * n) * 0.17;
     }
     return vec4<f32>(col * in.tint.a, 0.0);
 }
