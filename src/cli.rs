@@ -12,8 +12,10 @@ USAGE:
   pantheon --list-shots                     list preset scenes
   pantheon --shot <name|all> [--size WxH] [--out DIR]
   pantheon --path <file.json> [--fps N] [--size WxH] [--out DIR]
-  pantheon --serve [--port N] [--app|--open] serve the three.js web edition (default port 8090);
-                                            --app opens a dedicated window, --open a browser tab
+  pantheon --sweep [--size WxH] [--out DIR]  one frame per half decade, Earth to the cosmic web
+  pantheon --bench [--size WxH] [--scenes a,b] frame cost per scene on this GPU, no window
+  pantheon --serve [--port N]               run the Pantheon 3D backend (default port 8090);
+                                            its window is the pantheon-3d binary (src-tauri)
   pantheon --doctor                         environment, GPU, and data health
   pantheon --help | --version
 
@@ -146,6 +148,23 @@ fn run(args: &[String]) -> anyhow::Result<()> {
             };
             let out = PathBuf::from(flags.get("--out").unwrap_or("exports/shots"));
             app::run_shots(which, w, h, &out)
+        }
+        "--sweep" => {
+            let flags = Flags::parse(&args[1..], &["--size", "--out"])?;
+            let (w, h) = match flags.get("--size") {
+                Some(s) => parse_size(s, false)?,
+                None => (1280, 720),
+            };
+            let out = PathBuf::from(flags.get("--out").unwrap_or("exports/sweep"));
+            app::run_sweep(w, h, &out)
+        }
+        "--bench" => {
+            let flags = Flags::parse(&args[1..], &["--size", "--scenes"])?;
+            let (w, h) = match flags.get("--size") {
+                Some(s) => parse_size(s, false)?,
+                None => (2560, 1440),
+            };
+            app::run_bench(w, h, flags.get("--scenes").unwrap_or("all"))
         }
         "--path" => {
             let file = args

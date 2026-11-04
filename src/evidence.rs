@@ -38,6 +38,7 @@ pub enum Ev {
     GalaxyFog,
     SurfaceImagery,
     SkyPanorama,
+    SkyProcedural,
     AtmosphereGlow,
     CoronaIllustrative,
     RingProfile,
@@ -265,11 +266,11 @@ pub fn rec(e: Ev) -> EvidenceRec {
             fetched: false,
         },
         Ev::SurfaceImagery => EvidenceRec {
-            class: Measured,
+            class: Inferred,
             source: "Solar System Scope texture maps (CC BY 4.0)",
-            citation: "based on NASA mission imagery; colours tuned by the publisher",
+            citation: "the publisher: based on NASA elevation and imagery data, colours tuned",
             frame: "equirectangular, read through the IAU body frame",
-            note: "one mosaic, not today's weather or storm positions; relief shading on rocky bodies comes from image brightness, not elevation",
+            note: "the publisher fills unmapped gaps with fictional terrain and saturates colours slightly; one mosaic, not today's weather or storm positions; relief shading comes from image brightness, not elevation",
             fetched: true,
         },
         Ev::SkyPanorama => EvidenceRec {
@@ -279,6 +280,14 @@ pub fn rec(e: Ev) -> EvidenceRec {
             frame: "galactic coordinates; shown through a nominal lens",
             note: "a real photograph of the sky, correct in direction; the atlas camera has no true field of view, so its scale is nominal",
             fetched: true,
+        },
+        Ev::SkyProcedural => EvidenceRec {
+            class: Procedural,
+            source: "procedural sky",
+            citation: "a band and star grain generated in galactic coordinates",
+            frame: "galactic coordinates; shown through a nominal lens",
+            note: "stands in where the photograph doesn't apply: it isn't on disk, or the camera is too far from the Sun for it to be true",
+            fetched: false,
         },
         Ev::AtmosphereGlow => EvidenceRec {
             class: Illustrative,

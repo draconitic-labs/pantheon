@@ -54,7 +54,7 @@ pub fn layout(w: f32, h: f32) -> Layout {
 
     // title block, top left
     let tall = h >= 520.0;
-    let title_h = if tall { 104.0 } else { 62.0 };
+    let title_h = if tall { 136.0 } else { 62.0 };
     let title = r(m, m, (toolbar_x0 - 14.0).max(m + 60.0), m + title_h);
 
     // scale rail, right edge, under the toolbar
@@ -88,6 +88,9 @@ pub fn layout(w: f32, h: f32) -> Layout {
     }
     let right_w = RIGHT_W.min(content_right - m);
     let mut right_col = r(content_right - right_w, toolbar.bottom() + 10.0, content_right, bar.top() - 8.0);
+    if right_col.left() < title.right() + 8.0 {
+        right_col.min.y = title.bottom() + 8.0;
+    }
     if right_col.left() < left_col.right() + 8.0 {
         // too narrow for two columns: share the height
         let split = (left_col.top().max(right_col.top()) + left_col.bottom()) * 0.5;
@@ -145,10 +148,10 @@ pub fn fmt_words(m: f64) -> String {
     } else if km < 1e6 {
         format!("{} km", group_digits(sig2(km)))
     } else if m < 0.05 * AU {
-        format!("{:.1} million km", km / 1e6)
+        format!("{} million km", trim_num(sig2(km / 1e6)))
     } else if m < 0.05 * LY {
         let au = m / AU;
-        format!("{} AU", group_digits(sig2(au)).replace(".0", ""))
+        format!("{} AU", group_digits(sig2(au)))
     } else if m < 1e3 * LY {
         format!("{} light-years", trim_num(sig2(m / LY)))
     } else if m < 1e6 * LY {
@@ -414,6 +417,17 @@ impl Pantheon {
                 return (obj_name(&self.u, obj), lw);
             }
         }
+        // anything selected that the view is plainly about
+        if let Some(obj) = self.focus {
+            let view = self.cam.mpp * self.view_w;
+            let d = (obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref()) - self.cam.center_root()).length();
+            if !matches!(obj, ObjectRef::Sun | ObjectRef::Planet(_) | ObjectRef::Moon(_))
+                && d < 0.25 * view
+                && view < 40.0 * atlas::obj_half_extent(&self.u, obj)
+            {
+                return (obj_name(&self.u, obj), lw);
+            }
+        }
         (band, lw)
     }
 
@@ -559,6 +573,18 @@ impl Pantheon {
             y += h + 3.0;
             if let Some(t) = turning {
                 halo_text(&painter, egui::pos2(x + 13.0, y), Align2::LEFT_TOP, t, theme::ui(11.5), theme::BRASS, 1.0);
+                y += 16.0;
+            }
+            // the image credits their licenses require, shown while they're on screen
+            let on = |e: crate::evidence::Ev| fo.evidence.iter().any(|(a, _)| *a == e);
+            let credit = match (on(crate::evidence::Ev::SkyPanorama), on(crate::evidence::Ev::SurfaceImagery)) {
+                (true, true) => Some("Sky: ESO/S. Brunier. Maps: Solar System Scope."),
+                (true, false) => Some("Sky: ESO/S. Brunier."),
+                (false, true) => Some("Maps: Solar System Scope."),
+                _ => None,
+            };
+            if let Some(c) = credit {
+                halo_text(&painter, egui::pos2(x + 13.0, y), Align2::LEFT_TOP, c, theme::ui(10.5), theme::TEXT_DIM, 0.9);
             }
         }
     }
@@ -955,15 +981,19 @@ impl Pantheon {
                     resp.on_hover_text(format!("{h} across. Click to go, drag to scrub."));
                 }
             });
+        self.scrub_held = scrub.is_some();
         if let Some(v) = scrub {
-            // scrubbing is a direct, continuous zoom about the middle of the view
-            let want = 10f64.powf(v) / self.view_w;
-            let dex = want.log10() - self.cam.mpp.log10();
-            let (cx, cy) = (self.view_w * 0.5, self.view_h * 0.5);
-            let proj = crate::frames::Proj::new(&self.cam, self.view_w, self.view_h, &self.u.gal);
-            self.zoom_pending = dex;
-            self.zoom_anchor = Some((cx, cy, proj.unproject_local(cx, cy)));
-            self.cam.anim = None;
+            let subject = self
+                .scrub
+                .map(|(_, o)| o)
+                .or_else(|| self.near_subject())
+                .unwrap_or(ObjectRef::Planet(2));
+            if self.scrub.is_none() {
+                self.push_history();
+                self.stop_motion();
+                self.scene_exo = None;
+            }
+            self.scrub = Some((v, subject));
             self.dismiss_intro();
         }
         if let Some(v) = go {
@@ -1061,6 +1091,7 @@ impl Pantheon {
         let expand_id = egui::Id::new("card-sources");
         let mut sources = ctx.data_mut(|d| *d.get_temp_mut_or::<bool>(expand_id, false));
         let card_rect = egui::Area::new(egui::Id::new("card"))
+            .default_size(col.size())
             .pivot(Align2::LEFT_BOTTOM)
             .fixed_pos(col.left_bottom())
             .show(ctx, |ui| {
@@ -1183,6 +1214,7 @@ impl Pantheon {
     fn right_column(&mut self, ctx: &egui::Context, l: &Layout) {
         let col = l.right_col;
         egui::Area::new(egui::Id::new("right-col"))
+            .default_size(col.size())
             .fixed_pos(col.min)
             .show(ctx, |ui| {
                 ui.set_width(col.width());
@@ -1306,6 +1338,7 @@ impl Pantheon {
         let width = 268.0f32.min(ctx.screen_rect().width() - 20.0);
         let right = l.toolbar.right();
         let area = egui::Area::new(egui::Id::new("layers"))
+            .default_size(egui::vec2(width, ctx.screen_rect().height()))
             .order(egui::Order::Foreground)
             .pivot(Align2::RIGHT_TOP)
             .fixed_pos(egui::pos2(right, l.toolbar.bottom() + 6.0))
@@ -1362,6 +1395,18 @@ impl Pantheon {
                                     .color(theme::BRASS),
                             );
                         }
+                        ui.add_space(4.0);
+                        ui.label(RichText::new("Credits").size(11.5).color(theme::TEXT_DIM));
+                        for line in [
+                            "Stars: ESA/Gaia/DPAC, CC BY-NC 3.0 IGO",
+                            "Planet maps: Solar System Scope, CC BY 4.0",
+                            "Milky Way panorama: ESO/S. Brunier, CC BY 4.0",
+                            "Positions: NASA/JPL ephemerides",
+                            "Exoplanets: NASA Exoplanet Archive",
+                            "Coastlines: Natural Earth",
+                        ] {
+                            ui.label(RichText::new(line).size(11.5));
+                        }
                     });
                 });
             });
@@ -1383,6 +1428,7 @@ impl Pantheon {
         let mut close = false;
         let w = 440.0f32.min(rect.width() - 20.0);
         egui::Area::new(egui::Id::new("help"))
+            .default_size(egui::vec2(w, rect.height()))
             .order(egui::Order::Foreground)
             .pivot(Align2::CENTER_CENTER)
             .fixed_pos(rect.center())
@@ -1487,7 +1533,9 @@ impl Pantheon {
             .show(ctx, |ui| {
                 panel_frame(ctx).inner_margin(egui::Margin::symmetric(8, 4)).show(ui, |ui| {
                     ui.label(RichText::new(name).size(13.0).color(theme::VELLUM));
-                    ui.label(RichText::new("Click to select, double-click to fly").size(11.0).color(theme::TEXT_DIM));
+                    if !self.learned_click {
+                        ui.label(RichText::new("Click to select, double-click to fly").size(11.0).color(theme::TEXT_DIM));
+                    }
                 });
             });
     }
@@ -1556,6 +1604,8 @@ mod tests {
     fn distances_read_like_a_person_would_say_them() {
         assert_eq!(fmt_words(3.6e7), "36,000 km");
         assert_eq!(fmt_words(3.0e9), "3 million km");
+        assert_eq!(fmt_words(1.0e10), "0.067 AU");
+        assert_eq!(fmt_words(1.5e13), "100 AU");
         assert_eq!(fmt_words(9.46e15 * 4.2), "4.2 light-years");
         assert_eq!(fmt_words(9.46e15 * 1.0e5), "100 thousand light-years");
         assert_eq!(fmt_words(9.46e15 * 2.5e6), "2.5 million light-years");

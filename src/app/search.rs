@@ -5,7 +5,8 @@ use glam::DVec3;
 
 use crate::atlas::ObjectRef;
 use crate::data::Universe;
-use crate::frames::{fmt_len, PC};
+use super::ui::fmt_words;
+use crate::frames::{KPC, MPC};
 use crate::sim::{MOONS, PLANETS};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -78,10 +79,10 @@ impl SearchState {
             e.push(entry(c.name, "spacecraft", 1, Dest::Obj(ObjectRef::Craft(i))));
         }
         for (i, g) in u.galaxies.iter().enumerate() {
-            e.push(entry(g.name, format!("galaxy, {}", fmt_len(g.dist_kpc * 1e3 * PC)), 2, Dest::Obj(ObjectRef::Galaxy(i))));
+            e.push(entry(g.name, format!("galaxy, {}", fmt_words(g.dist_kpc * KPC)), 2, Dest::Obj(ObjectRef::Galaxy(i))));
         }
         for (i, n) in u.nodes.iter().enumerate() {
-            e.push(entry(n.name, format!("galaxy cluster, {:.0} Mpc", n.dist_mpc), 2, Dest::Obj(ObjectRef::Node(i))));
+            e.push(entry(n.name, format!("galaxy cluster, {}", fmt_words(n.dist_mpc * MPC)), 2, Dest::Obj(ObjectRef::Node(i))));
         }
         for (i, s) in u.stars.iter().enumerate() {
             if let Some(n) = s.name {

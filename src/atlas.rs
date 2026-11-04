@@ -93,6 +93,8 @@ pub struct FrameOut {
     pub band_name: String,
     /// what this view is built from, in one honest sentence
     pub caption: (&'static str, Prov),
+    /// the biggest body on screen and how its surface was made
+    largest: Option<(f32, SurfaceSource)>,
     /// TRUTH-001: evidence actually drawn this frame (layer-granular) —
     /// the truth legend is generated from this, never from a static list
     pub evidence: Vec<(crate::evidence::Ev, &'static str)>,
@@ -102,6 +104,19 @@ pub struct FrameOut {
 fn seen(out: &mut FrameOut, e: crate::evidence::Ev, what: &'static str) {
     if !out.evidence.iter().any(|(a, b)| *a == e && *b == what) {
         out.evidence.push((e, what));
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum SurfaceSource {
+    Sun,
+    Map,
+    Procedural,
+}
+
+fn note_surface(out: &mut FrameOut, r_px: f32, src: SurfaceSource) {
+    if out.largest.map(|(r, _)| r_px > r).unwrap_or(true) {
+        out.largest = Some((r_px, src));
     }
 }
 
@@ -547,7 +562,8 @@ pub fn build(inp: &BuildIn, dl: &mut DrawList) -> FrameOut {
         labels: Vec::new(),
         picks: Vec::new(),
         band_name: band_name(lw).into(),
-        caption: band_caption(lw, inp),
+        caption: band_caption(lw),
+        largest: None,
         evidence: Vec::new(),
     };
     out.uni.size = [inp.w as f32, inp.h as f32, inp.anim_t as f32, inp.ppp];
@@ -607,10 +623,38 @@ pub fn build(inp: &BuildIn, dl: &mut DrawList) -> FrameOut {
         );
     }
 
+    // scale names assume you're at home; say so honestly when you've wandered off
+    let away = cam.center_root().length();
+    if exo_active_system(inp).is_none() && lw < 19.6 && away > 1.2 * cam.mpp * inp.w {
+        if away > 1.0e14 {
+            out.band_name = "Interstellar space".into();
+            out.caption = (
+                "Nothing in this atlas lies here at this scale. Follow the arrow back to the Sun.",
+                Prov::Procedural,
+            );
+        } else if lw < 15.0 {
+            out.band_name = "Solar System".into();
+        }
+    }
+    if let Some(ObjectRef::Star(_)) = inp.focus {
+        if lw < 15.6 {
+            out.caption = (
+                "Its position is from Gaia DR3. Gaia gives no radius here, so the marker is schematic.",
+                Prov::Measured,
+            );
+        }
+    }
+
     // ---- registered layers (ARCH-013): declared scale windows + gates
     for layer in LAYERS {
         if lw >= layer.lw.0 && lw <= layer.lw.1 && (layer.gate)(inp) {
             (layer.run)(inp, &proj, lw, dl, &mut out);
+        }
+    }
+
+    if let (Some((r_px, src)), true) = (out.largest, lw < 10.4) {
+        if r_px > 12.0 && exo_active_system(inp).is_none() {
+            out.caption = body_caption(src);
         }
     }
 
@@ -681,16 +725,8 @@ pub fn band_name(lw: f64) -> &'static str {
 }
 
 /// One sentence, always on screen, saying what this view is made of.
-fn band_caption(lw: f64, inp: &BuildIn) -> (&'static str, Prov) {
-    let imagery = inp.tex.any_planet_imagery();
+fn band_caption(lw: f64) -> (&'static str, Prov) {
     match lw {
-        x if x < 10.4 => {
-            if imagery {
-                ("Surfaces are spacecraft-derived maps with tuned colour. Atmosphere glow is illustrative.", Prov::Measured)
-            } else {
-                ("Surface patterns are procedural: planet maps are not downloaded. Positions are real.", Prov::Procedural)
-            }
-        }
         x if x < 13.6 => ("Planet positions from JPL ephemerides. Asteroid and Kuiper belts are illustrative samples.", Prov::Modeled),
         x if x < 15.0 => ("Spacecraft paths are JPL trajectory solutions. The heliosphere's shape is illustrative.", Prov::Measured),
         x if x < 16.6 => ("No one has seen the Oort cloud. This shell is an illustration of a theoretical structure.", Prov::Illustrative),
@@ -699,6 +735,15 @@ fn band_caption(lw: f64, inp: &BuildIn) -> (&'static str, Prov) {
         x if x < 22.3 => ("An illustration of the Milky Way. Only the Sun's and the centre's positions are measured.", Prov::Procedural),
         x if x < 23.6 => ("Galaxy positions and sizes from a compiled catalog. Their looks and the background are illustrative.", Prov::Illustrative),
         _ => ("Cluster positions from a compiled catalog. The filaments are procedural, not a survey map.", Prov::Procedural),
+    }
+}
+
+/// Close to a body, the sentence is about that body's surface.
+fn body_caption(src: SurfaceSource) -> (&'static str, Prov) {
+    match src {
+        SurfaceSource::Sun => ("The surface is a tuned map. Its motion, prominences and corona are illustrative.", Prov::Illustrative),
+        SurfaceSource::Map => ("The surface is a map built from NASA imagery, with tuned colour and some gaps filled. Atmosphere glow is illustrative.", Prov::Inferred),
+        SurfaceSource::Procedural => ("The surface pattern is procedural: no map of this body is on this computer. Its position is real.", Prov::Procedural),
     }
 }
 
@@ -768,17 +813,26 @@ fn sky_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut F
     let in_gal = |v: DVec3| [v.dot(gal.x) as f32, v.dot(gal.y) as f32, v.dot(gal.z) as f32];
     let k = SKY_TAN_HALF_FOV / (inp.w * 0.5);
     let (r, up, fwd) = (in_gal(proj.right), in_gal(proj.up), in_gal(-proj.out));
-    dl.want(TexId::Sky);
-    let has_map = inp.tex.fade(TexId::Sky);
-    out.uni.sky_r = [r[0], r[1], r[2], (w_sky as f32) * has_map.max(0.5)];
+    // a photograph of the sky is true only near where it was taken
+    let near_sun = inp.cam.center_root().length() < 60.0 * PC;
+    if near_sun {
+        dl.want(TexId::Sky);
+    }
+    let has_map = if near_sun { inp.tex.fade(TexId::Sky) } else { 0.0 };
+    out.uni.sky_r = [r[0], r[1], r[2], (w_sky as f32) * has_map.max(0.7)];
     out.uni.sky_u = [up[0], up[1], up[2], k as f32];
     out.uni.sky_f = [fwd[0], fwd[1], fwd[2], if has_map > 0.0 { 1.0 } else { 0.0 }];
+    if has_map > 0.0 {
+        seen(out, crate::evidence::Ev::SkyPanorama, "sky panorama");
+    } else {
+        seen(out, crate::evidence::Ev::SkyProcedural, "sky");
+    }
+    if !near_sun {
+        return;
+    }
 
     // naked-eye stars by true direction: the real constellations, crisp above
     // the panorama. They occupy the sky, so they never move with pan or zoom.
-    if has_map > 0.0 {
-        seen(out, crate::evidence::Ev::SkyPanorama, "sky panorama");
-    }
     seen(out, crate::evidence::Ev::GaiaDr3, "bright stars by direction");
     let truth = inp.modes.truth;
     let (cx, cy) = (inp.w * 0.5, inp.h * 0.5);
@@ -954,6 +1008,7 @@ fn sun_body(inp: &BuildIn, proj: &Proj, lw: f64, w_solar: f64, dl: &mut DrawList
         d.cb = [1.0, 0.6, 0.3, 1.0];
         d.flags = [0.0, 0.0, 0.0, emission];
         dl.disc(d, zd, [fade.gt(&0.0).then_some(tex), None, None]);
+        note_surface(out, r, SurfaceSource::Sun);
         seen(out, crate::evidence::Ev::CoronaIllustrative, "solar corona and granulation motion");
         if fade > 0.0 {
             seen(out, crate::evidence::Ev::SurfaceImagery, "solar surface map");
@@ -980,8 +1035,8 @@ fn sun_body(inp: &BuildIn, proj: &Proj, lw: f64, w_solar: f64, dl: &mut DrawList
     }
 }
 
-/// Imagery for each planet, if the file exists on disk.
-fn planet_tex(name: &str) -> Option<TexId> {
+/// Which surface map belongs to a planet (whether or not it's on disk).
+pub fn planet_tex(name: &str) -> Option<TexId> {
     Some(match name {
         "Mercury" => TexId::Mercury,
         "Venus" => TexId::Venus,
@@ -1066,8 +1121,10 @@ fn draw_planet_disc(
     let night_on = has_night && inp.tex.fade(TexId::EarthNight) > 0.0;
     let clouds_on = has_clouds && inp.tex.fade(TexId::EarthClouds) > 0.0;
     if fade > 0.0 {
+        note_surface(out, r_px, SurfaceSource::Map);
         seen(out, Ev::SurfaceImagery, "surface maps");
     } else {
+        note_surface(out, r_px, SurfaceSource::Procedural);
         seen(out, Ev::ProceduralSurface, "surface patterns");
     }
 
@@ -1345,6 +1402,13 @@ fn moons_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
                 }
             }
             let fade = tex.filter(|t| inp.tex.on_disk(*t)).map(|t| inp.tex.fade(t)).unwrap_or(0.0);
+            if fade > 0.0 {
+                note_surface(out, r_px, SurfaceSource::Map);
+                seen(out, crate::evidence::Ev::SurfaceImagery, "surface maps");
+            } else {
+                note_surface(out, r_px, SurfaceSource::Procedural);
+                seen(out, crate::evidence::Ev::ProceduralSurface, "surface patterns");
+            }
             let mut d = DiscInst::plain(mpx, [r_px, 0.0, m.kind, 0.23 + mi as f32 * 0.041], zd);
             d.sun = [sun_dir[0], sun_dir[1], sun_dir[2], 0.05];
             d.axis = [bz[0], bz[1], bz[2], 0.0];
@@ -1419,7 +1483,7 @@ fn belt(
 }
 
 fn belts_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut FrameOut) {
-    let aw = band(lw, 10.5, 13.3, 0.5);
+    let aw = band(lw, 10.5, 13.3, 0.5) * ((2.75 * AU / inp.cam.mpp) / 140.0).clamp(0.08, 1.0);
     if aw > 0.01 {
         seen(out, crate::evidence::Ev::GlyphIllustrative, "asteroid belt sample");
         // the Kirkwood gaps (resonances with Jupiter) are real; the rocks are not
@@ -1444,7 +1508,7 @@ fn belts_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             }
         }
     }
-    let kw = band(lw, 12.2, 15.2, 0.5);
+    let kw = band(lw, 12.2, 15.2, 0.5) * ((44.0 * AU / inp.cam.mpp) / 240.0).clamp(0.08, 1.0);
     if kw > 0.01 {
         seen(out, crate::evidence::Ev::GlyphIllustrative, "Kuiper belt sample");
         let radius = |k: usize| {
@@ -1556,7 +1620,7 @@ fn craft_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             // resampled through the Hermite track, so looping paths stay smooth;
             // Parker's rosette around the Sun is kept quiet unless it's selected
             let quiet = c.name == "Parker Solar Probe" && !selected;
-            let a = (if selected { 0.85 } else if quiet { 0.07 } else { 0.42 }) * w as f32;
+            let a = (if selected { 0.85 } else if quiet { 0.05 } else { 0.24 }) * w as f32;
             let mut st = StrokeStyle::new(ink(c.color, a, truth, Prov::Measured), 1.0);
             if !quiet {
                 st = st.glow(0.9);
@@ -1597,14 +1661,15 @@ fn craft_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
 
 fn stars_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut FrameOut) {
     let (u, truth) = (inp.u, inp.modes.truth);
-    let w = band(lw, 15.9, 20.2, 0.9);
+    let w = band(lw, 15.9, 19.9, 0.8);
     if w <= 0.005 {
         return;
     }
     seen(out, crate::evidence::Ev::GaiaDr3, "star field");
     // as the catalog's 83 pc ball shrinks on screen, faint stars recede so it
     // does not collapse into a white blob
-    let crowd = (1.0 - (lw as f32 - 17.7) * 0.42).clamp(0.16, 1.0);
+    let crowd = (1.0 - (lw as f32 - 17.5) * 0.6).clamp(0.09, 1.0);
+    let spike_w = 1.0 - smoothstep(17.7, 18.5, lw) as f32;
     let margin = 24.0f32;
     for (si, s) in u.stars.iter().enumerate() {
         let pos = s.pos_at(inp.clock.jd); // one epoch-aware provider (FND-014)
@@ -1614,7 +1679,7 @@ fn stars_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
         }
         let m = s.absmag;
         let core = (1.45 - 0.09 * m).clamp(0.6, 2.9) * (0.72 + 0.28 * crowd);
-        let bright = (2.3 - 0.17 * m).clamp(0.28, 5.0) * w as f32 * (crowd + (m < 1.0) as i32 as f32 * 0.4);
+        let bright = (2.3 - 0.17 * m).clamp(0.28, 5.0) * w as f32 * (crowd + (m < 1.0) as i32 as f32 * 0.5 * crowd);
         let rgb = crate::data::star_rgb(s.bp_rp);
         let c = if truth {
             let p = Prov::Measured.rgb();
@@ -1623,7 +1688,7 @@ fn stars_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             [rgb[0], rgb[1], rgb[2], bright]
         };
         // only the true luminaries get a diffraction cross
-        let spike = if m < -1.0 { 0.4 } else { 0.0 };
+        let spike = if m < -1.0 { 0.4 * spike_w } else { 0.0 };
         let glow = core * (1.5 + (1.6 - m * 0.16).clamp(0.0, 1.6));
         dl.point(px, core, glow, spike, c);
         if core > 1.2 || s.name.is_some() {
@@ -2379,5 +2444,95 @@ fn gravity_layer(inp: &BuildIn, proj: &Proj, dl: &mut DrawList, out: &mut FrameO
                 obj: None,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frames::galactic_frame;
+
+    /// Tessellate a circle of `radius_px` centred off to one side of the view.
+    fn circle_runs(radius_px: f64, mpp: f64) -> (Vec<Vec<(f64, f64, f64)>>, f64) {
+        let mut cam = Camera::new();
+        cam.mpp = mpp;
+        let radius = radius_px * mpp;
+        cam.center = DVec3::new(radius, 0.0, 0.0); // the curve passes mid-screen
+        let gal = galactic_frame();
+        let proj = Proj::new(&cam, 1600.0, 900.0, &gal);
+        let f = move |t: f64| DVec3::new(radius * t.cos(), radius * t.sin(), 0.0);
+        let mut c = Curve { proj: &proj, f: &f, x0: -8.0, y0: -8.0, x1: 1608.0, y1: 908.0, runs: Vec::new() };
+        let tau = std::f64::consts::TAU;
+        let seeds = 64;
+        let mut prev = (0.0, c.scr(0.0));
+        for k in 1..=seeds {
+            let t = tau * k as f64 / seeds as f64;
+            let p = c.scr(t);
+            c.seg(prev.0, prev.1, t, p, 0);
+            prev = (t, p);
+        }
+        (c.runs, radius_px)
+    }
+
+    #[test]
+    fn huge_orbits_stay_smooth_and_inside_the_view() {
+        // an Earth-sized orbit seen from close by: radius of a billion pixels
+        for radius_px in [500.0, 5.0e4, 1.0e7, 1.0e9] {
+            let (runs, r) = circle_runs(radius_px, 1.0e3);
+            let n: usize = runs.iter().map(|x| x.len()).sum();
+            assert!(n >= 2, "the curve crosses the view at radius {radius_px}");
+            assert!(n < 6000, "too many segments ({n}) at radius {radius_px}");
+            for run in &runs {
+                for w in run.windows(2) {
+                    let (a, b) = (w[0], w[1]);
+                    // inside the clip rectangle, where f32 keeps sub-pixel accuracy
+                    for p in [a, b] {
+                        assert!(p.0 >= -8.01 && p.0 <= 1608.01 && p.1 >= -8.01 && p.1 <= 908.01, "{p:?}");
+                    }
+                    // chord error against the true circle, whose centre is at x = 800 - r
+                    let mid = (0.5 * (a.0 + b.0), 0.5 * (a.1 + b.1));
+                    let d = ((mid.0 - (800.0 - r)).powi(2) + (mid.1 - 450.0).powi(2)).sqrt();
+                    assert!((d - r).abs() < 0.5, "chord error {} at radius {radius_px}", (d - r).abs());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_curve_entirely_off_screen_emits_nothing() {
+        let mut cam = Camera::new();
+        cam.mpp = 1.0;
+        let gal = galactic_frame();
+        let proj = Proj::new(&cam, 1600.0, 900.0, &gal);
+        let far = 1.0e7;
+        let f = move |t: f64| DVec3::new(far + 100.0 * t.cos(), far + 100.0 * t.sin(), 0.0);
+        let mut c = Curve { proj: &proj, f: &f, x0: -8.0, y0: -8.0, x1: 1608.0, y1: 908.0, runs: Vec::new() };
+        let (p0, p1) = (c.scr(0.0), c.scr(3.0));
+        c.seg(0.0, p0, 3.0, p1, 0);
+        assert!(c.runs.is_empty());
+    }
+
+    #[test]
+    fn galaxy_plane_axes_are_orthonormal_and_edge_on_at_ninety_degrees() {
+        let pos = DVec3::new(1.0e22, 3.0e22, -2.0e22);
+        let (a, b) = galaxy_plane(pos, 37.7, 77.5);
+        assert!((a.length() - 1.0).abs() < 1e-9 && (b.length() - 1.0).abs() < 1e-9);
+        assert!(a.dot(b).abs() < 1e-9);
+        // face-on: the disc lies across the line of sight
+        let (a0, b0) = galaxy_plane(pos, 0.0, 0.0);
+        let s = pos.normalize();
+        assert!(a0.dot(s).abs() < 1e-9 && b0.dot(s).abs() < 1e-9);
+        // edge-on: one in-plane axis runs along the line of sight
+        let (_, b90) = galaxy_plane(pos, 0.0, 90.0);
+        assert!((b90.dot(s).abs() - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn iau_sun_frame_is_right_handed() {
+        let m = sun_basis(J2000 + 1234.5);
+        assert!((m.determinant() - 1.0).abs() < 1e-9);
+        // about 7.25 degrees between the solar pole and the ecliptic pole
+        let tilt = m.col(2).dot(DVec3::Z).acos().to_degrees();
+        assert!((tilt - 7.25).abs() < 0.2, "solar axis tilt {tilt}");
     }
 }

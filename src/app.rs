@@ -90,8 +90,10 @@ pub struct Pantheon {
     pub show_layers: bool,
     /// cinematic renders: canvas + labels only, no controls
     pub cinema: bool,
-    /// headless exports: imagery loads synchronously, the camera settles at once
+    /// exports: the camera settles at once rather than easing
     pub immediate: bool,
+    /// exports: imagery loads synchronously
+    pub block_textures: bool,
     /// set by shot setups that could not resolve their subject
     pub setup_error: Option<String>,
     pub status: Option<(String, f64)>,
@@ -126,7 +128,12 @@ pub struct Pantheon {
     last_drag: f64,
     /// a held key's continuous pan/zoom
     key_pan: [f64; 2],
+    /// riding the scale rail: the target scale and the body it starts from
+    scrub: Option<(f64, ObjectRef)>,
+    scrub_held: bool,
     pres_moving: bool,
+    /// someone who has clicked a thing doesn't need telling that they can
+    learned_click: bool,
     /// the first-run hint, until dismissed
     pub intro: bool,
     intro_born: f64,
@@ -165,7 +172,7 @@ impl Pantheon {
             .filter(|l| l.contains("MISSING") || l.contains("INVALID"))
             .collect();
         for p in &problems {
-            eprintln!("data health: {p}");
+            log::info!("data health: {p}");
         }
         let clock = Clock::now();
         let mut cam = Camera::new();
@@ -226,6 +233,7 @@ impl Pantheon {
             show_layers: false,
             cinema: false,
             immediate: false,
+            block_textures: false,
             setup_error: None,
             status,
             settings: Settings::default(),
@@ -247,7 +255,10 @@ impl Pantheon {
             drag_vel: [0.0, 0.0],
             last_drag: -1.0,
             key_pan: [0.0, 0.0],
+            scrub: None,
+            scrub_held: false,
             pres_moving: false,
+            learned_click: false,
             intro: false,
             intro_born: 0.0,
             data_gaps,
@@ -365,6 +376,7 @@ impl Pantheon {
             a.c1 = (p + off) - self.cam.frame_origin;
         }
         self.cam.tick(dt, self.view_w);
+        self.apply_scrub(dt);
         self.apply_smooth_zoom(dt);
         self.apply_pan_inertia(dt);
         // one time switch: play/pause is the source of truth, "living" derives
@@ -470,6 +482,36 @@ impl Pantheon {
             return Some(ObjectRef::Star(i));
         }
         self.u.find_system(n).map(ObjectRef::ExoHost)
+    }
+
+    /// Where a scale on the rail looks: the chosen body when close, the Sun at
+    /// system and stellar scales, the galactic centre for the Galaxy, and the
+    /// Local Group beyond. The blend makes the whole ladder one continuous ride.
+    fn ladder_center(&self, lw: f64, subject: ObjectRef) -> DVec3 {
+        use crate::frames::smoothstep;
+        let body = obj_pos(&self.u, subject, self.clock.jd, self.island.as_ref());
+        let near = body.lerp(DVec3::ZERO, smoothstep(10.2, 12.0, lw));
+        let t = smoothstep(19.2, 20.6, lw) * (1.0 - smoothstep(22.2, 23.2, lw));
+        near.lerp(self.u.gal.center, t)
+    }
+
+    /// Dragging the rail moves through scale directly, staying on the ladder so
+    /// there's always something to see, wherever the camera started.
+    fn apply_scrub(&mut self, dt: f64) {
+        let Some((target, subject)) = self.scrub else { return };
+        let k = if self.immediate { 1.0 } else { 1.0 - (-dt / 0.08).exp() };
+        let lw = self.cam.log_width(self.view_w);
+        let now = lw + (target - lw) * k;
+        self.cam.mpp = (10f64.powf(now) / self.view_w).clamp(crate::frames::MPP_MIN, crate::frames::MPP_MAX);
+        self.cam.center = self.ladder_center(now, subject) - self.cam.frame_origin;
+        self.cam.anim = None;
+        self.follow = None;
+        if !self.scrub_held && (target - now).abs() < 0.002 {
+            self.scrub = None;
+            if now < 10.2 {
+                self.follow = Some((subject, DVec3::ZERO));
+            }
+        }
     }
 
     /// Smooth zoom: wheel notches feed `zoom_pending`, which drains over ~0.1 s
@@ -742,7 +784,7 @@ impl Pantheon {
             }
             guard += 1;
             // exports wait for imagery so a shot never catches a half-loaded surface
-            if self.immediate && self.bank.busy() && guard < 4 {
+            if self.block_textures && self.bank.busy() && guard < 4 {
                 self.bank.finish_loading(&self.gpu);
                 continue;
             }
@@ -896,7 +938,10 @@ impl Pantheon {
             if resp.double_clicked() {
                 self.pan_vel = [0.0, 0.0];
                 match hit {
-                    Some(obj) => self.dive_to(obj),
+                    Some(obj) => {
+                        self.learned_click = true;
+                        self.dive_to(obj);
+                    }
                     None => {
                         let world = proj.unproject(s[0] as f64, s[1] as f64);
                         self.follow = None;
@@ -907,6 +952,7 @@ impl Pantheon {
             } else if resp.clicked() {
                 self.pan_vel = [0.0, 0.0];
                 self.focus = hit;
+                self.learned_click |= hit.is_some();
                 // following continues only for the thing already being followed
                 if self.follow.map(|(o, _)| Some(o) != hit).unwrap_or(false) {
                     self.follow = None;
@@ -916,7 +962,9 @@ impl Pantheon {
 
         // ---- keys, suppressed while typing
         self.key_pan = [0.0, 0.0];
-        if ctx.wants_keyboard_input() {
+        // the palette owns the keyboard while open, even on the frame egui has
+        // already dropped text focus because of Esc
+        if ctx.wants_keyboard_input() || self.search.open {
             return;
         }
         use egui::Key as K;
@@ -1087,6 +1135,7 @@ impl Pantheon {
             || self.zoom_pending != 0.0
             || self.pan_vel != [0.0, 0.0]
             || self.key_pan != [0.0, 0.0]
+            || self.scrub.is_some()
             || self.clock.playing
             || self.bank.busy()
             || self.play.is_some()
@@ -1222,7 +1271,7 @@ impl Pantheon {
                 rows.push(("day length".into(), format!("{:.2} h", p.rot_hours.abs())));
                 if let Some(res) = u.planet_residual_km(i, jd) {
                     let txt = if res < 10.0 { format!("{res:.2} km") } else { format!("{res:.0} km") };
-                    rows.push(("state vs Horizons now".into(), txt));
+                    rows.push(("difference from JPL Horizons".into(), txt));
                     provs.push(("Horizons cross-check".into(), Ev::HorizonsVectors));
                     provs.push(("residual interpolation".into(), Ev::HorizonsInterp));
                 }
@@ -1238,7 +1287,7 @@ impl Pantheon {
                 } else {
                     provs.push(("state + orbit".into(), Ev::ApproxElements));
                 }
-                let has_map = self.bank.status.any_planet_imagery() && p.name != "Pluto";
+                let has_map = atlas::planet_tex(p.name).is_some_and(|t| self.bank.status.on_disk(t));
                 provs.push((
                     "surface".into(),
                     if has_map { Ev::SurfaceImagery } else { Ev::ProceduralSurface },
@@ -1281,8 +1330,14 @@ impl Pantheon {
                     provs.push(("state".into(), Ev::MoonMeanElements));
                     provs.push(("orbital phase".into(), Ev::MoonPhase));
                 }
+                let has_map = m.name == "Moon"
+                    && self.bank.status.on_disk(crate::engine::textures::TexId::Moon);
+                provs.push((
+                    "surface".into(),
+                    if has_map { Ev::SurfaceImagery } else { Ev::ProceduralSurface },
+                ));
                 if m.name == "Moon" && u.moon_truth.is_some() {
-                    provs.push(("dashed arc".into(), Ev::HorizonsVectors));
+                    provs.push(("dashed arc (Truth mode)".into(), Ev::HorizonsVectors));
                 }
                 can_awaken = true;
             }
@@ -1306,7 +1361,7 @@ impl Pantheon {
                 let dist = if s.dist_err_pc > 0.0 {
                     format!("{:.2} ± {:.2} pc", s.dist_pc, s.dist_err_pc)
                 } else {
-                    format!("{:.2} pc  ({:.1} ly)", s.dist_pc, s.dist_pc * 3.2616)
+                    format!("{:.1} light-years", s.dist_pc * 3.2616)
                 };
                 rows.push(("distance".into(), dist));
                 rows.push(("G magnitude".into(), format!("{:.2}", s.gmag)));
@@ -1324,7 +1379,7 @@ impl Pantheon {
                 let s = &u.exos[ei];
                 subtitle = format!("Star with {} known planets", s.planets.len());
                 if let Some(d) = s.dist_pc {
-                    rows.push(("distance".into(), format!("{d:.1} pc")));
+                    rows.push(("distance".into(), ui::fmt_words(d * crate::frames::PC)));
                 }
                 if let Some(t) = s.st_teff {
                     rows.push(("T_eff".into(), format!("{t:.0} K")));
@@ -1383,16 +1438,16 @@ impl Pantheon {
             ObjectRef::Galaxy(gi) => {
                 let g = &u.galaxies[gi];
                 subtitle = if g.spiral { "Spiral galaxy in the Local Group".into() } else { "Dwarf galaxy in the Local Group".into() };
-                rows.push(("distance".into(), format!("{:.0} kpc", g.dist_kpc)));
-                rows.push(("size".into(), format!("~{:.1} kpc", g.size_kpc)));
+                rows.push(("distance".into(), ui::fmt_words(g.dist_kpc * crate::frames::KPC)));
+                rows.push(("size".into(), format!("about {}", ui::fmt_words(g.size_kpc * crate::frames::KPC))));
                 provs.push(("position & distance".into(), Ev::CompiledCatalog));
                 provs.push(("appearance".into(), Ev::GlyphIllustrative));
             }
             ObjectRef::Node(ni) => {
                 let n = &u.nodes[ni];
                 subtitle = "Galaxy cluster or attractor".into();
-                rows.push(("distance".into(), format!("{:.0} Mpc", n.dist_mpc)));
-                rows.push(("size".into(), format!("~{:.0} Mpc", n.size_mpc)));
+                rows.push(("distance".into(), ui::fmt_words(n.dist_mpc * crate::frames::MPC)));
+                rows.push(("size".into(), format!("about {}", ui::fmt_words(n.size_mpc * crate::frames::MPC))));
                 provs.push(("position & distance".into(), Ev::CompiledCatalog));
                 provs.push(("web filaments".into(), Ev::WebProcedural));
             }
@@ -1408,6 +1463,8 @@ pub struct GuiApp {
     rs: eframe::egui_wgpu::RenderState,
     canvas: Option<(ViewTarget, egui::TextureId)>,
     last: Instant,
+    /// the opening view is framed once the real window size is known
+    framed: bool,
     #[cfg(feature = "audio")]
     ambience: Option<crate::audio::Ambience>,
 }
@@ -1425,6 +1482,7 @@ impl GuiApp {
             rs,
             canvas: None,
             last: Instant::now(),
+            framed: false,
             #[cfg(feature = "audio")]
             ambience: None,
         }
@@ -1491,6 +1549,10 @@ impl eframe::App for GuiApp {
                 self.app.view_w = rect.width() as f64;
                 self.app.view_h = rect.height() as f64;
                 self.app.ppp = ppp;
+                if !self.framed {
+                    self.framed = true;
+                    self.app.cam.mpp = self.app.framing_mpp(atlas::obj_half_extent(&self.app.u, ObjectRef::Planet(2)));
+                }
                 let resp = ui.allocate_rect(rect, egui::Sense::click_and_drag());
                 self.app.handle_input(ctx, &resp, rect);
                 self.app.tick(dt);
@@ -1570,6 +1632,7 @@ impl Headless {
         );
         let mut app = Pantheon::new(gpu);
         app.immediate = true;
+        app.block_textures = true;
         app.status = None;
         Ok(Self { app, ctx, rend, canvas: None, final_target: None })
     }
@@ -1861,6 +1924,19 @@ pub const SHOTS: &[Shot] = &[
         setup: |a| view(a, DVec3::ZERO, 6.0e16, None),
     },
     Shot {
+        name: "neighbourhood",
+        desc: "The edge of the Gaia sample, about 300 light-years across",
+        setup: |a| view(a, DVec3::ZERO, 3.0e18, None),
+    },
+    Shot {
+        name: "galactic_centre",
+        desc: "Zoomed in near the galactic centre",
+        setup: |a| {
+            let gc = crate::frames::galactic_frame().center;
+            view(a, gc, 6.0e19, None);
+        },
+    },
+    Shot {
         name: "galaxy",
         desc: "The Milky Way: fog, arms, Sol marker",
         setup: |a| {
@@ -1887,6 +1963,15 @@ pub const SHOTS: &[Shot] = &[
         name: "kepler90",
         desc: "Dive: Kepler-90, eight planets",
         setup: |a| exo_view(a, "Kepler-90", 2.6),
+    },
+    Shot {
+        name: "truth_earth",
+        desc: "Truth mode over Earth: coastlines checking the map's alignment",
+        setup: |a| {
+            let p = sim::body_pos(2, a.clock.jd);
+            view(a, p, 3.4e7, Some(ObjectRef::Planet(2)));
+            a.modes.truth = true;
+        },
     },
     Shot {
         name: "truth_inner",
@@ -1920,17 +2005,9 @@ pub fn run_shots(which: &str, w: u32, h: u32, out: &std::path::Path) -> anyhow::
         if which != "all" && !wanted.contains(&shot.name) {
             continue;
         }
-        // reset ALL transient state between shots — deterministic procedural
+        // reset ALL transient state between shots, deterministic procedural
         // time included (AUDIT REND-033)
-        host.app.modes = Modes::default();
-        host.app.island = None;
-        host.app.play = None;
-        host.app.focus = None;
-        host.app.scene_exo = None;
-        host.app.follow = None;
-        host.app.cam = Camera::new();
-        host.app.anim_t = 0.0;
-        host.app.setup_error = None;
+        reset_scene(&mut host);
         (shot.setup)(&mut host.app);
         if let Some(e) = host.app.setup_error.take() {
             failures.push(format!("{}: {e}", shot.name));
@@ -1949,16 +2026,93 @@ pub fn run_shots(which: &str, w: u32, h: u32, out: &std::path::Path) -> anyhow::
     Ok(())
 }
 
+/// Reset the transient state between scenes, so each is deterministic.
+fn reset_scene(host: &mut Headless) {
+    host.app.modes = Modes::default();
+    host.app.island = None;
+    host.app.play = None;
+    host.app.focus = None;
+    host.app.scene_exo = None;
+    host.app.follow = None;
+    host.app.cam = Camera::new();
+    host.app.anim_t = 0.0;
+    host.app.setup_error = None;
+}
+
+/// One continuous zoom from Earth to the cosmic web, a frame per half decade:
+/// the quick way to look for dead zones and ugly transitions.
+pub fn run_sweep(w: u32, h: u32, out: &std::path::Path) -> anyhow::Result<()> {
+    let mut host = Headless::new()?;
+    host.app.view_w = w as f64;
+    host.app.view_h = h as f64;
+    let mut k = 0u32;
+    let mut lw = 7.5f64;
+    while lw <= 25.6 {
+        reset_scene(&mut host);
+        host.app.modes.ladder = true;
+        let jd = host.app.clock.jd;
+        // the camera stays where a person zooming out from Earth would be
+        host.app.cam.center = if lw < 10.5 { sim::body_pos(2, jd) } else { DVec3::ZERO };
+        host.app.cam.mpp = 10f64.powf(lw) / w as f64;
+        let path = out.join(format!("lw_{k:02}_{lw:.1}.png"));
+        host.export_png(w, h, &path)?;
+        println!("wrote {}", path.display());
+        lw += 0.5;
+        k += 1;
+    }
+    Ok(())
+}
+
+/// Frame cost on the real GPU, with no window involved: each scene renders for
+/// a while with the GPU fully drained every frame, so the number is honest.
+pub fn run_bench(w: u32, h: u32, which: &str) -> anyhow::Result<()> {
+    let mut host = Headless::new()?;
+    host.app.view_w = w as f64;
+    host.app.view_h = h as f64;
+    println!("adapter: {}", crate::engine::gpu::adapter_info()?);
+    println!("{:18} {:>9} {:>9} {:>9}", "scene", "mean ms", "p95 ms", "fps");
+    let wanted: Vec<&str> = which.split(',').map(str::trim).collect();
+    for shot in SHOTS {
+        if which != "all" && !wanted.contains(&shot.name) {
+            continue;
+        }
+        reset_scene(&mut host);
+        (shot.setup)(&mut host.app);
+        host.app.cam.mpp *= 1600.0 / w as f64;
+        for _ in 0..4 {
+            host.frame(w, h, 1.0 / 60.0, false)?;
+        }
+        let mut ms: Vec<f64> = Vec::new();
+        for _ in 0..40 {
+            let t0 = Instant::now();
+            host.frame(w, h, 1.0 / 60.0, false)?;
+            let _ = host.app.gpu.device.poll(wgpu::PollType::Wait);
+            ms.push(t0.elapsed().as_secs_f64() * 1e3);
+        }
+        ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mean = ms.iter().sum::<f64>() / ms.len() as f64;
+        println!("{:18} {:9.2} {:9.2} {:9.0}", shot.name, mean, ms[ms.len() * 95 / 100], 1e3 / mean);
+    }
+    Ok(())
+}
+
 pub fn run_path(path: &std::path::Path, w: u32, h: u32, fps: u32, out: &std::path::Path) -> anyhow::Result<()> {
     let keys: Vec<PathKey> = serde_json::from_str(&std::fs::read_to_string(path)?)?;
     anyhow::ensure!(!keys.is_empty(), "path file has no keyframes");
     let mut host = Headless::new()?;
     host.app.cinema = true;
+    host.app.view_w = w as f64;
+    host.app.view_h = h as f64;
+    // a recorded path plays in real time: the camera eases as it would live
+    host.app.immediate = false;
+    host.app.block_textures = true;
     // jump instantly to the first key, then play the rest
     host.app.apply_key(&keys[0]);
     if let Some(a) = host.app.cam.anim.take() {
         host.app.cam.center = a.c1;
         host.app.cam.mpp = 10f64.powf(a.lm1);
+        host.app.cam.tilt = a.tilt1;
+        host.app.cam.yaw = a.yaw1;
     }
     host.app.play = Some(PathPlay { keys: keys.clone(), k: 0, t: 0.0 });
     std::fs::create_dir_all(out)?;

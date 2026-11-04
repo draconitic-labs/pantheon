@@ -90,6 +90,11 @@ impl Csv {
 }
 
 pub fn asset_root() -> PathBuf {
+    // an explicit location wins: for installed copies, and for testing how the
+    // app behaves on a fresh clone without the large downloads
+    if let Some(dir) = std::env::var_os("PANTHEON_ASSETS") {
+        return PathBuf::from(dir);
+    }
     let mut cands: Vec<PathBuf> = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {

@@ -83,12 +83,16 @@ fn sky_color(px: vec2<f32>) -> vec3<f32> {
         // settle the mosaic's noise floor to true black, keep the band
         return max(c - vec3<f32>(0.006), vec3<f32>(0.0)) * 0.62;
     }
-    // no panorama on disk: a procedural band, clearly the lesser stand-in
+    // no photograph applies (not on disk, or far from where it was taken):
+    // a procedural band and star grain, labeled as such
     let warp = fbm2(vec2<f32>(l * 2.2, b * 5.0) + 3.1);
     let band = exp(-pow(abs(b) * (5.0 + 3.0 * warp), 1.6));
     let core = exp(-(l * l * 2.2 + b * b * 90.0));
     let dust = smoothstep(0.5, 0.72, fbm2(vec2<f32>(l * 6.0, b * 22.0)));
-    return (vec3<f32>(0.55, 0.60, 0.72) * band * 0.035 + vec3<f32>(0.9, 0.72, 0.5) * core * 0.08) * (1.0 - 0.7 * dust * band);
+    let inv = mat2x2<f32>(vec2<f32>(1.0 / k, 0.0), vec2<f32>(0.0, 1.0 / k));
+    let stars = star_octaves(vec2<f32>(l, b), k, inv, 5.0, 5.0, 0.5);
+    let glow = (vec3<f32>(0.55, 0.60, 0.72) * band * 0.035 + vec3<f32>(0.9, 0.72, 0.5) * core * 0.08) * (1.0 - 0.7 * dust * band);
+    return glow + star_tint(stars.y) * stars.x * (0.22 + 0.5 * band);
 }
 
 // ---- the Milky Way --------------------------------------------------------
@@ -107,6 +111,16 @@ fn arm_field(g: vec2<f32>, r: f32) -> vec3<f32> {
     return vec3<f32>(pow(crest, 2.1) * major, pow(lane, 10.0), crest);
 }
 
+// Texture at the scale of the screen that stays put as you zoom: two adjacent
+// world-locked octaves, cross-faded, so detail appears without ever sliding.
+fn fine_detail(g: vec2<f32>, kpp: f32) -> f32 {
+    let lk = log2(max(kpp * 60.0, 1e-6));
+    let k0 = floor(lk);
+    let f = lk - k0;
+    let s0 = pow(2.0, k0);
+    return mix(fbm2(g / s0 + 17.0), fbm2(g / (s0 * 2.0) + 17.0), f);
+}
+
 fn galaxy_rgb(gi: vec2<f32>, kpp: f32) -> vec3<f32> {
     let r0 = length(gi);
     if (r0 > 40.0) {
@@ -120,8 +134,9 @@ fn galaxy_rgb(gi: vec2<f32>, kpp: f32) -> vec3<f32> {
     let n1 = fbm2(g * 0.62 + 4.2);
     let n2 = fbm2(g * 1.9 - 3.3);
     let n3 = fbm2(g * 6.3 + 8.8);
-    // detail tied to zoom, so a close view never looks like a flat wash
-    let detail = fbm2(g / max(kpp * 42.0, 0.04) + 1.7);
+    // up close the glow breaks into clouds, so a near view is never a flat wash
+    let micro = fine_detail(gi, kpp);
+    let close = smoothstep(0.03, 0.006, kpp);
 
     let outer = smoothstep(24.0, 13.0, r);
     let inner_hole = smoothstep(1.2, 4.0, r);
@@ -142,7 +157,7 @@ fn galaxy_rgb(gi: vec2<f32>, kpp: f32) -> vec3<f32> {
     col = col * mix(vec3<f32>(1.0), vec3<f32>(0.26, 0.17, 0.12), extinction);
 
     // HII regions: pink knots strung along the crests, with their own glow
-    let knots = smoothstep(0.66, 0.84, fbm2(g * 2.7 + 21.0)) * a.x;
+    let knots = smoothstep(0.66, 0.84, fbm2(g * 2.7 + 21.0)) * a.x * mix(1.0, smoothstep(0.44, 0.70, micro), close);
     col = col + vec3<f32>(1.0, 0.30, 0.44) * knots * radial * 1.5;
     // blue open clusters
     let clusters = smoothstep(0.70, 0.86, fbm2(g * 3.6 - 13.0)) * a.x;
@@ -158,7 +173,11 @@ fn galaxy_rgb(gi: vec2<f32>, kpp: f32) -> vec3<f32> {
     col = col + vec3<f32>(1.0, 0.82, 0.60) * bulge * 1.5;
     // a faint stellar halo so the disc doesn't end on a hard edge
     col = col + vec3<f32>(0.72, 0.72, 0.82) * exp(-r0 / 9.0) * 0.012;
-    return col * (0.88 + 0.24 * detail);
+    // and the eye adapts: inside the bright disc the glow must not wash out
+    let adapted = smoothstep(0.1, 0.008, kpp);
+    col = col * mix(1.0, 0.22 + 1.3 * smoothstep(0.22, 0.8, micro), close) * mix(1.0, 0.2, adapted);
+    // bright regions roll off harder up close, so stars stand out from the glow
+    return col / (1.0 + adapted * 2.4 * dot(col, vec3<f32>(0.3, 0.5, 0.2)));
 }
 
 fn fog_density(g: vec2<f32>) -> f32 {
@@ -352,8 +371,12 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
             // once individual stars can't be resolved they should read as grain,
             // not as a blizzard over the light they make up
             let resolve = clamp(0.012 / max(kpp, 1e-5), 0.14, 1.0);
-            let light = dust.x * clamp(dens * 2.2 + 0.05, 0.0, 1.4) * outside * resolve;
-            col = col + star_tint(dust.y) * light * V.fog_b.w * 0.9;
+            // up close, dust clouds dim the stars behind them; the old inner
+            // Galaxy is warm, the outer disc bluer
+            let clouds = mix(1.0, 0.3 + 1.0 * smoothstep(0.22, 0.8, fine_detail(g, kpp)), smoothstep(0.03, 0.006, kpp));
+            let tint = mix(star_tint(dust.y), vec3<f32>(1.0, 0.80, 0.56), exp(-length(g) / 3.2) * 0.85);
+            let light = dust.x * clamp(dens * 1.6 + 0.05, 0.0, 0.95) * outside * resolve * clouds;
+            col = col + tint * light * V.fog_b.w * 0.9;
         }
     }
 
@@ -399,7 +422,7 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
         let w = fwidth(t) * 1.2;
         let line = 1.0 - smoothstep(0.5 * w, 1.6 * w, ft);
         let fade = exp(-max(om - 1.5, 0.0) * 0.55);
-        col = col + vec3<f32>(0.83, 0.68, 0.38) * line * fade * 0.34 * V.grav_b.z;
+        col = col + vec3<f32>(0.83, 0.68, 0.38) * line * fade * 0.17 * V.grav_b.z;
     }
 
     return vec4<f32>(col, 0.0);
