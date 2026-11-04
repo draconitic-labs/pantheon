@@ -24,6 +24,8 @@ function lookQuat(dirFromTarget, up, out) {
   return out.setFromRotationMatrix(_m);
 }
 
+const ZOOM_IN_KEYS = ['Equal', 'NumpadAdd'], ZOOM_OUT_KEYS = ['Minus', 'NumpadSubtract'];
+
 export class Nav {
   // hooks: blocked(), onClick(nx,ny), onDouble(nx,ny), onInput(kind), surface(cam)->{dist},
   //        upAt(d, out), onFlyKey(), onLock(locked), onLockFail(), reducedMotion
@@ -76,6 +78,7 @@ export class Nav {
       if (!p) return;
       const dx = e.clientX - p.x, dy = e.clientY - p.y;
       p.x = e.clientX; p.y = e.clientY;
+      p.tMove = performance.now();
       if (!p.moved && Math.hypot(e.clientX - p.sx, e.clientY - p.sy) < 5) return;
       if (!p.moved) { p.moved = true; this.dragging = true; this.h.onInput('drag'); if (this.flight) this.cancelFlight(); }
       if (this.pts.size === 2) {
@@ -93,6 +96,8 @@ export class Nav {
       if (!p) return;
       this.pts.delete(e.pointerId);
       if (this.pts.size === 0) this.dragging = false;
+      // a flick keeps turning, but a hold before letting go means stop here
+      if (p.moved && performance.now() - p.tMove > 80) this.yawVel = this.pitchVel = 0;
       if (e.type === 'pointerup' && !p.moved && p.btn === 0 && performance.now() - p.t < 600) {
         const [nx, ny] = this._ndc(e);
         this.h.onClick(nx, ny);
@@ -131,7 +136,7 @@ export class Nav {
       if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE'].includes(code)) {
         this.h.onInput('fly');
         if (this.mode !== 'free') this.h.onFlyKey?.();
-      } else if (/^Arrow/.test(code) || code === 'Equal' || code === 'Minus') {
+      } else if (/^Arrow/.test(code) || ZOOM_IN_KEYS.includes(code) || ZOOM_OUT_KEYS.includes(code)) {
         this.h.onInput('key');
         if (this.flight) this.cancelFlight();
       }
@@ -445,8 +450,8 @@ export class Nav {
     if (this.keys.has('ArrowRight')) this._turn(k, 0);
     if (this.keys.has('ArrowUp')) this._turn(0, k);
     if (this.keys.has('ArrowDown')) this._turn(0, -k);
-    if (this.keys.has('Equal')) this.zoomBy(-1.6 * dt);
-    if (this.keys.has('Minus')) this.zoomBy(1.6 * dt);
+    if (ZOOM_IN_KEYS.some(k => this.keys.has(k))) this.zoomBy(-1.6 * dt);
+    if (ZOOM_OUT_KEYS.some(k => this.keys.has(k))) this.zoomBy(1.6 * dt);
     // inertia after a drag
     if (!this.dragging && (this.yawVel || this.pitchVel)) {
       this._turn(this.yawVel * dt, this.pitchVel * dt);

@@ -295,7 +295,11 @@ function resolveExoDistances() {
       const dot = ux * cd2 * Math.cos(a2) + uy * cd2 * Math.sin(a2) + uz * Math.sin(d2);
       if (dot > best) { best = dot; bi = i; }
     }
-    if (bi >= 0) {
+    // A host beyond the catalog's reach can't be in it, so a star in that direction at
+    // some other distance is a chance neighbour. Inside the reach, trust Gaia's distance.
+    const stranger = bi >= 0 && sys.distPc != null && sys.distPc > reachPc
+      && Math.abs(starsNear.meta[bi].distPc - sys.distPc) > 0.2 * sys.distPc;
+    if (bi >= 0 && !stranger) {
       sys.distPc = sys.distPc ?? starsNear.meta[bi].distPc;
       sys.gaiaIdx = bi;
       const p = starsNear.positions;
@@ -650,15 +654,20 @@ function select(t) {
 
 // ---------- journeys ----------
 const backStack = [];
-function pushBack() {
+// One Back must always move you. During a flight the focus is still where you left,
+// so a second click, or a tour's first stop, would record that same place again.
+function pushBack(to) {
   if (!nav.focus) return;
+  if (to && to.id === nav.focus.id) return;
+  const top = backStack[backStack.length - 1];
+  if (top && top.target.id === nav.focus.id) return;
   backStack.push({ target: nav.focus, dist: nav.camWorld.distanceTo(nav.pivot), dir: nav.dir.clone() });
   if (backStack.length > 40) backStack.shift();
 }
 function goTo(t, { speed = 1, keepTour = false } = {}) {
   if (!t) return;
   if (!keepTour) stopTour();
-  pushBack();
+  pushBack(t);
   if (t.onApproach) t.onApproach();
   nav.flyTo(t, { speed, aspect: camera.aspect });
   ui.showFact('');
@@ -805,7 +814,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 // ---------- search ----------
-const fold = (s) => s.toLowerCase().replace(/α/g, 'alpha ').replace(/ε/g, 'epsilon ').replace(/[^a-z0-9*+ -]/g, ' ').replace(/\s+/g, ' ').trim();
+const fold = (s) => s.toLowerCase().replace(/α/g, 'alpha ').replace(/ε/g, 'epsilon ').replace(/[^a-z0-9+ -]/g, ' ').replace(/\s+/g, ' ').trim();
 const SEARCH_ALIASES = [
   ['sagittarius a', 'v:gc', 'Galactic center'], ['sgr a', 'v:gc', 'Galactic center'], ['galactic center', 'v:gc', 'Galactic center'],
   ['galaxy', 'v:milkyway', 'Milky Way'], ['lmc', 'gal:Large Magellanic Cloud', 'Large Magellanic Cloud'], ['smc', 'gal:Small Magellanic Cloud', 'Small Magellanic Cloud'],
