@@ -1466,7 +1466,6 @@ impl Pantheon {
                     ));
                 } else if m.name == "Moon" {
                     provs.push(("state".into(), Ev::LunaModel));
-                    provs.push(("orbital phase".into(), Ev::MoonPhase));
                 } else {
                     provs.push(("state".into(), Ev::MoonMeanElements));
                     provs.push(("orbital phase".into(), Ev::MoonPhase));

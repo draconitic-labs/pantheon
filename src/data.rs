@@ -227,9 +227,12 @@ const NAMED_STARS: [(&str, f64, f64, f64, f32, f32); 36] = [
     ("Luyten's Star", 111.853, 5.226, 3.80, 9.87, 2.7),
 ];
 
-fn load_stars(root: &std::path::Path) -> Vec<Star> {
+/// All the stars, and how far out gaia_nearby.csv really reaches in parsecs. That catalog
+/// is the dense sample; gaia_bright.csv adds naked-eye stars well beyond it.
+fn load_stars(root: &std::path::Path) -> (Vec<Star>, f64) {
     let mut stars: Vec<Star> = Vec::new();
     let mut seen: HashMap<String, usize> = HashMap::new();
+    let mut reach_pc = 0.0_f64;
     for file in ["gaia_nearby.csv", "gaia_bright.csv"] {
         let Some(csv) = Csv::load(&root.join("data").join(file)) else {
             continue;
@@ -251,6 +254,9 @@ fn load_stars(root: &std::path::Path) -> Vec<Star> {
                 continue;
             }
             let dist_pc = 1000.0 / par;
+            if file == "gaia_nearby.csv" {
+                reach_pc = reach_pc.max(dist_pc);
+            }
             let pos = radec_to_ecl(ra, dec, dist_pc * PC);
             let bp_rp = csv.f(row, "bp_rp").unwrap_or(0.8) as f32;
             // proper motion (mas/yr) → transverse m/yr; radial velocity km/s → m/yr
@@ -319,7 +325,7 @@ fn load_stars(root: &std::path::Path) -> Vec<Star> {
             }
         }
     }
-    stars
+    (stars, reach_pc)
 }
 
 // ------------------------------------------------------------ exoplanets
@@ -651,6 +657,9 @@ const COSMIC_NODES: [(&str, f64, f64, f64, f64); 15] = [
 pub struct Universe {
     pub gal: GalacticFrame,
     pub stars: Vec<Star>,
+    /// where the dense Gaia sample really ends, measured from the loaded catalog; 0
+    /// if it isn't loaded
+    pub gaia_reach_pc: f64,
     pub exos: Vec<ExoSystem>,
     pub exo_by_host: HashMap<String, usize>,
     pub craft: Vec<Craft>,
@@ -690,7 +699,7 @@ impl Universe {
         let mut health: Vec<String> = Vec::new();
         let root = asset_root();
         let gal = crate::frames::galactic_frame();
-        let stars = load_stars(&root);
+        let (stars, gaia_reach_pc) = load_stars(&root);
         health.push(if stars.len() > 1000 {
             format!("stars: OK — {} sources", stars.len())
         } else {
@@ -803,6 +812,7 @@ impl Universe {
             Self {
                 gal,
                 stars,
+                gaia_reach_pc,
                 exos,
                 exo_by_host,
                 craft,
@@ -1072,6 +1082,36 @@ mod tests {
             .iter()
             .map(|(f, d)| (f.to_string(), d.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn the_gaia_reach_comes_from_the_nearby_catalog_alone() {
+        let root = std::env::temp_dir().join(format!("pantheon-data-test-{}", std::process::id()));
+        let data = root.join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let header = "source_id,ra,dec,parallax,phot_g_mean_mag";
+        let (near, bright) = (data.join("gaia_nearby.csv"), data.join("gaia_bright.csv"));
+        // parallaxes of 100 and 40 mas: 10 and 25 pc
+        std::fs::write(&near, format!("{header}\n1,10,10,100,8\n2,20,20,40,9\n")).unwrap();
+        // 1 mas is 1000 pc, far past the dense sample
+        std::fs::write(&bright, format!("{header}\n3,30,30,1,5\n")).unwrap();
+        let (stars, reach) = load_stars(&root);
+        std::fs::remove_file(&near).unwrap();
+        std::fs::remove_file(&bright).unwrap();
+        std::fs::remove_dir(&data).unwrap();
+        std::fs::remove_dir(&root).unwrap();
+        assert!((reach - 25.0).abs() < 1e-9, "{reach}");
+        assert!(stars.iter().any(|s| s.dist_pc > 900.0));
+    }
+
+    #[test]
+    fn the_shipped_catalog_reaches_nowhere_near_83_pc() {
+        let u = Universe::load();
+        assert!(
+            u.gaia_reach_pc > 20.0 && u.gaia_reach_pc < 60.0,
+            "{}",
+            u.gaia_reach_pc
+        );
     }
 
     #[test]

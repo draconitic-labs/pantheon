@@ -547,6 +547,7 @@ fn api_states(s: &mut Conn, query: &str) -> std::io::Result<()> {
             let v = (crate::sim::body_pos(i, jd + h) - crate::sim::body_pos(i, jd - h)) / (2.0 * h);
             serde_json::json!({
                 "name": crate::sim::PLANETS[i].name,
+                "src": src,
                 "pos": [p.x, p.y, p.z],
                 "vel": [v.x, v.y, v.z],
             })
@@ -561,6 +562,8 @@ fn api_states(s: &mut Conn, query: &str) -> std::io::Result<()> {
             serde_json::json!({
                 "name": m.name,
                 "parent": crate::sim::PLANETS[m.planet].name,
+                // moon by moon: no kernel carries the moons of Uranus, for one
+                "src": if crate::sim::moon_is_spice(mi, jd) { "spice" } else { "elements" },
                 "pos": [p.x, p.y, p.z],
                 "vel": [v.x, v.y, v.z],
             })

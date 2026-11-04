@@ -581,7 +581,7 @@ impl Pantheon {
         let Some(fo) = &self.fo else { return };
         let (title, lw) = self.place_title();
         let view_m = self.cam.mpp * self.view_w;
-        let caption = fo.caption;
+        let caption = fo.caption.clone();
         let turning = if (18.3..19.3).contains(&lw) {
             Some("The map is turning to lie in the plane of the Galaxy")
         } else if (22.3..23.2).contains(&lw) {

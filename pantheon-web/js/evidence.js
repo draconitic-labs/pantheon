@@ -1,8 +1,8 @@
-// Pantheon 3D — evidence.js: port of src/evidence.rs (PROV-001..003).
+// Pantheon 3D — evidence.js: port of src/evidence.rs.
 // Every provenance chip resolves through this registry: one record per
 // evidence source with class, source, citation, frame, note, retrieval date.
 //
-// Rust Prov has six classes; the web UI uses three (SPEC CLS_COLOR), mapped:
+// Rust Prov has six classes; the web UI uses three, mapped:
 // Measured->measured; Modeled,Inferred->modeled;
 // Illustrative,Procedural,Unknown->illustrative.
 
@@ -25,7 +25,7 @@ const REG = {
     'Gaia Collaboration et al. 2023, A&A 674, A1',
     'ICRS, epoch J2016.0',
     'naked-eye backdrop; G<6 parallaxes less reliable', 'gaia'],
-  'surface-imagery': [M,
+  'surface-imagery': [MO,
     'Solar System Scope texture pack (NASA/USGS/ESA mission mosaics), CC BY 4.0',
     'solarsystemscope.com/textures; NASA Blue/Black Marble; USGS Astrogeology',
     'body-fixed IAU frame, equirectangular, lon 0 at prime meridian',
@@ -40,7 +40,7 @@ const REG = {
     "Earth's coefficients after Hillaire 2020; other worlds are tuned by eye to their known look",
     'body-fixed, in body radii',
     'modeled appearance, not imagery; scale heights exaggerated (Earth and Mars about 1.5x) so the limb reads', false],
-  'ring-imagery': [M,
+  'ring-imagery': [MO,
     'Solar System Scope ring strip (from NASA imagery), CC BY 4.0',
     'solarsystemscope.com/textures',
     'radial profile; radii fitted to the Cassini Division and C ring edge',
@@ -149,7 +149,7 @@ const REG = {
     'JPL satellite mean elements (embedded)',
     'circular-inclined approximation',
     'parent IAU equator + per-moon inclination',
-    'fallback when no satellite kernel covers the moon', false],
+    'used when no satellite kernel covers this moon. tools/fetch_data.py downloads none for Uranus, so its moons always use this', false],
   'luna-model': [MO,
     'precessing-ellipse lunar model',
     'node 18.6 yr, perigee 8.85 yr',

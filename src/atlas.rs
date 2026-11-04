@@ -2,6 +2,8 @@
 //! Layers own log-scale visibility windows and cross-fade; geometry is
 //! projected CPU-side in f64 and emitted as screen-space vector primitives.
 
+use std::borrow::Cow;
+
 use glam::{DMat3, DVec3};
 
 use crate::data::{Prov, Universe};
@@ -92,7 +94,7 @@ pub struct FrameOut {
     pub picks: Vec<Pickable>,
     pub band_name: String,
     /// what this view is built from, in one honest sentence
-    pub caption: (&'static str, Prov),
+    pub caption: (Cow<'static, str>, Prov),
     /// the biggest body on screen and how its surface was made
     largest: Option<(f32, SurfaceSource)>,
     /// TRUTH-001: evidence actually drawn this frame (layer-granular) —
@@ -111,7 +113,15 @@ fn seen(out: &mut FrameOut, e: crate::evidence::Ev, what: &'static str) {
 enum SurfaceSource {
     Sun,
     Map,
-    Procedural,
+    Procedural(PositionSource),
+}
+
+/// What a body's position on screen really rests on.
+#[derive(Clone, Copy, PartialEq)]
+enum PositionSource {
+    Kernel,
+    PlanetElements,
+    MoonElements,
 }
 
 fn note_surface(out: &mut FrameOut, r_px: f32, src: SurfaceSource) {
@@ -646,7 +656,7 @@ pub fn build(inp: &BuildIn, dl: &mut DrawList) -> FrameOut {
         labels: Vec::new(),
         picks: Vec::new(),
         band_name: band_name(lw).into(),
-        caption: band_caption(lw),
+        caption: band_caption(lw, inp),
         largest: None,
         evidence: Vec::new(),
     };
@@ -665,7 +675,9 @@ pub fn build(inp: &BuildIn, dl: &mut DrawList) -> FrameOut {
             out.uni.sun_g = [
                 (sol.dot(u.gal.x) / KPC) as f32,
                 (sol.dot(u.gal.y) / KPC) as f32,
-                0.083, // the Gaia sample's reach in this atlas, kpc
+                // where the dense Gaia sample ends, so the dust starts outside it. A sliver
+                // above zero keeps the shader's fade valid if the catalog isn't loaded.
+                (u.gaia_reach_pc / 1000.0).max(1e-3) as f32,
                 0.0,
             ];
         }
@@ -702,7 +714,7 @@ pub fn build(inp: &BuildIn, dl: &mut DrawList) -> FrameOut {
         exo_layer(inp, &proj, lw, ei, dl, &mut out);
         out.band_name = u.exos[ei].host.clone();
         out.caption = (
-            "Periods and sizes from the NASA Exoplanet Archive. Orbit orientation and phase are illustrative.",
+            "Periods and sizes from the NASA Exoplanet Archive. Orbit orientation and phase are illustrative.".into(),
             Prov::Measured,
         );
     }
@@ -713,7 +725,8 @@ pub fn build(inp: &BuildIn, dl: &mut DrawList) -> FrameOut {
         if away > 1.0e14 {
             out.band_name = "Interstellar space".into();
             out.caption = (
-                "Nothing in this atlas lies here at this scale. Follow the arrow back to the Sun.",
+                "Nothing in this atlas lies here at this scale. Follow the arrow back to the Sun."
+                    .into(),
                 Prov::Procedural,
             );
         } else if lw < 15.0 {
@@ -723,7 +736,7 @@ pub fn build(inp: &BuildIn, dl: &mut DrawList) -> FrameOut {
     if let Some(ObjectRef::Star(_)) = inp.focus {
         if lw < 15.6 {
             out.caption = (
-                "Its position is from Gaia DR3. Gaia gives no radius here, so the marker is schematic.",
+                "Its position is from Gaia DR3. Gaia gives no radius here, so the marker is schematic.".into(),
                 Prov::Measured,
             );
         }
@@ -738,7 +751,8 @@ pub fn build(inp: &BuildIn, dl: &mut DrawList) -> FrameOut {
 
     if let (Some((r_px, src)), true) = (out.largest, lw < 10.4) {
         if r_px > 12.0 && exo_active_system(inp).is_none() {
-            out.caption = body_caption(src);
+            let (text, prov) = body_caption(src);
+            out.caption = (text.into(), prov);
         }
     }
 
@@ -811,25 +825,48 @@ pub fn band_name(lw: f64) -> &'static str {
 }
 
 /// One sentence, always on screen, saying what this view is made of.
-fn band_caption(lw: f64) -> (&'static str, Prov) {
+fn band_caption(lw: f64, inp: &BuildIn) -> (Cow<'static, str>, Prov) {
     match lw {
-        x if x < 13.6 => ("Planet positions from JPL ephemerides. Asteroid and Kuiper belts are illustrative samples.", Prov::Modeled),
-        x if x < 15.0 => ("Spacecraft paths are JPL trajectory solutions. The heliosphere's shape is illustrative.", Prov::Measured),
-        x if x < 16.6 => ("No one has seen the Oort cloud. This shell is an illustration of a theoretical structure.", Prov::Illustrative),
-        x if x < 18.0 => ("Star positions, colours and brightness from Gaia DR3.", Prov::Measured),
-        x if x < 19.6 => ("Stars within 83 pc are from Gaia DR3. The dust beyond them is illustrative.", Prov::Procedural),
-        x if x < 22.3 => ("An illustration of the Milky Way. Only the Sun's and the centre's positions are measured.", Prov::Procedural),
-        x if x < 23.6 => ("Galaxy positions and sizes from a compiled catalog. Their looks and the background are illustrative.", Prov::Illustrative),
-        _ => ("Cluster positions from a compiled catalog. The filaments are procedural, not a survey map.", Prov::Procedural),
+        x if x < 13.6 => {
+            if sim::eph_is_spice(inp.clock.jd) {
+                ("Planet positions from JPL kernels. Asteroid and Kuiper belts are illustrative samples.".into(), Prov::Modeled)
+            } else {
+                ("Planet positions from approximate orbital elements, not JPL kernels. Asteroid and Kuiper belts are illustrative samples.".into(), Prov::Modeled)
+            }
+        }
+        x if x < 15.0 => {
+            if inp.u.craft.is_empty() {
+                ("Spacecraft tracks aren't downloaded. The heliosphere's shape is illustrative.".into(), Prov::Illustrative)
+            } else {
+                ("Spacecraft paths are JPL trajectory solutions. The heliosphere's shape is illustrative.".into(), Prov::Measured)
+            }
+        }
+        x if x < 16.6 => ("No one has seen the Oort cloud. This shell is an illustration of a theoretical structure.".into(), Prov::Illustrative),
+        x if x < 18.0 => ("Star positions, colours and brightness from Gaia DR3.".into(), Prov::Measured),
+        x if x < 19.6 => {
+            let reach = inp.u.gaia_reach_pc;
+            let text = if reach > 0.0 {
+                format!("Gaia DR3 covers stars out to {reach:.0} pc, then only naked-eye ones. The dust beyond them is illustrative.").into()
+            } else {
+                "The dust here is illustrative.".into()
+            };
+            (text, Prov::Procedural)
+        }
+        x if x < 22.3 => ("An illustration of the Milky Way. Only the Sun's and the centre's positions are measured.".into(), Prov::Procedural),
+        x if x < 23.6 => ("Galaxy positions and sizes from a compiled catalog. Their looks and the background are illustrative.".into(), Prov::Illustrative),
+        _ => ("Cluster positions from a compiled catalog. The filaments are procedural, not a survey map.".into(), Prov::Procedural),
     }
 }
 
 /// Close to a body, the sentence is about that body's surface.
 fn body_caption(src: SurfaceSource) -> (&'static str, Prov) {
+    use PositionSource::*;
     match src {
         SurfaceSource::Sun => ("The surface is a tuned map. Its motion, prominences and corona are illustrative.", Prov::Illustrative),
         SurfaceSource::Map => ("The surface is a map built from NASA imagery, with tuned colour and some gaps filled. Atmosphere glow is illustrative.", Prov::Inferred),
-        SurfaceSource::Procedural => ("The surface pattern is procedural: no map of this body is on this computer. Its position is real.", Prov::Procedural),
+        SurfaceSource::Procedural(Kernel) => ("The surface pattern is procedural: no map of this body is on this computer. Its position comes from a JPL kernel.", Prov::Procedural),
+        SurfaceSource::Procedural(PlanetElements) => ("The surface pattern is procedural: no map of this body is on this computer. Its position comes from approximate orbital elements, not a JPL kernel.", Prov::Procedural),
+        SurfaceSource::Procedural(MoonElements) => ("The surface pattern is procedural: no map of this body is on this computer. No kernel for it is loaded, so its place along its orbit is chosen for legibility and isn't where it really is.", Prov::Procedural),
     }
 }
 
@@ -1282,7 +1319,12 @@ fn draw_planet_disc(
         note_surface(out, r_px, SurfaceSource::Map);
         seen(out, Ev::SurfaceImagery, "surface maps");
     } else {
-        note_surface(out, r_px, SurfaceSource::Procedural);
+        let position = if sim::eph_is_spice(jd) {
+            PositionSource::Kernel
+        } else {
+            PositionSource::PlanetElements
+        };
+        note_surface(out, r_px, SurfaceSource::Procedural(position));
         seen(out, Ev::ProceduralSurface, "surface patterns");
     }
 
@@ -1607,7 +1649,12 @@ fn moons_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
                 note_surface(out, r_px, SurfaceSource::Map);
                 seen(out, crate::evidence::Ev::SurfaceImagery, "surface maps");
             } else {
-                note_surface(out, r_px, SurfaceSource::Procedural);
+                let position = if sim::moon_is_spice(mi, jd) {
+                    PositionSource::Kernel
+                } else {
+                    PositionSource::MoonElements
+                };
+                note_surface(out, r_px, SurfaceSource::Procedural(position));
                 seen(
                     out,
                     crate::evidence::Ev::ProceduralSurface,
@@ -1982,7 +2029,7 @@ fn stars_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
         return;
     }
     seen(out, crate::evidence::Ev::GaiaDr3, "star field");
-    // as the catalog's 83 pc ball shrinks on screen, faint stars recede so it
+    // as the catalog's dense ball shrinks on screen, faint stars recede so it
     // does not collapse into a white blob
     let crowd = (1.0 - (lw as f32 - 17.5) * 0.6).clamp(0.09, 1.0);
     let spike_w = 1.0 - smoothstep(17.7, 18.5, lw) as f32;
@@ -2051,10 +2098,13 @@ fn stars_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             StrokeStyle::new(theme::rgba(theme::INK_GOLD, 0.75 * w as f32), 1.0),
         );
     }
-    // where measurement stops: honest and, at this scale, useful
-    let edge_w = band(lw, 17.9, 19.3, 0.35) as f32;
-    if edge_w > 0.01 {
-        let r_px = (83.0 * PC / inp.cam.mpp) as f32;
+    // where measurement stops: honest and, at this scale, useful. Shown from when the
+    // ring fits the view until it has shrunk to a small mark.
+    let reach = inp.u.gaia_reach_pc;
+    let reach_lw = (reach.max(1.0) * PC).log10();
+    let edge_w = band(lw, reach_lw - 0.5, reach_lw + 0.9, 0.35) as f32;
+    if reach > 0.0 && edge_w > 0.01 {
+        let r_px = (reach * PC / inp.cam.mpp) as f32;
         if r_px > 24.0 {
             dl.circle(
                 sun_px,
@@ -2063,7 +2113,7 @@ fn stars_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             );
             out.labels.push(Label {
                 pos: [sun_px[0] - r_px * 0.71, sun_px[1] + r_px * 0.71],
-                text: "Gaia sample in this atlas ends here (83 pc)".into(),
+                text: format!("Gaia's dense sample ends here ({reach:.0} pc); beyond it, naked-eye stars only"),
                 size: 11.0,
                 color: theme::rgba(theme::INK_BLUE, 0.8 * edge_w),
                 priority: 6,

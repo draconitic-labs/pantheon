@@ -140,7 +140,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
         },
         Ev::SatelliteSpk => EvidenceRec {
             class: Measured,
-            source: "JPL satellite ephemeris kernel (jup365/mar099)",
+            source: "JPL satellite ephemeris kernels (mar099, jup365, sat441, nep097, plu060)",
             citation: "JPL SSD satellite solutions",
             frame: "planetocentric, J2000 → ecliptic",
             note: "real moon states; supersedes mean elements in coverage",
@@ -223,7 +223,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             source: "illustrative rendering",
             citation: "deterministic procedural sampling",
             frame: "—",
-            note: "shows that something is there, not what exactly; positions of named objects come from a catalog",
+            note: "used when no satellite kernel covers this moon. tools/fetch_data.py downloads none for Uranus, so its moons always use this",
             dataset: None,
         },
         Ev::NBodyIsland => EvidenceRec {

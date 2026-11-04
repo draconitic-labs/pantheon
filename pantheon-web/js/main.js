@@ -1157,9 +1157,16 @@ function updateTruth(panoA) {
     const fb = nav.focus && nav.focus.radius && !nav.flight ? system.body(nav.focus.name) : null;
     const near = fb && fb.kind !== 'craft' ? { body: fb, dist: fb.world.distanceTo(cam) - fb.radius } : nearest;
     const rec = near.body && system.groups.get(near.body.name);
-    add(kernels ? 'Positions: DE440s and satellite kernels' : meta.spice ? 'Positions: mean elements while time runs this fast' : 'Positions: mean elements (no kernels)', stateEv);
-    if (near.dist < near.body.radius * 300) {
-      if (rec && rec.textured) { add(`${near.body.name}: mission imagery`, 'surface-imagery'); credit = `Surface: Solar System Scope, NASA data. ${credit}`; }
+    const close = near.dist < near.body.radius * 300;
+    // only the moon you are at: a moon with no kernel doesn't change what the planets rest on
+    const meanMoon = kernels && close && near.body.kind === 'moon' && !system.moonUsesKernel(near.body.name, clock.jd);
+    // the backend answered for this date and said elements: the date is outside kernel coverage
+    const outside = !kernels && meta.spice && system.stateCache && system.stateCache.src !== 'spice';
+    const why = outside ? 'this date is outside the kernels' : 'time is running too fast for them';
+    add(kernels ? 'Positions: DE440s, and satellite kernels where loaded' : meta.spice ? `Positions: mean elements, ${why}` : 'Positions: mean elements (no kernels)', stateEv);
+    if (meanMoon) add(`${near.body.name}: mean elements, no kernel loaded for it`, 'moon-mean-elements');
+    if (close) {
+      if (rec && rec.textured) { add(`${near.body.name}: NASA-based map`, 'surface-imagery'); credit = `Surface: Solar System Scope, NASA data. ${credit}`; }
       else if (near.body.name === 'Earth' && rec.paintedLand) add('Earth: real outlines, painted colors', 'coastlines');
       else if (near.body.name !== 'Sun') add(`${near.body.name}: procedural surface`, 'procedural-surface');
       if (rec && rec.atmoMat) add('Atmosphere: scattering model', 'atmosphere-model');
@@ -1170,10 +1177,14 @@ function updateTruth(panoA) {
     if (panoA > 0.02) add('Sky: ESO photograph', 'milkyway-pano');
     if (!sky.hasPano) add('Sky band: illustrative model', 'galaxy-fog');
     const real = rec && rec.textured;
-    const where = kernels ? 'Real positions' : meta.spice ? 'Modeled positions at this time rate' : 'Modeled positions, no kernels loaded';
-    summary = real ? `${where}; real imagery, modeled lighting`
+    const where = meanMoon ? `Modeled position, no kernel loaded for ${near.body.name}`
+      : kernels ? 'Kernel positions'
+      : !meta.spice ? 'Modeled positions, no kernels loaded'
+      : outside ? 'Modeled positions, this date is outside the kernels' : 'Modeled positions at this time rate';
+    summary = real ? `${where}; NASA-based maps, modeled lighting`
       : rec && rec.paintedLand ? `${where}; real outlines, painted colors` : `${where}; surface is procedural`;
-    cls = kernels && real ? 'measured' : 'modeled';
+    // the maps themselves are inferred (tuned colour, gaps filled), so nothing here is purely measured
+    cls = 'modeled';
   } else if (dSun < 150 * PC) {
     add('Stars: Gaia DR3', 'gaia-dr3');
     if (panoA > 0.02) add('Sky: ESO photograph', 'milkyway-pano');

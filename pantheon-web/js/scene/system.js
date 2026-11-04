@@ -688,8 +688,15 @@ export class SolarSystem {
     return !!(c && c.src === 'spice' && Math.abs(jd - c.jd) < 12);
   }
 
+  // the same question for one moon: no kernel is downloaded for the moons of Uranus
+  moonUsesKernel(name, jd) {
+    const c = this.stateCache;
+    const e = this._stateIdx && this._stateIdx.get('m:' + name);
+    return !!(c && e && e.src === 'spice' && Math.abs(jd - c.jd) < 12);
+  }
+
   stateSrc(jd) {
-    return this.usingKernels(jd ?? this.lastJd) ? 'DE440s + satellite SPKs' : 'mean elements';
+    return this.usingKernels(jd ?? this.lastJd) ? 'DE440s, and satellite kernels where loaded' : 'mean elements';
   }
 
   // Moves every body to jd. Runs before the camera so frame-riding never lags.
@@ -938,11 +945,16 @@ export class SolarSystem {
       };
     }
     const rows = [];
-    const evState = this.usingKernels(jd) ? (b.kind === 'moon' ? 'satellite-spk' : 'de440') : (b.kind === 'moon' ? 'moon-mean-elements' : 'approx-elements');
+    const isLuna = b.name === 'Moon';
+    const moonKernel = b.kind === 'moon' && this.moonUsesKernel(b.name, jd);
+    const evState = b.kind === 'moon'
+      ? (moonKernel ? (isLuna ? 'de440' : 'satellite-spk') : (isLuna ? 'luna-model' : 'moon-mean-elements'))
+      : (this.usingKernels(jd) ? 'de440' : 'approx-elements');
     rows.push({ label: 'Radius', value: `${Math.round(b.radius / 1e3).toLocaleString()} km`, ev: 'physical-constants' });
     if (b.kind !== 'star') rows.push({ label: 'From the Sun', value: `${(b.world.length() / AU).toFixed(3)} AU`, ev: evState });
     const ol = this.orbitLines.get(b.name);
     if (ol) rows.push({ label: 'Orbit', value: ol.period > 800 ? `${(ol.period / 365.25).toFixed(1)} years` : `${ol.period.toFixed(1)} days`, ev: evState });
+    if (b.kind === 'moon' && !moonKernel && !isLuna) rows.push({ label: 'Place on its orbit', value: 'Illustrative, no kernel loaded', ev: 'moon-phase' });
     rows.push({ label: 'Distance', value: prettyRange(b.world.distanceTo(camWorld)), live: 'range' });
     const rec = this.groups.get(b.name);
     if (rec) {

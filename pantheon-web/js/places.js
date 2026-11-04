@@ -38,7 +38,7 @@ export const FACTS = {
   Ganymede: 'The largest moon in the solar system.',
   'α Centauri': 'The nearest star system, 4.3 light-years from the Sun.',
   'TRAPPIST-1': 'Seven rocky planets around a dim red star, about 40 light-years away.',
-  'Solar system': 'Orbits are real; the planets are too small to see at true scale, so they show as points.',
+  'Solar system': 'Orbits are to scale; the planets are too small to see at true scale, so they show as points.',
   'Nearby stars': 'These stars are real measurements, from Gaia and older catalogs. The sky photograph fades as you leave the Sun.',
   'Milky Way': 'A few hundred billion stars. This portrait is an illustrative model, not a survey.',
   'Andromeda (M31)': 'About 2.5 million light-years away. Position and tilt are measured; the portrait is illustrative.',
