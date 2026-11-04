@@ -30,10 +30,12 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     let hw = in.params.x;
     let glow = in.params.y;
     let ad = abs(in.da.x);
-    let core = 1.0 - smoothstep(hw - 0.7, hw + 0.7, ad);
+    let aa = 0.75 / max(V.size.w, 1.0); // one physical pixel of edge, at any DPI
+    // a hairline thinner than the edge filter fades in intensity, never width
+    let core = (1.0 - smoothstep(hw - aa, hw + aa, ad)) * min(hw * 2.0 / (aa * 1.2), 1.0);
     var g = 0.0;
     if (glow > 0.01) {
-        g = exp(-max(ad - hw, 0.0) / glow) * 0.5;
+        g = exp(-max(ad - hw, 0.0) / glow) * 0.42;
     }
     var dash = 1.0;
     if (in.params.z > 0.5) {
@@ -43,5 +45,5 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     }
     let a = in.color.a * dash;
     let lum = in.color.rgb * a * (core + g);
-    return vec4<f32>(lum, a * core * 0.92);
+    return vec4<f32>(lum, a * core * 0.5);
 }

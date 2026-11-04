@@ -1,19 +1,27 @@
 // Shared prelude: view uniforms + noise toolkit. Concatenated ahead of each stage.
 
 struct View {
-    size: vec4<f32>,   // w, h, anim_time_s, unused
+    size: vec4<f32>,   // w, h (logical px), anim_time_s, pixels_per_point
     fog_a: vec4<f32>,  // screen px -> galactic-plane kpc: (ax, bx, tx, w_gal)
-    fog_b: vec4<f32>,  // (ay, by, ty, fog_dim)
-    cos_a: vec4<f32>,  // screen px -> supergalactic Mpc: (ax, bx, tx, w_cosmic)
+    fog_b: vec4<f32>,  // (ay, by, ty, w_star_dust)
+    cos_a: vec4<f32>,  // screen px -> supergalactic tens of Mpc: (ax, bx, tx, w_cosmic)
     cos_b: vec4<f32>,  // (ay, by, ty, unused)
+    deep_a: vec4<f32>, // screen px -> camera-facing plane, tens of Mpc: (ax, bx, tx, w_deep)
+    deep_b: vec4<f32>, // (ay, by, ty, unused)
     helio: vec4<f32>,  // sun sx, sy, px_per_au, w_helio
+    helio_b: vec4<f32>, // heliotail direction screen x, y, w_oort, unused
     grav_a: vec4<f32>, // primary sx, sy, mu, sep_px
     grav_b: vec4<f32>, // secondary sx, sy, w_grav, contour_gain
-    misc: vec4<f32>,   // w_deep, deep_drift, seed, w_speckle_gal
+    sky_r: vec4<f32>,  // camera right in galactic coordinates, w_sky
+    sky_u: vec4<f32>,  // camera up in galactic coordinates, tan per px
+    sky_f: vec4<f32>,  // viewing direction in galactic coordinates, sky_has_map
+    sun_g: vec4<f32>,  // Sol in galactic-plane kpc xy, measured-star radius kpc, unused
+    nodes: array<vec4<f32>, 16>, // named clusters: x, y (tens of Mpc), sigma, weight
 }
 @group(0) @binding(0) var<uniform> V: View;
 
 const PI: f32 = 3.14159265;
+const TAU: f32 = 6.2831853;
 
 // Magnitude-robust hashing: PCG mix over the raw float bits, so noise keeps
 // full entropy at galactic/cosmic coordinate scales where f32 fract() dies.

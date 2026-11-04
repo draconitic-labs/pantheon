@@ -65,8 +65,8 @@ pub struct ViewTarget {
     pub depth_view: wgpu::TextureView,
     /// HDR resolve, input to the bloom/tonemap passes (hdr targets only)
     pub hdr_resolve_view: Option<wgpu::TextureView>,
-    /// half-res bloom accumulation (hdr targets only)
-    pub bloom_view: Option<wgpu::TextureView>,
+    /// bloom mip chain, half resolution downward (hdr targets only)
+    pub bloom_mips: Vec<wgpu::TextureView>,
 }
 
 impl ViewTarget {
@@ -109,15 +109,13 @@ impl ViewTarget {
         } else {
             None
         };
-        let bloom_view = if hdr {
+        let bloom_mips = if hdr {
+            let (bw, bh) = ((width / 2).max(4), (height / 2).max(4));
+            let levels = (32 - bw.min(bh).leading_zeros()).clamp(1, 7);
             let t = gpu.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("view-bloom"),
-                size: wgpu::Extent3d {
-                    width: (width / 2).max(4),
-                    height: (height / 2).max(4),
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
+                size: wgpu::Extent3d { width: bw, height: bh, depth_or_array_layers: 1 },
+                mip_level_count: levels,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: FORMAT_HDR,
@@ -125,9 +123,17 @@ impl ViewTarget {
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
-            Some(t.create_view(&Default::default()))
+            (0..levels)
+                .map(|m| {
+                    t.create_view(&wgpu::TextureViewDescriptor {
+                        base_mip_level: m,
+                        mip_level_count: Some(1),
+                        ..Default::default()
+                    })
+                })
+                .collect()
         } else {
-            None
+            Vec::new()
         };
         let resolve = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("view-resolve"),
@@ -159,7 +165,7 @@ impl ViewTarget {
             resolve,
             depth_view: depth.create_view(&Default::default()),
             hdr_resolve_view,
-            bloom_view,
+            bloom_mips,
         }
     }
 
