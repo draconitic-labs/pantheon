@@ -1222,17 +1222,30 @@ pub struct NBody {
 }
 
 impl NBody {
-    /// Total mechanical energy scaled by G (valid for drift ratios only).
-    pub fn energy_scaled(&self) -> f64 {
-        let n = self.pos.len();
-        let mut e = 0.0;
-        for i in 0..n {
-            e += 0.5 * self.gm[i] * self.vel[i].length_squared();
-            for j in (i + 1)..n {
-                e -= self.gm[i] * self.gm[j] / (self.pos[j] - self.pos[i]).length().max(1.0);
-            }
-        }
-        e
+    /// Each moon's orbital energy per unit mass about its planet, the body at `planet`: what a
+    /// moon's orbit keeps constant, apart from tides from the Sun and the other moons. The
+    /// system's total energy can't show this: the Sun's term swamps everything, and a large moon
+    /// swamps a small one.
+    pub fn moon_orbit_energies(&self, planet: usize) -> Vec<f64> {
+        ((planet + 1)..self.pos.len())
+            .map(|i| {
+                let (dr, dv) = (
+                    self.pos[i] - self.pos[planet],
+                    self.vel[i] - self.vel[planet],
+                );
+                0.5 * dv.length_squared() - self.gm[planet] / dr.length().max(1.0)
+            })
+            .collect()
+    }
+
+    /// The largest relative change in any moon's orbital energy since `start`. `None` if
+    /// there are no moons.
+    pub fn moon_energy_drift(&self, planet: usize, start: &[f64]) -> Option<f64> {
+        self.moon_orbit_energies(planet)
+            .iter()
+            .zip(start)
+            .map(|(e, e0)| ((e - e0) / e0).abs())
+            .reduce(f64::max)
     }
 
     /// Remove the total momentum so the island barycenter stays put

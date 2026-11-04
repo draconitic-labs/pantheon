@@ -194,7 +194,7 @@ const REG = {
     'local N-body island (leapfrog)',
     'authoritative GMs, momentum-zeroed init',
     'heliocentric inertial',
-    'energy drift shown live in the card', false],
+    'the card shows the largest change in any moon\'s orbital energy since the start. Tides from the Sun and other moons move it a little: about 1% for our Moon is normal', false],
   'gravity-model': [MO,
     'CR3BP effective potential + L-points',
     'circular restricted three-body approximation',

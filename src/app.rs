@@ -76,6 +76,9 @@ struct HistoryEntry {
     scene_exo: Option<usize>,
 }
 
+/// Where the planet sits in a simulation's bodies: after the Sun, before its moons.
+const ISLAND_PLANET: usize = 1;
+
 /// The GM an object carries in a simulation: the same JPL values the gravity view uses.
 fn island_gm(o: ObjectRef) -> f64 {
     match o {
@@ -846,7 +849,7 @@ impl Pantheon {
             label: format!("{} system", PLANETS[pi].name),
         };
         sim.zero_momentum();
-        let e0 = sim.energy_scaled();
+        let e0 = sim.moon_orbit_energies(ISLAND_PLANET);
         self.island = Some(Island {
             sim,
             ids,
@@ -1428,16 +1431,13 @@ impl Pantheon {
                     provs.push(("Horizons cross-check".into(), Ev::HorizonsVectors));
                     provs.push(("residual interpolation".into(), Ev::HorizonsInterp));
                 }
-                if let Some(isl) = self.island_of(obj) {
-                    let e = isl.sim.energy_scaled();
-                    let drift = if isl.e0.abs() > 0.0 {
-                        (e - isl.e0) / isl.e0.abs()
-                    } else {
-                        0.0
-                    };
+                let drift = self
+                    .island_of(obj)
+                    .and_then(|isl| isl.sim.moon_energy_drift(ISLAND_PLANET, &isl.e0));
+                if let Some(drift) = drift {
                     rows.push((
-                        "island energy drift".into(),
-                        format!("{:.2} ppm", drift * 1e6),
+                        "moon energy drift, worst".into(),
+                        format!("{:.2}%", drift * 100.0),
                     ));
                     provs.push(("island diagnostics".into(), Ev::NBodyIsland));
                 }

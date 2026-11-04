@@ -231,7 +231,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             source: "local N-body island (leapfrog)",
             citation: "authoritative GMs, momentum-zeroed init",
             frame: "heliocentric inertial",
-            note: "energy drift shown live in the card",
+            note: "the card shows the largest change in any moon's orbital energy since the start. Tides from the Sun and other moons move it a little: about 1% for our Moon is normal",
             dataset: None,
         },
         Ev::MoonPhase => EvidenceRec {
