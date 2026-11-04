@@ -154,7 +154,7 @@ const REG = {
     'precessing-ellipse lunar model',
     'node 18.6 yr, perigee 8.85 yr',
     'geocentric ecliptic',
-    'fallback when de440s is absent', false],
+    'used when de440s does not cover the date. Against de440s from 1950 to 2050 its direction is about 1° off on average and about 3° at worst', false],
   'iau-rotation': [MO,
     'IAU 2015 rotation elements',
     'Archinal et al. 2018, WGCCRE report',

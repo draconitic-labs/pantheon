@@ -966,14 +966,18 @@ pub const MOON_GM: [f64; 21] = [
 ];
 
 /// Earth's Moon with precessing node (18.6 yr) and perigee (8.85 yr) —
-/// a readable mid-fidelity model (status=modeled).
+/// a readable mid-fidelity model (status=modeled). It leaves out evection and the
+/// other periodic terms: from 1950 to 2050 its direction is about 1° from DE440s on
+/// average and about 3° at worst, as the tests below hold it to.
 pub fn luna_rel(jd: f64) -> DVec3 {
     let d = jd - J2000;
     let a = 384_400.0e3;
     let e = 0.0549;
     let inc = 5.145_f64.to_radians();
     let node = (125.08_f64 - 0.052_953_8 * d).to_radians();
-    let argp = (318.15_f64 + 0.164_357_3 * d - (-0.052_953_8 * d)).to_radians();
+    // the rate of the argument of perigee: added to the node's, it gives the 8.85-year
+    // period of the perigee itself
+    let argp = (318.15_f64 + 0.164_357_3 * d).to_radians();
     let ma = (135.27_f64 + 13.064_993 * d).to_radians();
     let ea = kepler_solve(ma % std::f64::consts::TAU, e);
     let local = DVec3::new(a * (ea.cos() - e), a * (1.0 - e * e).sqrt() * ea.sin(), 0.0);
@@ -1220,6 +1224,147 @@ impl NBody {
         let a1 = acc(&self.pos, &self.gm);
         for (v, a) in self.vel.iter_mut().zip(&a1) {
             *v += *a * (0.5 * dt);
+        }
+    }
+}
+
+#[cfg(test)]
+mod luna_tests {
+    use super::*;
+
+    /// (TDB Julian date, unit vector Earth to Moon, ecliptic J2000), read from JPL's
+    /// DE440s through `SpiceSet::rel_ecl_m` and frozen so these tests need no data. These
+    /// six epochs are where the double-counted node drift was found and measured.
+    const DE440S_EPOCHS: [(f64, [f64; 3]); 6] = [
+        (2451545.000, [-0.724585, -0.683267, 0.090126]), // 2000
+        (2453371.250, [-0.912617, 0.402794, 0.069911]),  // 2005
+        (2455197.500, [-0.226443, 0.973943, 0.012618]),  // 2010
+        (2457023.750, [0.591268, 0.804623, -0.054635]),  // 2015
+        (2458850.000, [0.985899, -0.142064, -0.088440]), // 2020
+        (2461351.962, [-0.914581, -0.397666, -0.073505]), // 2026.85
+    ];
+
+    /// The same, every 915.37 days from 1950 to 2047, which lands on many lunar phases.
+    const DE440S_SPREAD: [(f64, [f64; 3]); 40] = [
+        (2433282.500, [0.466744, 0.881922, 0.066058]),
+        (2434197.870, [-0.501935, -0.860247, -0.089648]),
+        (2435113.240, [0.387730, 0.920677, 0.044948]),
+        (2436028.610, [-0.271906, -0.961570, 0.038091]),
+        (2436943.980, [0.319578, 0.943831, -0.083979]),
+        (2437859.350, [-0.412340, -0.907302, 0.082329]),
+        (2438774.720, [0.383938, 0.923025, -0.024821]),
+        (2439690.090, [-0.220328, -0.973557, -0.060354]),
+        (2440605.460, [0.177040, 0.980173, 0.088982]),
+        (2441520.830, [-0.275758, -0.959204, -0.062335]),
+        (2442436.200, [0.339697, 0.940534, -0.001416]),
+        (2443351.570, [-0.212873, -0.974177, 0.075257]),
+        (2444266.940, [0.074476, 0.993827, -0.082232]),
+        (2445182.310, [-0.116881, -0.992639, 0.031725]),
+        (2446097.680, [0.234450, 0.971562, 0.033175]),
+        (2447013.050, [-0.204356, -0.975119, -0.085917]),
+        (2447928.420, [0.031835, 0.997104, 0.069067]),
+        (2448843.790, [0.027629, -0.999615, 0.002496]),
+        (2449759.160, [0.081368, 0.994669, -0.063349]),
+        (2450674.530, [-0.147856, -0.984795, 0.091197]),
+        (2451589.900, [0.033216, 0.998022, -0.053372]),
+        (2452505.270, [0.124216, -0.991716, -0.032704]),
+        (2453420.640, [-0.085750, 0.992791, 0.083739]),
+        (2454336.010, [-0.030257, -0.995855, -0.085771]),
+        (2455251.380, [0.026863, 0.999088, 0.033200]),
+        (2456166.750, [0.158944, -0.985738, 0.055301]),
+        (2457082.120, [-0.227861, 0.969455, -0.090755]),
+        (2457997.490, [0.128861, -0.989407, 0.066851]),
+        (2458912.860, [-0.035167, 0.999367, -0.005453]),
+        (2459828.230, [0.154965, -0.985339, -0.071361]),
+        (2460743.600, [-0.315660, 0.944992, 0.085731]),
+        (2461658.970, [0.292752, -0.955492, -0.036485]),
+        (2462574.340, [-0.160215, 0.986667, -0.028634]),
+        (2463489.710, [0.166089, -0.982493, 0.084391]),
+        (2464405.080, [-0.341927, 0.936761, -0.074599]),
+        (2465320.450, [0.424101, -0.905611, 0.002675]),
+        (2466235.820, [-0.320707, 0.945233, 0.060677]),
+        (2467151.190, [0.234842, -0.967704, -0.091637]),
+        (2468066.560, [-0.334127, 0.940636, 0.059698]),
+        (2468981.930, [0.498391, -0.866511, 0.027652]),
+    ];
+
+    fn off_by_deg(jd: f64, want: [f64; 3]) -> f64 {
+        let got = luna_rel(jd).normalize();
+        got.dot(DVec3::from(want).normalize())
+            .clamp(-1.0, 1.0)
+            .acos()
+            .to_degrees()
+    }
+
+    #[test]
+    fn the_lunar_model_is_near_the_kernel_at_the_measured_epochs() {
+        for (jd, want) in DE440S_EPOCHS {
+            let off = off_by_deg(jd, want);
+            assert!(off < 1.5, "JD {jd}: {off:.2} deg from DE440s");
+        }
+    }
+
+    #[test]
+    fn the_lunar_model_is_about_a_degree_off_across_a_century() {
+        let off: Vec<f64> = DE440S_SPREAD
+            .iter()
+            .map(|(jd, want)| off_by_deg(*jd, *want))
+            .collect();
+        let mean = off.iter().sum::<f64>() / off.len() as f64;
+        let worst = off.iter().cloned().fold(0.0, f64::max);
+        assert!(mean < 1.2, "mean {mean:.2} deg from DE440s");
+        assert!(worst < 3.2, "worst {worst:.2} deg from DE440s");
+    }
+
+    /// The perigee's direction, found from the model itself: where the distance is least
+    /// in one anomalistic month. It must come round in 8.85 years, not the 6.0 years the
+    /// double-counted node drift gave.
+    #[test]
+    fn the_perigee_circles_in_8_85_years() {
+        let perigee_longitude = |jd0: f64| {
+            let closest = (0..2800)
+                .map(|k| jd0 + k as f64 * 0.01)
+                .min_by(|a, b| luna_rel(*a).length().total_cmp(&luna_rel(*b).length()))
+                .unwrap();
+            let p = luna_rel(closest);
+            p.y.atan2(p.x).to_degrees()
+        };
+        // over one year the perigee advances 360/8.85 = 40.7°; 6 years would give 60°
+        let moved =
+            (perigee_longitude(J2000 + 365.25) - perigee_longitude(J2000)).rem_euclid(360.0);
+        assert!((moved - 40.7).abs() < 3.0, "{moved}");
+    }
+
+    /// Where kernels are present, the frozen numbers must still be what they say.
+    #[test]
+    fn the_frozen_directions_are_the_kernels() {
+        let Some(s) = crate::spice::spice() else {
+            return;
+        };
+        for (jd, want) in DE440S_EPOCHS.iter().chain(DE440S_SPREAD.iter()) {
+            let k = s
+                .rel_ecl_m(301, 399, *jd)
+                .expect("de440s covers it")
+                .normalize();
+            let got = k
+                .dot(DVec3::from(*want).normalize())
+                .clamp(-1.0, 1.0)
+                .acos();
+            // the dates are rounded to 0.001 day, about 0.007° of the Moon's motion
+            assert!(got.to_degrees() < 0.02, "JD {jd}: {}", got.to_degrees());
+        }
+    }
+
+    /// `pantheon-web/js/eph.js` carries a copy of this model for the 3D window.
+    #[test]
+    fn the_browser_copy_of_the_lunar_model_is_the_same() {
+        let js = include_str!("../pantheon-web/js/eph.js");
+        for line in [
+            "const node = (125.08 - 0.0529538 * d) * DEG;",
+            "const argp = (318.15 + 0.1643573 * d) * DEG;",
+            "const ma = (135.27 + 13.064993 * d) * DEG;",
+        ] {
+            assert!(js.contains(line), "eph.js has drifted: {line}");
         }
     }
 }

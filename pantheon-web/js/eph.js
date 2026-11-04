@@ -259,15 +259,17 @@ export const MOONS = [
 ];
 MOONS.forEach((m, i) => { m.incl = MOON_INCL[i]; });
 
-// Earth's Moon with precessing node (18.6 yr) and perigee (8.85 yr) — the one
-// moon whose phase is real, not illustrative.
+// Earth's Moon with precessing node (18.6 yr) and perigee (8.85 yr) — the one moon
+// whose place on its orbit isn't illustrative: about 1° from DE440s on average, about
+// 3° at worst, from 1950 to 2050. Kept identical to luna_rel in src/sim.rs, whose tests
+// hold it to that.
 export function lunaRel(jd) {
   const d = jd - J2000_JD;
   const a = 384400.0e3;
   const e = 0.0549;
   const inc = 5.145 * DEG;
   const node = (125.08 - 0.0529538 * d) * DEG;
-  const argp = (318.15 + 0.1643573 * d - (-0.0529538 * d)) * DEG;
+  const argp = (318.15 + 0.1643573 * d) * DEG;
   const ma = (135.27 + 13.064993 * d) * DEG;
   const ea = keplerE(ma % TAU, e);
   return perifocalToEcl(node, inc, argp,

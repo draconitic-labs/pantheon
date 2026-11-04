@@ -1291,7 +1291,7 @@ async function boot() {
   if (missingMaps) lines.push('No surface maps in assets/data/textures: planets are procedural, Earth is real outlines with painted colors, and the sky is the illustrative Galaxy model instead of a photograph.');
   const damaged = meta.kernelProblems.length > 0;
   lines.push(...meta.kernelProblems);
-  const fallback = 'planets and moons sit where mean orbital elements put them, thousands of kilometres off at best, and moon phases are approximate.';
+  const fallback = 'planets sit where mean orbital elements put them, thousands of kilometres off at best. Our Moon is about a degree off its real direction, and the other moons\' places on their orbits are illustrative.';
   if (!meta.spice) lines.push(damaged ? `Without it, ${fallback}` : `No SPICE kernels in assets/data/spice: ${fallback}`);
   else if (damaged) lines.push('What it carries falls back to mean orbital elements. Each card says what its numbers come from.');
   if (lines.length) lines.push('Run tools/fetch_data.py to download what is missing or damaged, then restart.');
