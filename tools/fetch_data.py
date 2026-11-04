@@ -196,7 +196,7 @@ def download(url: str, dest: Path, rel: str, expect: bytes | None) -> tuple[bool
                 if total > 50_000_000 and time.monotonic() - last > 5:
                     print(f"    {got * 100 // total}% of {total // 1_000_000} MB", flush=True)
                     last = time.monotonic()
-    except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError) as e:
+    except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError) as e:
         tmp.unlink(missing_ok=True)
         return False, f"{type(e).__name__}: {e}"
     # A connection that drops mid-file just looks like the end of the data to read()
@@ -227,6 +227,8 @@ def record_fetched(data: Path, rels: list[str]) -> None:
     try:
         dates = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
+        dates = {}
+    if not isinstance(dates, dict):
         dates = {}
     today = dt.date.today().isoformat()
     dates.update({rel: today for rel in rels})

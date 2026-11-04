@@ -63,8 +63,8 @@ scripts/install-desktop.sh --uninstall  # take them away again
 
 The installer won't overwrite a menu entry or icon it didn't write, and it refuses a checkout
 path containing `$`, a backtick, `"`, `\` or `%`. Uninstalling removes Pantheon's entries and
-icons and refreshes the menu and icon caches, which stay. It leaves your settings: the
-atlas keeps them in `~/.config/pantheon`, and you can delete that folder yourself.
+icons and refreshes the menu and icon caches so they stop listing it. It leaves your settings:
+the atlas keeps them in `~/.config/pantheon`, and you can delete that folder yourself.
 
 No sound is built in if you'd rather skip ALSA: build with
 `--no-default-features`. With sound compiled in, ambience stays off until you turn

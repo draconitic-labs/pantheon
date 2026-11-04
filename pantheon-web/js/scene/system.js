@@ -954,7 +954,7 @@ export class SolarSystem {
     if (b.kind !== 'star') rows.push({ label: 'From the Sun', value: `${(b.world.length() / AU).toFixed(3)} AU`, ev: evState });
     const ol = this.orbitLines.get(b.name);
     if (ol) rows.push({ label: 'Orbit', value: ol.period > 800 ? `${(ol.period / 365.25).toFixed(1)} years` : `${ol.period.toFixed(1)} days`, ev: evState });
-    if (b.kind === 'moon' && !moonKernel && !isLuna) rows.push({ label: 'Place on its orbit', value: 'Illustrative, no kernel loaded', ev: 'moon-phase' });
+    if (b.kind === 'moon' && !moonKernel && !isLuna) rows.push({ label: 'Place on its orbit', value: 'Illustrative, not from a kernel', ev: 'moon-phase' });
     rows.push({ label: 'Distance', value: prettyRange(b.world.distanceTo(camWorld)), live: 'range' });
     const rec = this.groups.get(b.name);
     if (rec) {

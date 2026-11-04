@@ -14,8 +14,8 @@
 # It doesn't overwrite what it didn't write: a menu entry of the same name, or an icon
 # of the same name that differs from ours with no entry of ours beside it, stops the
 # install. Uninstalling removes only our entries and icons, then refreshes the shared
-# menu and icon caches so they stop listing Pantheon. The caches and folders stay, and
-# so do the checkout, its downloads, and your settings in ~/.config/pantheon.
+# menu and icon caches so they stop listing Pantheon. It deletes no caches or folders, and
+# leaves the checkout, its downloads, and your settings in ~/.config/pantheon.
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
