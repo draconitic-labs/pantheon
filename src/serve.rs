@@ -2,19 +2,42 @@
 //! (src-tauri), or alone with `pantheon-cli --serve`; it never opens a browser.
 //!
 //! The Rust core stays the scientific backend: it serves the static
-//! `pantheon-web/` app, the cached datasets under `/data/`, the bundled fonts
-//! under `/fonts/`, and a small API: `/api/states` (SPICE-grade heliocentric
+//! `pantheon-web/` app, the catalogs and surface maps under `/data/`, the bundled
+//! fonts under `/fonts/`, and a small API: `/api/states` (SPICE-grade heliocentric
 //! states + finite-difference velocities), `/api/tracks` (parsed Horizons
 //! spacecraft arcs), `/api/meta` (what data is present, so the app can say what
-//! is missing). Binds 127.0.0.1 only; `Connection: close` keeps it simple.
+//! is missing). `Connection: close` keeps it simple.
 //!
-//! With `PANTHEON_QA=1` it also exposes test hooks: `POST /api/qa/eval` runs
-//! JavaScript in the open window (which polls `/api/qa/poll` when loaded with
-//! `?qa`) and returns the result; `POST /api/qa/log` collects page errors.
+//! # Who can reach this server, and what stops them
+//!
+//! It binds 127.0.0.1, so nothing off this machine can connect. That still leaves
+//! every local program and, through the browser, every web page the user has open.
+//! A page can send requests to `http://127.0.0.1:<port>` even if it can't read the
+//! replies, and with DNS rebinding its own hostname can resolve here, which makes it
+//! same-origin as far as the browser is concerned. So, in order:
+//!
+//! 1. **Every request passes [`envelope_ok`] before anything else.** `Host` must be
+//!    exactly `127.0.0.1:<bound port>` or `localhost:<bound port>`, which defeats
+//!    rebinding. `Origin`, if present, must be that same origin. `Sec-Fetch-Site`, if
+//!    present, must be `same-origin` or `none`, because an `<img>` on another site sends
+//!    no `Origin` at all. Anything else gets a 403, and there are no CORS headers.
+//! 2. **Files go through [`resolve`].** Every path component must be a plain name, the
+//!    path must lie in a folder and have a type the page really fetches, and the
+//!    canonicalized result must stay under its canonicalized base. Kernels, spacecraft
+//!    tracks and everything else on disk are not reachable over HTTP. Files are streamed,
+//!    so a large one costs no memory per request.
+//! 3. **The test hooks exist only when `PANTHEON_QA` is exactly `1`.** `POST /api/qa/eval`
+//!    runs JavaScript in the open window (which polls `/api/qa/poll` when loaded with
+//!    `?qa`) and returns the result, `POST /api/qa/log` collects page errors, and
+//!    `POST /api/shot` saves a screenshot the page sends. Without QA mode these routes
+//!    don't exist. With it, any local program can drive the window, so it's for testing.
+//!
+//! The tests at the end of this file exercise all of this over real sockets.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Bind the first free port from `port_req`; if a port is taken by another
 /// Pantheon, report that instead so callers can reuse it.
@@ -26,7 +49,11 @@ enum Bound {
 fn bind_or_find(port_req: u16) -> anyhow::Result<Bound> {
     for cand in port_req..port_req.saturating_add(10) {
         match TcpListener::bind(("127.0.0.1", cand)) {
-            Ok(l) => return Ok(Bound::Listener(l, cand)),
+            Ok(l) => {
+                // not `cand`: port 0 means the kernel chose one
+                let port = l.local_addr()?.port();
+                return Ok(Bound::Listener(l, port));
+            }
             Err(_) => {
                 if existing_pantheon(cand) {
                     return Ok(Bound::Existing(cand));
@@ -37,13 +64,24 @@ fn bind_or_find(port_req: u16) -> anyhow::Result<Bound> {
     anyhow::bail!("no free port in {port_req}..{}", port_req.saturating_add(9))
 }
 
-/// Load the universe and serve forever. Thread per connection: browsers open
-/// speculative sockets that never send a request; served sequentially each one
-/// would stall the accept loop for its whole read timeout and the page
-/// appears frozen.
-fn run_loop(listener: TcpListener, web: std::sync::Arc<PathBuf>) {
+/// What one running server answers for, fixed at startup.
+struct Site {
+    /// the port actually bound, which the `Host` check compares against
+    port: u16,
+    qa: bool,
+    web: PathBuf,
+    assets: PathBuf,
+    shot_dir: PathBuf,
+}
+
+/// QA mode is on only for exactly `PANTHEON_QA=1`. Empty, `0` or anything else is off.
+fn qa_requested(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|v| v == "1")
+}
+
+/// Load the universe and serve forever.
+fn run_loop(listener: TcpListener, port: u16, web: PathBuf) {
     let (uni, _health) = crate::data::Universe::load_with_health();
-    let uni = std::sync::Arc::new(uni);
     let spice_loaded = crate::spice::spice().is_some();
     println!(
         "  web root {} · spice {} · {} stars · {} exo systems",
@@ -56,13 +94,28 @@ fn run_loop(listener: TcpListener, web: std::sync::Arc<PathBuf>) {
         uni.stars.len(),
         uni.exos.len()
     );
+    let site = Site {
+        port,
+        qa: qa_requested(std::env::var_os("PANTHEON_QA").as_deref()),
+        web,
+        assets: crate::data::asset_root(),
+        shot_dir: std::env::var_os("PANTHEON_SHOT_DIR")
+            .map_or_else(|| PathBuf::from("exports/webshots"), PathBuf::from),
+    };
+    accept_loop(listener, Arc::new(uni), Arc::new(site));
+}
+
+/// Thread per connection: browsers open speculative sockets that never send a
+/// request; served sequentially each one would stall the accept loop for its whole
+/// read timeout and the page appears frozen.
+fn accept_loop(listener: TcpListener, uni: Arc<crate::data::Universe>, site: Arc<Site>) {
     for stream in listener.incoming() {
         let Ok(s) = stream else { continue };
         s.set_nodelay(true).ok();
         let uni = uni.clone();
-        let web = web.clone();
+        let site = site.clone();
         std::thread::spawn(move || {
-            let _ = handle(s, &uni, &web);
+            let _ = handle(s, &uni, &site);
         });
     }
 }
@@ -73,10 +126,12 @@ fn run_loop(listener: TcpListener, web: std::sync::Arc<PathBuf>) {
 /// Binding happens before the slow kernel load, so the first page request just
 /// waits in the accept backlog.
 pub fn spawn_background(port_req: u16) -> anyhow::Result<u16> {
-    let web = std::sync::Arc::new(web_root()?);
-    for port in port_req..port_req.saturating_add(10) {
-        if let Ok(listener) = TcpListener::bind(("127.0.0.1", port)) {
-            std::thread::spawn(move || run_loop(listener, web));
+    let web = web_root()?;
+    for cand in port_req..port_req.saturating_add(10) {
+        if let Ok(listener) = TcpListener::bind(("127.0.0.1", cand)) {
+            // not `cand`: port 0 means the kernel chose one
+            let port = listener.local_addr()?.port();
+            std::thread::spawn(move || run_loop(listener, port, web));
             return Ok(port);
         }
     }
@@ -86,7 +141,7 @@ pub fn spawn_background(port_req: u16) -> anyhow::Result<u16> {
 /// Backend mode: serve and block. It never opens a browser; the app's window is
 /// the `pantheon-3d` binary (src-tauri), which embeds this same server.
 pub fn serve(port_req: u16) -> anyhow::Result<()> {
-    let web = std::sync::Arc::new(web_root()?);
+    let web = web_root()?;
     match bind_or_find(port_req)? {
         Bound::Existing(port) => {
             println!("pantheon backend already running on http://127.0.0.1:{port}/");
@@ -95,7 +150,7 @@ pub fn serve(port_req: u16) -> anyhow::Result<()> {
         Bound::Listener(listener, port) => {
             println!("pantheon backend on http://127.0.0.1:{port}/ (the window is pantheon-3d)");
             println!("  loading kernels and catalogs… (Ctrl-C to stop)");
-            run_loop(listener, web);
+            run_loop(listener, port, web);
             Ok(())
         }
     }
@@ -109,9 +164,9 @@ fn existing_pantheon(port: u16) -> bool {
     };
     s.set_read_timeout(Some(std::time::Duration::from_millis(800)))
         .ok();
-    if s.write_all(b"GET /api/meta HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
-        .is_err()
-    {
+    let probe =
+        format!("GET /api/meta HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+    if s.write_all(probe.as_bytes()).is_err() {
         return false;
     }
     let mut buf = Vec::new();
@@ -140,98 +195,248 @@ fn web_root() -> anyhow::Result<PathBuf> {
     )
 }
 
-fn handle(stream: TcpStream, uni: &crate::data::Universe, web: &Path) -> std::io::Result<()> {
+/// A request line and its headers, with header names in lower case.
+struct Head {
+    method: String,
+    target: String,
+    headers: Vec<(String, String)>,
+}
+
+impl Head {
+    /// The value of a header that may appear at most once. `Err` if it's repeated.
+    fn single(&self, name: &str) -> Result<Option<&str>, ()> {
+        let mut values = self.headers.iter().filter(|(k, _)| k == name);
+        let first = values.next().map(|(_, v)| v.as_str());
+        match values.next() {
+            Some(_) => Err(()),
+            None => Ok(first),
+        }
+    }
+}
+
+/// The most a request line and headers may take. Nothing this app sends comes close.
+const HEAD_MAX: u64 = 16 << 10;
+
+/// `None` if the client went away or the head is malformed or too long.
+fn read_head(reader: &mut BufReader<TcpStream>) -> std::io::Result<Option<Head>> {
+    let mut limited = reader.by_ref().take(HEAD_MAX);
+    let mut line = String::new();
+    limited.read_line(&mut line)?;
+    let mut parts = line.split_whitespace();
+    let (Some(method), Some(target)) = (parts.next(), parts.next()) else {
+        return Ok(None);
+    };
+    let mut headers = Vec::new();
+    loop {
+        let mut h = String::new();
+        if limited.read_line(&mut h)? == 0 {
+            return Ok(None);
+        }
+        if h == "\r\n" || h == "\n" {
+            break;
+        }
+        let Some((name, value)) = h.split_once(':') else {
+            return Ok(None);
+        };
+        headers.push((name.to_ascii_lowercase(), value.trim().to_string()));
+    }
+    Ok(Some(Head {
+        method: method.to_string(),
+        target: target.to_string(),
+        headers,
+    }))
+}
+
+/// Is this request from the app's own page, or from a local program speaking as one?
+/// See the module comment for why each check is here.
+fn envelope_ok(head: &Head, port: u16) -> bool {
+    let (Ok(Some(host)), Ok(origin), Ok(fetch_site)) = (
+        head.single("host"),
+        head.single("origin"),
+        head.single("sec-fetch-site"),
+    ) else {
+        return false;
+    };
+    let own_host = host == format!("127.0.0.1:{port}") || host == format!("localhost:{port}");
+    own_host
+        && origin.is_none_or(|o| o == format!("http://{host}"))
+        && fetch_site.is_none_or(|f| f == "same-origin" || f == "none")
+}
+
+/// Body limits for the test hooks: a screenshot, and anything else.
+const SHOT_BODY_MAX: usize = 32 << 20;
+const QA_BODY_MAX: usize = 4 << 20;
+
+fn handle(stream: TcpStream, uni: &crate::data::Universe, site: &Site) -> std::io::Result<()> {
     stream
         .set_read_timeout(Some(std::time::Duration::from_secs(5)))
         .ok();
+    stream
+        .set_write_timeout(Some(std::time::Duration::from_secs(30)))
+        .ok();
     let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    reader.read_line(&mut line)?;
-    let mut parts = line.split_whitespace();
-    let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/"));
-    // drain headers, keeping Content-Length for POST bodies
-    let mut content_length: usize = 0;
-    loop {
-        let mut h = String::new();
-        if reader.read_line(&mut h)? == 0 || h == "\r\n" || h == "\n" {
-            break;
-        }
-        if let Some(v) = h.to_ascii_lowercase().strip_prefix("content-length:") {
-            content_length = v.trim().parse().unwrap_or(0);
-        }
-    }
-    let (path, query) = match target.split_once('?') {
-        Some((p, q)) => (p, q),
-        None => (target, ""),
+    let Some(head) = read_head(&mut reader)? else {
+        return Ok(());
     };
-    if method == "POST" && path == "/api/shot" {
-        // dev/verification aid: body = raw base64 JPEG (no data: prefix);
-        // ?name=foo -> exports/webshots/foo.jpg
-        let mut body = vec![0u8; content_length.min(32 << 20)];
-        std::io::Read::read_exact(&mut reader, &mut body)?;
-        let mut stream = reader.into_inner();
-        let name: String = query
-            .split('&')
-            .find_map(|kv| kv.strip_prefix("name="))
-            .unwrap_or("shot")
-            .chars()
-            .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
-            .collect();
-        let b64: Vec<u8> = body
-            .iter()
-            .copied()
-            .filter(|b| !b.is_ascii_whitespace())
-            .collect();
-        return match b64_decode(&b64) {
-            Some(bytes) => {
-                let dir = std::env::var("PANTHEON_SHOT_DIR")
-                    .unwrap_or_else(|_| "exports/webshots".into());
-                std::fs::create_dir_all(&dir).ok();
-                let path = format!("{dir}/{name}.jpg");
-                match std::fs::write(&path, bytes) {
-                    Ok(()) => respond(&mut stream, 200, "text/plain", path.as_bytes()),
-                    Err(e) => respond(&mut stream, 500, "text/plain", e.to_string().as_bytes()),
-                }
-            }
-            None => respond(&mut stream, 400, "text/plain", b"bad base64"),
-        };
+    let (path, query) = head
+        .target
+        .split_once('?')
+        .unwrap_or((head.target.as_str(), ""));
+    let hook =
+        site.qa && head.method == "POST" && (path == "/api/shot" || path.starts_with("/api/qa/"));
+    let allowed = envelope_ok(&head, site.port);
+    // read a hook's body while the reader still holds whatever it has buffered
+    let content_length: usize = head
+        .single("content-length")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let limit = if path == "/api/shot" {
+        SHOT_BODY_MAX
+    } else {
+        QA_BODY_MAX
+    };
+    let mut body = Vec::new();
+    if allowed && hook && content_length <= limit {
+        body.resize(content_length, 0);
+        reader.read_exact(&mut body)?;
     }
-    if method == "POST" && path.starts_with("/api/qa/") && qa_enabled() {
-        let mut body = vec![0u8; content_length.min(4 << 20)];
-        std::io::Read::read_exact(&mut reader, &mut body)?;
-        let mut stream = reader.into_inner();
-        return qa_post(&mut stream, path, query, body);
+    let mut out = Conn {
+        stream: reader.into_inner(),
+        qa: site.qa,
+    };
+    if !allowed {
+        return respond(&mut out, 403, "text/plain", b"forbidden");
     }
-    let mut stream = reader.into_inner();
-    if method == "GET" && path == "/api/qa/poll" && qa_enabled() {
-        return qa_poll(&mut stream);
+    if hook && content_length > limit {
+        return respond(&mut out, 413, "text/plain", b"too large");
     }
-    if method != "GET" {
-        return respond(&mut stream, 405, "text/plain", b"method not allowed");
+    match (head.method.as_str(), path) {
+        ("POST", "/api/shot") if hook => save_shot(&mut out, site, query, &body),
+        ("POST", _) if hook => qa_post(&mut out, path, query, body),
+        ("GET", "/api/qa/poll") if site.qa => qa_poll(&mut out),
+        ("GET", "/api/states") => api_states(&mut out, query),
+        ("GET", "/api/tracks") => api_tracks(&mut out, uni),
+        ("GET", "/api/meta") => api_meta(&mut out, uni, site),
+        ("GET", _) => match resolve(path, site) {
+            Served::File(file, ctype) => send_file(&mut out, &file, ctype),
+            Served::Missing => respond(&mut out, 404, "text/plain", b"not found"),
+            Served::Refused => respond(&mut out, 403, "text/plain", b"forbidden"),
+        },
+        _ => respond(&mut out, 405, "text/plain", b"method not allowed"),
     }
-    if path.contains("..") {
-        return respond(&mut stream, 403, "text/plain", b"forbidden");
+}
+
+/// What a request path leads to.
+enum Served {
+    File(PathBuf, &'static str),
+    Missing,
+    Refused,
+}
+
+/// A name that means only itself on every platform: no separators, no encoding, no
+/// drive letters, not `.` or `..`, and nothing hidden.
+fn plain_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('.')
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+const HTML: &[(&str, &str)] = &[("html", "text/html; charset=utf-8")];
+const CSS: &[(&str, &str)] = &[("css", "text/css; charset=utf-8")];
+const SCRIPT: &[(&str, &str)] = &[("js", "application/javascript; charset=utf-8")];
+const FONT: &[(&str, &str)] = &[("ttf", "font/ttf")];
+const CATALOG: &[(&str, &str)] = &[
+    ("csv", "text/csv"),
+    ("geojson", "application/json"),
+    ("json", "application/json"),
+];
+const MAP: &[(&str, &str)] = &[("jpg", "image/jpeg"), ("png", "image/png")];
+
+/// Decide which file, if any, a request path may read. These are the folders and types
+/// the page really fetches, and nothing else: no special cases, no decoding.
+fn resolve(path: &str, site: &Site) -> Served {
+    let Some(rel) = path.strip_prefix('/') else {
+        return Served::Refused;
+    };
+    let parts: Vec<&str> = if rel.is_empty() {
+        vec!["index.html"]
+    } else {
+        rel.split('/').collect()
+    };
+    if !parts.iter().all(|p| plain_name(p)) {
+        return Served::Refused;
     }
-    match path {
-        "/api/states" => api_states(&mut stream, query),
-        "/api/tracks" => api_tracks(&mut stream, uni),
-        "/api/meta" => api_meta(&mut stream, uni),
-        _ => {
-            let rel = path.trim_start_matches('/');
-            let file = if rel.is_empty() {
-                web.join("index.html")
-            } else if let Some(d) = rel.strip_prefix("data/") {
-                crate::data::asset_root().join("data").join(d)
-            } else if let Some(d) = rel.strip_prefix("fonts/") {
-                crate::data::asset_root().join("fonts").join(d)
-            } else {
-                web.join(rel)
-            };
-            match std::fs::read(&file) {
-                Ok(body) => respond(&mut stream, 200, mime(&file), &body),
-                Err(_) => respond(&mut stream, 404, "text/plain", b"not found"),
+    // (folder this path must stay under, the path inside it, the types allowed there)
+    let (base, inside, types) = match parts.as_slice() {
+        ["index.html"] => (site.web.clone(), &parts[..], HTML),
+        ["css", _] => (site.web.clone(), &parts[..], CSS),
+        ["js" | "lib", ..] => (site.web.clone(), &parts[..], SCRIPT),
+        ["fonts", _] => (site.assets.join("fonts"), &parts[1..], FONT),
+        ["data", "textures", _] => (site.assets.join("data/textures"), &parts[2..], MAP),
+        ["data", _] => (site.assets.join("data"), &parts[1..], CATALOG),
+        _ => return Served::Refused,
+    };
+    let name = parts[parts.len() - 1];
+    let ext = name.rsplit_once('.').map_or("", |(_, e)| e);
+    let Some(&(_, ctype)) = types.iter().find(|(t, _)| *t == ext) else {
+        return Served::Refused;
+    };
+    let wanted = inside.iter().fold(base.clone(), |p, part| p.join(part));
+    let (Ok(root), Ok(file)) = (base.canonicalize(), wanted.canonicalize()) else {
+        return Served::Missing;
+    };
+    if !file.starts_with(&root) {
+        return Served::Refused;
+    }
+    if !file.is_file() {
+        return Served::Missing;
+    }
+    Served::File(file, ctype)
+}
+
+/// Stream a file, so a large one costs no memory however many requests ask for it.
+fn send_file(s: &mut Conn, file: &Path, ctype: &str) -> std::io::Result<()> {
+    let opened = std::fs::File::open(file).and_then(|f| {
+        let len = f.metadata()?.len();
+        Ok((f, len))
+    });
+    let Ok((f, len)) = opened else {
+        return respond(s, 404, "text/plain", b"not found");
+    };
+    write_head(s, 200, ctype, len)?;
+    std::io::copy(&mut f.take(len), &mut s.stream)?;
+    s.stream.flush()
+}
+
+/// Test hook: the body is a raw base64 JPEG (no data: prefix), and
+/// `?name=foo` saves it as foo.jpg in the shot folder.
+fn save_shot(s: &mut Conn, site: &Site, query: &str, body: &[u8]) -> std::io::Result<()> {
+    let name: String = query
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("name="))
+        .unwrap_or("shot")
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .collect();
+    let b64: Vec<u8> = body
+        .iter()
+        .copied()
+        .filter(|b| !b.is_ascii_whitespace())
+        .collect();
+    match b64_decode(&b64) {
+        Some(bytes) => {
+            std::fs::create_dir_all(&site.shot_dir).ok();
+            let path = site.shot_dir.join(format!("{name}.jpg"));
+            match std::fs::write(&path, bytes) {
+                Ok(()) => respond(s, 200, "text/plain", path.display().to_string().as_bytes()),
+                Err(e) => respond(s, 500, "text/plain", e.to_string().as_bytes()),
             }
         }
+        None => respond(s, 400, "text/plain", b"bad base64"),
     }
 }
 
@@ -273,22 +478,6 @@ fn b64_decode(s: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-fn mime(p: &Path) -> &'static str {
-    match p.extension().and_then(|e| e.to_str()).unwrap_or("") {
-        "html" => "text/html; charset=utf-8",
-        "js" => "application/javascript; charset=utf-8",
-        "css" => "text/css; charset=utf-8",
-        "json" | "geojson" => "application/json",
-        "csv" => "text/csv",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "ttf" => "font/ttf",
-        "ico" => "image/x-icon",
-        "txt" => "text/plain; charset=utf-8",
-        _ => "application/octet-stream",
-    }
-}
-
 /// Same-origin only. `connect-src 'self'` is what lets fetch() reach /api and
 /// /data inside WebKitGTK; the inline script is the page's import map.
 const CSP: &str =
@@ -298,25 +487,37 @@ style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; media-src '
 const CSP_QA: &str = "default-src 'self'; connect-src 'self'; img-src 'self' blob: data:; font-src 'self'; \
 style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; media-src 'self' blob:";
 
-fn respond(s: &mut TcpStream, code: u16, ctype: &str, body: &[u8]) -> std::io::Result<()> {
+/// The open connection, and whether this server is in QA mode (its CSP depends on it).
+struct Conn {
+    stream: TcpStream,
+    qa: bool,
+}
+
+fn write_head(s: &mut Conn, code: u16, ctype: &str, len: u64) -> std::io::Result<()> {
     let phrase = match code {
         200 => "OK",
+        400 => "Bad Request",
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        413 => "Content Too Large",
         _ => "Error",
     };
+    // same-origin resources only, for browsers that don't send Sec-Fetch-Site
     let head = format!(
-        "HTTP/1.1 {code} {phrase}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-cache\r\nContent-Security-Policy: {}\r\nConnection: close\r\n\r\n",
-        body.len(),
-        if qa_enabled() { CSP_QA } else { CSP },
+        "HTTP/1.1 {code} {phrase}\r\nContent-Type: {ctype}\r\nContent-Length: {len}\r\nCache-Control: no-cache\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nContent-Security-Policy: {}\r\nConnection: close\r\n\r\n",
+        if s.qa { CSP_QA } else { CSP },
     );
-    s.write_all(head.as_bytes())?;
-    s.write_all(body)?;
-    s.flush()
+    s.stream.write_all(head.as_bytes())
 }
 
-fn json_out(s: &mut TcpStream, v: serde_json::Value) -> std::io::Result<()> {
+fn respond(s: &mut Conn, code: u16, ctype: &str, body: &[u8]) -> std::io::Result<()> {
+    write_head(s, code, ctype, body.len() as u64)?;
+    s.stream.write_all(body)?;
+    s.stream.flush()
+}
+
+fn json_out(s: &mut Conn, v: serde_json::Value) -> std::io::Result<()> {
     respond(s, 200, "application/json", v.to_string().as_bytes())
 }
 
@@ -327,7 +528,7 @@ fn query_f64(query: &str, key: &str) -> Option<f64> {
         .and_then(|v| v.parse().ok())
 }
 
-fn api_states(s: &mut TcpStream, query: &str) -> std::io::Result<()> {
+fn api_states(s: &mut Conn, query: &str) -> std::io::Result<()> {
     let now_jd = 2_440_587.5
         + std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -372,7 +573,7 @@ fn api_states(s: &mut TcpStream, query: &str) -> std::io::Result<()> {
     )
 }
 
-fn api_tracks(s: &mut TcpStream, uni: &crate::data::Universe) -> std::io::Result<()> {
+fn api_tracks(s: &mut Conn, uni: &crate::data::Universe) -> std::io::Result<()> {
     let tracks: Vec<serde_json::Value> = uni
         .craft
         .iter()
@@ -389,12 +590,12 @@ fn api_tracks(s: &mut TcpStream, uni: &crate::data::Universe) -> std::io::Result
     json_out(s, serde_json::Value::Array(tracks))
 }
 
-fn api_meta(s: &mut TcpStream, uni: &crate::data::Universe) -> std::io::Result<()> {
+fn api_meta(s: &mut Conn, uni: &crate::data::Universe, site: &Site) -> std::io::Result<()> {
     let kernels = crate::spice::spice()
         .map(|sp| sp.kernel_summary())
         .unwrap_or_else(|| "none".into());
     // the app asks for textures only if they exist: a fresh clone has none
-    let textures: Vec<String> = std::fs::read_dir(crate::data::asset_root().join("data/textures"))
+    let textures: Vec<String> = std::fs::read_dir(site.assets.join("data/textures"))
         .map(|dir| {
             dir.flatten()
                 .filter_map(|e| e.file_name().into_string().ok())
@@ -417,10 +618,6 @@ fn api_meta(s: &mut TcpStream, uni: &crate::data::Universe) -> std::io::Result<(
 
 // ---- test hooks (PANTHEON_QA=1 only) ------------------------------------------
 
-fn qa_enabled() -> bool {
-    std::env::var_os("PANTHEON_QA").is_some_and(|v| v != "0")
-}
-
 #[derive(Default)]
 struct QaState {
     pending: std::collections::VecDeque<(u64, String)>,
@@ -435,7 +632,7 @@ fn qa_state() -> &'static (std::sync::Mutex<QaState>, std::sync::Condvar) {
 }
 
 /// The window long-polls here for the next script to run.
-fn qa_poll(s: &mut TcpStream) -> std::io::Result<()> {
+fn qa_poll(s: &mut Conn) -> std::io::Result<()> {
     let (lock, cv) = qa_state();
     let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
     let (mut guard, _) = cv
@@ -449,7 +646,7 @@ fn qa_poll(s: &mut TcpStream) -> std::io::Result<()> {
     }
 }
 
-fn qa_post(s: &mut TcpStream, path: &str, query: &str, body: Vec<u8>) -> std::io::Result<()> {
+fn qa_post(s: &mut Conn, path: &str, query: &str, body: Vec<u8>) -> std::io::Result<()> {
     let (lock, cv) = qa_state();
     let text = String::from_utf8_lossy(&body).into_owned();
     match path {
@@ -487,5 +684,595 @@ fn qa_post(s: &mut TcpStream, path: &str, query: &str, body: Vec<u8>) -> std::io
             respond(s, 200, "application/json", out.as_bytes())
         }
         _ => respond(s, 404, "text/plain", b"not found"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::OnceLock;
+
+    /// A throwaway web root and asset folder with a secret beside them. Teardown removes
+    /// exactly what this made, one path at a time.
+    struct Fixture {
+        root: PathBuf,
+        made: Vec<PathBuf>,
+    }
+
+    const SECRET: &str = "secret that must stay put";
+
+    impl Fixture {
+        fn new() -> Fixture {
+            static NEXT: AtomicUsize = AtomicUsize::new(0);
+            let root = std::env::temp_dir().join(format!(
+                "pantheon-serve-test-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            let mut fx = Fixture {
+                root,
+                made: Vec::new(),
+            };
+            for dir in [
+                "",
+                "web",
+                "web/js",
+                "web/js/scene",
+                "web/css",
+                "web/lib",
+                "assets",
+                "assets/data",
+                "assets/data/spice",
+                "assets/data/spacecraft",
+                "assets/data/textures",
+                "assets/fonts",
+                "shots",
+            ] {
+                let path = fx.root.join(dir);
+                std::fs::create_dir(&path).unwrap();
+                fx.made.push(path);
+            }
+            for (file, text) in [
+                ("outside.txt", SECRET),
+                ("web/index.html", "<title>page</title>"),
+                ("web/js/a.js", "// a"),
+                ("web/js/scene/b.js", "// b"),
+                ("web/css/style.css", "/* css */"),
+                ("web/lib/three.js", "// three"),
+                ("web/secret.txt", SECRET),
+                ("web/notes.md", SECRET),
+                ("assets/data/stars.csv", "ra,dec"),
+                ("assets/data/land.geojson", "{}"),
+                ("assets/data/fetch_log.txt", SECRET),
+                ("assets/data/spice/kernel.bsp", SECRET),
+                ("assets/data/spice/kernel.csv", SECRET),
+                ("assets/data/spacecraft/voyager1.txt", SECRET),
+                ("assets/data/textures/earth.jpg", "jpeg bytes"),
+                ("assets/data/textures/rings.png", "png bytes"),
+                ("assets/fonts/serif.ttf", "font bytes"),
+                ("assets/fonts/OFL.txt", SECRET),
+            ] {
+                let path = fx.root.join(file);
+                std::fs::write(&path, text).unwrap();
+                fx.made.push(path);
+            }
+            #[cfg(unix)]
+            for link in ["assets/data/escape.csv", "web/js/escape.js"] {
+                let path = fx.root.join(link);
+                std::os::unix::fs::symlink(fx.root.join("outside.txt"), &path).unwrap();
+                fx.made.push(path);
+            }
+            fx
+        }
+
+        /// A server on a port the kernel picks, as `run_loop` would set it up.
+        fn serve(&self, qa: bool) -> u16 {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let site = Site {
+                port,
+                qa,
+                web: self.root.join("web"),
+                assets: self.root.join("assets"),
+                shot_dir: self.root.join("shots"),
+            };
+            std::thread::spawn(move || accept_loop(listener, universe(), Arc::new(site)));
+            port
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            for path in self.made.iter().rev() {
+                if path.is_dir() && !path.is_symlink() {
+                    let _ = std::fs::remove_dir(path);
+                } else {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        }
+    }
+
+    fn universe() -> Arc<crate::data::Universe> {
+        static UNI: OnceLock<Arc<crate::data::Universe>> = OnceLock::new();
+        UNI.get_or_init(|| Arc::new(crate::data::Universe::load()))
+            .clone()
+    }
+
+    struct Reply {
+        code: u16,
+        head: String,
+        body: Vec<u8>,
+    }
+
+    impl Reply {
+        fn text(&self) -> String {
+            String::from_utf8_lossy(&self.body).into_owned()
+        }
+    }
+
+    fn send(port: u16, request: &str) -> Reply {
+        let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        s.write_all(request.as_bytes()).unwrap();
+        let mut raw = Vec::new();
+        let _ = s.read_to_end(&mut raw);
+        let split = raw
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .map_or(raw.len(), |i| i + 4);
+        let head = String::from_utf8_lossy(&raw[..split]).into_owned();
+        let code = head
+            .split_whitespace()
+            .nth(1)
+            .and_then(|c| c.parse().ok())
+            .unwrap_or(0);
+        Reply {
+            code,
+            head,
+            body: raw[split..].to_vec(),
+        }
+    }
+
+    /// A request with the right Host, plus whatever extra headers a test wants.
+    fn request(port: u16, method: &str, path: &str, extra: &[&str], body: &str) -> Reply {
+        let mut text = format!(
+            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: {}\r\n",
+            body.len()
+        );
+        for line in extra {
+            text.push_str(line);
+            text.push_str("\r\n");
+        }
+        text.push_str("\r\n");
+        text.push_str(body);
+        send(port, &text)
+    }
+
+    fn get(port: u16, path: &str) -> Reply {
+        request(port, "GET", path, &[], "")
+    }
+
+    fn assert_refused(reply: &Reply, what: &str) {
+        assert_eq!(reply.code, 403, "{what}: {}", reply.head);
+        assert!(!reply.text().contains(SECRET), "{what} leaked the secret");
+    }
+
+    #[test]
+    fn normal_same_origin_requests_work() {
+        let fx = Fixture::new();
+        let port = fx.serve(false);
+        let origin = format!("Origin: http://127.0.0.1:{port}");
+        for (path, ctype, body) in [
+            ("/", "text/html", "<title>page</title>"),
+            ("/index.html", "text/html", "<title>page</title>"),
+            ("/js/a.js", "application/javascript", "// a"),
+            ("/js/scene/b.js", "application/javascript", "// b"),
+            ("/lib/three.js", "application/javascript", "// three"),
+            ("/css/style.css", "text/css", "/* css */"),
+            ("/data/stars.csv", "text/csv", "ra,dec"),
+            ("/data/land.geojson", "application/json", "{}"),
+            ("/data/textures/earth.jpg", "image/jpeg", "jpeg bytes"),
+            ("/data/textures/rings.png", "image/png", "png bytes"),
+            ("/fonts/serif.ttf", "font/ttf", "font bytes"),
+            ("/js/a.js?v=1", "application/javascript", "// a"),
+        ] {
+            // what the window sends: module scripts and fonts carry Origin, and
+            // same-origin requests carry Sec-Fetch-Site where the engine supports it
+            for extra in [
+                &[][..],
+                &[origin.as_str()][..],
+                &["Sec-Fetch-Site: same-origin", origin.as_str()][..],
+                &["Sec-Fetch-Site: none"][..],
+                &["sec-fetch-site: same-origin"][..],
+            ] {
+                let r = request(port, "GET", path, extra, "");
+                assert_eq!(r.code, 200, "{path} {extra:?}: {}", r.head);
+                assert_eq!(r.text(), body, "{path}");
+                assert!(r.head.contains(&format!("Content-Type: {ctype}")), "{path}");
+            }
+        }
+        let meta = request(port, "GET", "/api/meta", &[origin.as_str()], "");
+        assert_eq!(meta.code, 200);
+        assert!(meta.text().contains("\"retrieved\""));
+        let states = get(port, "/api/states?jd=2460000.5");
+        assert_eq!(states.code, 200);
+        assert!(states.text().contains("\"bodies\""));
+        assert_eq!(get(port, "/api/tracks").code, 200);
+        // localhost is the same server, and its own origin
+        let r = send(
+            port,
+            &format!(
+                "GET /js/a.js HTTP/1.1\r\nHost: localhost:{port}\r\nOrigin: http://localhost:{port}\r\n\r\n"
+            ),
+        );
+        assert_eq!(r.code, 200, "{}", r.head);
+    }
+
+    #[test]
+    fn replies_carry_no_cors_permission() {
+        let fx = Fixture::new();
+        let port = fx.serve(false);
+        for path in ["/", "/data/stars.csv", "/api/meta", "/nope"] {
+            let r = get(port, path);
+            assert!(
+                !r.head.to_ascii_lowercase().contains("access-control-"),
+                "{path}: {}",
+                r.head
+            );
+        }
+    }
+
+    #[test]
+    fn a_missing_file_in_a_served_folder_is_404() {
+        let fx = Fixture::new();
+        let port = fx.serve(false);
+        for path in [
+            "/js/nope.js",
+            "/data/nope.csv",
+            "/data/textures/nope.jpg",
+            "/fonts/nope.ttf",
+        ] {
+            assert_eq!(get(port, path).code, 404, "{path}");
+        }
+    }
+
+    #[test]
+    fn absolute_paths_are_refused() {
+        let fx = Fixture::new();
+        let port = fx.serve(false);
+        let secret = fx.root.join("outside.txt");
+        let secret = secret.display();
+        for path in [
+            format!("/{secret}"),
+            format!("/data/{secret}"),
+            format!("/fonts/{secret}"),
+            format!("/js/{secret}"),
+            format!("/data/textures/{secret}"),
+            "/data//etc/passwd".to_string(),
+            "/fonts//etc/passwd".to_string(),
+            "//etc/passwd".to_string(),
+            "/data/C:/Windows/win.ini".to_string(),
+        ] {
+            assert_refused(&get(port, &path), &path);
+        }
+    }
+
+    #[test]
+    fn parent_directories_are_refused() {
+        let fx = Fixture::new();
+        let port = fx.serve(false);
+        for path in [
+            "/../outside.txt",
+            "/../../outside.txt",
+            "/js/../../outside.txt",
+            "/js/../index.html",
+            "/data/../../outside.txt",
+            "/data/textures/../../../outside.txt",
+            "/fonts/../../outside.txt",
+            "/data/./stars.csv",
+            "/js//a.js",
+            "/js/a.js/",
+            "/data/..",
+        ] {
+            assert_refused(&get(port, path), path);
+        }
+    }
+
+    #[test]
+    fn encoded_paths_are_refused() {
+        let fx = Fixture::new();
+        let port = fx.serve(false);
+        for path in [
+            "/data/%2e%2e/%2e%2e/outside.txt",
+            "/data/..%2f..%2foutside.txt",
+            "/data/%2Fetc%2Fpasswd",
+            "/data/%2fetc%2fpasswd",
+            "/data/.%2e/.%2e/outside.txt",
+            "/data/%252e%252e/%252e%252e/outside.txt",
+            "/data/..%5c..%5coutside.txt",
+            "/data/..\\..\\outside.txt",
+            "/js/a%2ejs",
+            "/js/a.js%00.csv",
+            "/data/stars.csv%00",
+        ] {
+            assert_refused(&get(port, path), path);
+        }
+    }
+
+    #[test]
+    fn a_target_without_a_leading_slash_is_refused() {
+        let fx = Fixture::new();
+        let port = fx.serve(false);
+        let absolute_form = format!("http://127.0.0.1:{port}/js/a.js");
+        for path in ["js/a.js", "*", absolute_form.as_str()] {
+            assert_refused(&get(port, path), path);
+        }
+    }
+
+    #[test]
+    fn only_the_folders_and_types_the_page_fetches_are_served() {
+        let fx = Fixture::new();
+        let port = fx.serve(false);
+        for path in [
+            "/data/spice/kernel.bsp",
+            "/data/spice/kernel.csv",
+            "/data/spacecraft/voyager1.txt",
+            "/data/fetch_log.txt",
+            "/fonts/OFL.txt",
+            "/secret.txt",
+            "/notes.md",
+            "/data/textures/earth.txt",
+            "/data/textures",
+            "/data",
+            "/js",
+            "/css/style.js",
+            "/js/a.css",
+            "/index.css",
+            "/README.md",
+            "/Cargo.toml",
+        ] {
+            assert_refused(&get(port, path), path);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_out_of_the_base_is_refused() {
+        let fx = Fixture::new();
+        let port = fx.serve(false);
+        for path in ["/data/escape.csv", "/js/escape.js"] {
+            assert_refused(&get(port, path), path);
+        }
+    }
+
+    #[test]
+    fn a_foreign_host_is_refused() {
+        let fx = Fixture::new();
+        let port = fx.serve(false);
+        let wrong_port = format!("Host: 127.0.0.1:{}", port.wrapping_add(1));
+        let suffixed = format!("Host: 127.0.0.1:{port}.attacker.example");
+        let padded_user = format!("Host: attacker.example@127.0.0.1:{port}");
+        let ipv6 = format!("Host: [::1]:{port}");
+        let upper = format!("Host: LOCALHOST:{port}");
+        for host in [
+            "Host: rebind.attacker.example",
+            "Host: 127.0.0.1",
+            "Host: localhost",
+            "Host: ",
+            wrong_port.as_str(),
+            suffixed.as_str(),
+            padded_user.as_str(),
+            ipv6.as_str(),
+            upper.as_str(),
+        ] {
+            for path in ["/", "/api/meta", "/data/stars.csv"] {
+                let r = send(port, &format!("GET {path} HTTP/1.1\r\n{host}\r\n\r\n"));
+                assert_refused(&r, host);
+                assert!(!r.text().contains("ra,dec"), "{host} read a catalog");
+            }
+        }
+    }
+
+    #[test]
+    fn a_missing_or_repeated_host_is_refused() {
+        let fx = Fixture::new();
+        let port = fx.serve(false);
+        let r = send(port, "GET / HTTP/1.1\r\n\r\n");
+        assert_refused(&r, "no Host");
+        let r = send(
+            port,
+            &format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nHost: attacker.example\r\n\r\n"),
+        );
+        assert_refused(&r, "two Hosts");
+        let r = send(
+            port,
+            &format!("GET / HTTP/1.1\r\nHost: attacker.example\r\nHost: 127.0.0.1:{port}\r\n\r\n"),
+        );
+        assert_refused(&r, "two Hosts, ours last");
+    }
+
+    #[test]
+    fn a_foreign_origin_is_refused() {
+        let fx = Fixture::new();
+        let port = fx.serve(false);
+        let wrong_port = format!("Origin: http://127.0.0.1:{}", port.wrapping_add(1));
+        let https = format!("Origin: https://127.0.0.1:{port}");
+        // Host is 127.0.0.1, so localhost is a different origin
+        let other_name = format!("Origin: http://localhost:{port}");
+        for origin in [
+            "Origin: http://attacker.example",
+            "Origin: null",
+            "Origin: ",
+            wrong_port.as_str(),
+            https.as_str(),
+            other_name.as_str(),
+        ] {
+            for path in ["/", "/api/meta", "/data/stars.csv"] {
+                let r = request(port, "GET", path, &[origin], "");
+                assert_refused(&r, origin);
+            }
+        }
+        let own = format!("Origin: http://127.0.0.1:{port}");
+        let r = request(port, "GET", "/", &[own.as_str(), "Origin: null"], "");
+        assert_refused(&r, "two Origins");
+    }
+
+    #[test]
+    fn a_cross_site_fetch_is_refused() {
+        let fx = Fixture::new();
+        let port = fx.serve(false);
+        for site in ["cross-site", "same-site", "", "somewhere-else"] {
+            let header = format!("Sec-Fetch-Site: {site}");
+            for path in ["/", "/data/textures/earth.jpg", "/api/meta"] {
+                let r = request(port, "GET", path, &[header.as_str()], "");
+                assert_refused(&r, &header);
+            }
+        }
+    }
+
+    #[test]
+    fn the_shot_hook_is_absent_without_qa_mode() {
+        let fx = Fixture::new();
+        let port = fx.serve(false);
+        let own = format!("Origin: http://127.0.0.1:{port}");
+        for extra in [
+            &[][..],
+            &[own.as_str()][..],
+            &["Origin: http://attacker.example"][..],
+        ] {
+            let r = request(port, "POST", "/api/shot?name=x", extra, "aGVsbG8=");
+            assert_ne!(r.code, 200, "{extra:?}: {}", r.head);
+        }
+        assert_eq!(
+            request(port, "POST", "/api/shot?name=x", &[], "aGVsbG8=").code,
+            405
+        );
+        let written = std::fs::read_dir(fx.root.join("shots")).unwrap().count();
+        assert_eq!(written, 0, "a shot was written without QA mode");
+    }
+
+    #[test]
+    fn the_qa_hooks_are_absent_without_qa_mode() {
+        let fx = Fixture::new();
+        let port = fx.serve(false);
+        for path in ["/api/qa/eval", "/api/qa/log", "/api/qa/result?id=1"] {
+            assert_eq!(request(port, "POST", path, &[], "1+1").code, 405, "{path}");
+        }
+        assert_eq!(get(port, "/api/qa/poll").code, 403);
+    }
+
+    #[test]
+    fn qa_mode_needs_exactly_one() {
+        use std::ffi::OsStr;
+        assert!(qa_requested(Some(OsStr::new("1"))));
+        for value in ["", "0", "2", "true", "yes", "1 ", " 1", "01"] {
+            assert!(!qa_requested(Some(OsStr::new(value))), "{value:?}");
+        }
+        assert!(!qa_requested(None));
+    }
+
+    #[test]
+    fn qa_mode_keeps_the_envelope_and_still_works_same_origin() {
+        let fx = Fixture::new();
+        let port = fx.serve(true);
+        let own = format!("Origin: http://127.0.0.1:{port}");
+        // the eval hook is what a cross-site page would want most
+        for extra in [
+            "Origin: http://attacker.example",
+            "Sec-Fetch-Site: cross-site",
+        ] {
+            let r = request(port, "POST", "/api/qa/eval?timeout=0.1", &[extra], "1+1");
+            assert_refused(&r, extra);
+            let r = request(port, "POST", "/api/shot?name=x", &[extra], "aGVsbG8=");
+            assert_refused(&r, extra);
+        }
+        let written = std::fs::read_dir(fx.root.join("shots")).unwrap().count();
+        assert_eq!(written, 0, "a refused shot was written");
+        let r = request(port, "POST", "/api/qa/log", &[own.as_str()], "from a test");
+        assert_eq!(r.code, 200, "{}", r.head);
+        let r = request(
+            port,
+            "POST",
+            "/api/shot?name=ok",
+            &[own.as_str()],
+            "aGVsbG8=",
+        );
+        assert_eq!(r.code, 200, "{}", r.head);
+        let shot = fx.root.join("shots/ok.jpg");
+        assert_eq!(std::fs::read(&shot).unwrap(), b"hello");
+        std::fs::remove_file(&shot).unwrap();
+        // a QA-only CSP may allow eval; the normal one must not
+        assert!(r.head.contains("unsafe-eval"));
+        let plain = fx.serve(false);
+        assert!(!get(plain, "/").head.contains("unsafe-eval"));
+    }
+
+    #[test]
+    fn an_oversized_hook_body_is_refused_unread() {
+        let fx = Fixture::new();
+        let port = fx.serve(true);
+        let r = send(
+            port,
+            &format!(
+                "POST /api/qa/log HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: {}\r\n\r\n",
+                QA_BODY_MAX + 1
+            ),
+        );
+        assert_eq!(r.code, 413, "{}", r.head);
+    }
+
+    #[test]
+    fn an_endless_header_gets_no_reply_and_no_memory() {
+        let fx = Fixture::new();
+        let port = fx.serve(false);
+        let long = "x".repeat(2 * HEAD_MAX as usize);
+        let r = send(port, &format!("GET / HTTP/1.1\r\nX-Long: {long}\r\n\r\n"));
+        assert_eq!(r.code, 0, "{}", r.head);
+        assert_eq!(get(port, "/js/a.js").code, 200);
+    }
+
+    #[test]
+    fn a_large_file_arrives_whole() {
+        let fx = Fixture::new();
+        let port = fx.serve(false);
+        let path = fx.root.join("assets/data/textures/large.jpg");
+        let sparse = std::fs::File::create(&path).unwrap();
+        let len = 64u64 << 20;
+        sparse.set_len(len).unwrap();
+        drop(sparse);
+        let r = get(port, "/data/textures/large.jpg");
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(r.code, 200);
+        assert!(r.head.contains(&format!("Content-Length: {len}")));
+        assert_eq!(r.body.len() as u64, len);
+    }
+
+    #[test]
+    fn the_probe_recognizes_a_running_pantheon() {
+        let fx = Fixture::new();
+        let port = fx.serve(false);
+        assert!(existing_pantheon(port));
+    }
+
+    #[test]
+    fn a_bound_port_is_never_zero() {
+        let Bound::Listener(_listener, port) = bind_or_find(0).unwrap() else {
+            panic!("port 0 can't already be in use")
+        };
+        assert_ne!(port, 0);
+    }
+
+    #[test]
+    fn plain_names_are_exactly_what_they_look_like() {
+        for good in ["index.html", "three.core.js", "8k_earth-map.jpg", "a..b.js"] {
+            assert!(plain_name(good), "{good}");
+        }
+        for bad in [
+            "", ".", "..", ".git", "a/b", "a\\b", "a%2eb", "C:", "a b", "a\0b", "é.js", "a?b",
+            "a#b",
+        ] {
+            assert!(!plain_name(bad), "{bad:?}");
+        }
     }
 }
