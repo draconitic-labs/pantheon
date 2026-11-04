@@ -660,8 +660,12 @@ const backStack = [];
 // so a second click, or a tour's first stop, would record that same place again.
 function pushBack(to) {
   if (!nav.focus) return;
-  if (to && to.id === nav.focus.id) return;
   const top = backStack[backStack.length - 1];
+  if (to && to.id === nav.focus.id) {
+    // turning back mid-flight: the journey that recorded this place never happened
+    if (nav.flight && nav.flight.t.id !== nav.focus.id && top && top.target.id === nav.focus.id) backStack.pop();
+    return;
+  }
   if (top && top.target.id === nav.focus.id) return;
   backStack.push({ target: nav.focus, dist: nav.camWorld.distanceTo(nav.pivot), dir: nav.dir.clone() });
   if (backStack.length > 40) backStack.shift();
@@ -981,7 +985,9 @@ function pickAll(ndc) {
       if (sep < 18) continue;
     }
     if (b.kind === 'craft' && nav.camWorld.length() > 3e14) continue;
-    consider(b.name, b.world, b.radius, () => makeTarget(`body:${b.name}`), b.kind === 'moon' ? 0.8 : 1.3);
+    // a planet's rings count as the planet, or a star behind them gets picked instead
+    const reach = b.kind === 'planet' ? b.frame : b.radius;
+    consider(b.name, b.world, reach, () => makeTarget(`body:${b.name}`), b.kind === 'moon' ? 0.8 : 1.3);
   }
   for (const it of pocketItems) {
     consider(it.name, it.world, it.radius, () => (it.entry.exo ? makeTarget(`exo:${it.entry.exo.host}`) : pocketTarget(it.entry)));
@@ -1203,8 +1209,10 @@ function updateTruth(panoA) {
     if (dSun < 1e16) add('Oort cloud points: synthetic', 'oort-procedural');
     if (dSun > 15 * PC) add('Distant field stars: synthetic', 'stars-synthetic');
     if (pocket.active) add('This star up close: illustrative surface', 'star-surface');
-    summary = 'Star positions are real; the rest of the sky fades out here';
-    cls = 'measured';
+    const mixed = dSun > 15 * PC;
+    summary = mixed ? 'Catalog stars are real; synthetic field stars fade in among them from here'
+      : 'Star positions are real; the rest of the sky fades out here';
+    cls = mixed ? 'illustrative' : 'measured';
   } else if (dSun < 140 * KPC) {
     add('The Milky Way: illustrative model', 'galaxy-fog');
     add('Nearby stars: Gaia DR3', 'gaia-dr3');

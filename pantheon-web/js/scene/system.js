@@ -977,7 +977,7 @@ export class SolarSystem {
       if (rec.isStar) rows.push({ label: 'Corona', value: 'Illustrative', ev: 'corona-illustrative' });
       if (rec.planetIdx !== undefined || rec.moonIdx !== undefined) {
         if (rec.moonIdx === undefined) rows.push({ label: 'Rotation', value: 'IAU pole and meridian', ev: 'iau-rotation' });
-        else rows.push({ label: 'Rotation', value: 'Tidally locked approximation', ev: 'moon-mean-elements' });
+        else rows.push({ label: 'Rotation', value: 'Tidally locked approximation', ev: 'moon-tidal-lock' });
       }
     }
     return {
