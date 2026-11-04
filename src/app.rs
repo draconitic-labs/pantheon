@@ -2237,7 +2237,7 @@ pub const SHOTS: &[Shot] = &[
     },
     Shot {
         name: "neighbourhood",
-        desc: "The edge of the Gaia sample, about 300 light-years across",
+        desc: "The edge of the dense Gaia sample, about 35 pc out",
         setup: |a| view(a, DVec3::ZERO, 3.0e18, None),
     },
     Shot {
