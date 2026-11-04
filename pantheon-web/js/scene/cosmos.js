@@ -52,8 +52,9 @@ const NODE_ROWS = [
   ['Ursa Major Cluster', 176.0, 49.0, 18.0, 2.0],
   ['Antlia Cluster', 157.51, -35.32, 41.0, 2.0],
   ['Centaurus Cluster', 192.20, -41.31, 52.0, 3.0],
-  ['Pegasus I Cluster', 340.5, 8.2, 53.0, 2.2],
-  ['Hydra Cluster', 139.52, -12.10, 58.0, 3.0],
+  ['Pegasus I Cluster', 350.13, 8.19, 53.0, 2.2],
+  // Abell 1060, which NASA NED resolves "Hydra Cluster" to; not Hydra A (Abell 780)
+  ['Hydra Cluster', 159.18, -27.53, 58.0, 3.0],
   ['Norma / Great Attractor', 243.9, -60.9, 68.0, 8.0],
   ['Perseus Cluster', 49.95, 41.51, 74.0, 4.5],
   ['Leo Cluster (A1367)', 176.12, 19.84, 92.0, 4.0],

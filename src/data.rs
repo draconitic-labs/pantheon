@@ -227,13 +227,18 @@ const NAMED_STARS: [(&str, f64, f64, f64, f32, f32); 36] = [
     ("Luyten's Star", 111.853, 5.226, 3.80, 9.87, 2.7),
 ];
 
-/// All the stars, and how far out gaia_nearby.csv really reaches in parsecs. That catalog
-/// is the dense sample; gaia_bright.csv adds naked-eye stars well beyond it.
-fn load_stars(root: &std::path::Path) -> (Vec<Star>, f64) {
+/// All the stars, how far out gaia_nearby.csv really reaches in parsecs, and how many of
+/// the stars (the first ones) came from it. That catalog is the dense sample; gaia_bright.csv
+/// adds naked-eye stars well beyond it.
+fn load_stars(root: &std::path::Path) -> (Vec<Star>, f64, usize) {
     let mut stars: Vec<Star> = Vec::new();
     let mut seen: HashMap<String, usize> = HashMap::new();
     let mut reach_pc = 0.0_f64;
+    let mut nearby = 0;
     for file in ["gaia_nearby.csv", "gaia_bright.csv"] {
+        if file == "gaia_bright.csv" {
+            nearby = stars.len();
+        }
         let Some(csv) = Csv::load(&root.join("data").join(file)) else {
             continue;
         };
@@ -325,7 +330,37 @@ fn load_stars(root: &std::path::Path) -> (Vec<Star>, f64) {
             }
         }
     }
-    (stars, reach_pc)
+    (stars, reach_pc, nearby)
+}
+
+/// Place exoplanet hosts near enough to be in Gaia's dense sample at their Gaia position, and
+/// give hosts the archive has no distance for (TRAPPIST-1 among them) their Gaia distance.
+/// The same rule as resolveExoDistances in pantheon-web/js/main.js.
+fn resolve_exo_distances(exos: &mut [ExoSystem], nearby: &[Star], reach_pc: f64) {
+    let cone = 0.05_f64.to_radians().cos();
+    for sys in exos {
+        if sys.dist_pc.is_some_and(|d| d > 60.0) {
+            continue;
+        }
+        let dir = sys.pos.normalize_or_zero();
+        let best = nearby
+            .iter()
+            .map(|s| (s.pos.normalize_or_zero().dot(dir), s))
+            .filter(|(dot, _)| *dot > cone)
+            .max_by(|a, b| a.0.total_cmp(&b.0));
+        let Some((_, star)) = best else {
+            continue;
+        };
+        // a host beyond the catalog's reach can't be in it, so a star in that direction at
+        // some other distance is a chance neighbour
+        let stranger = sys
+            .dist_pc
+            .is_some_and(|d| d > reach_pc && (star.dist_pc - d).abs() > 0.2 * d);
+        if !stranger {
+            sys.pos = star.pos;
+            sys.dist_pc = Some(star.dist_pc);
+        }
+    }
 }
 
 // ------------------------------------------------------------ exoplanets
@@ -640,8 +675,10 @@ const COSMIC_NODES: [(&str, f64, f64, f64, f64); 15] = [
     ("Ursa Major Cluster", 176.0, 49.0, 18.0, 2.0),
     ("Antlia Cluster", 157.51, -35.32, 41.0, 2.0),
     ("Centaurus Cluster", 192.20, -41.31, 52.0, 3.0),
-    ("Pegasus I Cluster", 340.5, 8.2, 53.0, 2.2),
-    ("Hydra Cluster", 139.52, -12.10, 58.0, 3.0),
+    ("Pegasus I Cluster", 350.13, 8.19, 53.0, 2.2),
+    // Abell 1060, which NASA NED resolves "Hydra Cluster" to. Not Hydra A (Abell 780), a
+    // different cluster 24° away and about four times as far.
+    ("Hydra Cluster", 159.18, -27.53, 58.0, 3.0),
     ("Norma / Great Attractor", 243.9, -60.9, 68.0, 8.0),
     ("Perseus Cluster", 49.95, 41.51, 74.0, 4.5),
     ("Leo Cluster (A1367)", 176.12, 19.84, 92.0, 4.0),
@@ -699,7 +736,7 @@ impl Universe {
         let mut health: Vec<String> = Vec::new();
         let root = asset_root();
         let gal = crate::frames::galactic_frame();
-        let (stars, gaia_reach_pc) = load_stars(&root);
+        let (stars, gaia_reach_pc, nearby) = load_stars(&root);
         health.push(if stars.len() > 1000 {
             format!("stars: OK — {} sources", stars.len())
         } else {
@@ -708,7 +745,8 @@ impl Universe {
                 stars.len()
             )
         });
-        let exos = load_exo(&root);
+        let mut exos = load_exo(&root);
+        resolve_exo_distances(&mut exos, &stars[..nearby], gaia_reach_pc);
         health.push(if exos.len() > 500 {
             format!("exoplanets: OK — {} systems", exos.len())
         } else {
@@ -1095,13 +1133,60 @@ mod tests {
         std::fs::write(&near, format!("{header}\n1,10,10,100,8\n2,20,20,40,9\n")).unwrap();
         // 1 mas is 1000 pc, far past the dense sample
         std::fs::write(&bright, format!("{header}\n3,30,30,1,5\n")).unwrap();
-        let (stars, reach) = load_stars(&root);
+        let (stars, reach, nearby) = load_stars(&root);
         std::fs::remove_file(&near).unwrap();
         std::fs::remove_file(&bright).unwrap();
         std::fs::remove_dir(&data).unwrap();
         std::fs::remove_dir(&root).unwrap();
         assert!((reach - 25.0).abs() < 1e-9, "{reach}");
+        assert_eq!(nearby, 2);
         assert!(stars.iter().any(|s| s.dist_pc > 900.0));
+    }
+
+    #[test]
+    fn hosts_take_their_gaia_distance_the_way_the_3d_app_does() {
+        let u = Universe::load();
+        let dist = |host: &str| {
+            let i = u.find_system(host).unwrap_or_else(|| panic!("{host}"));
+            u.exos[i].dist_pc
+        };
+        // the archive has no distance for this one
+        assert!((dist("TRAPPIST-1").unwrap() - 12.47).abs() < 0.1);
+        // archive and Gaia disagree inside the catalog's reach, and Gaia is right
+        assert!((dist("GJ 411").unwrap() - 2.55).abs() < 0.1);
+        assert!((dist("GJ 273").unwrap() - 3.79).abs() < 0.1);
+        // beyond the catalog's reach, the star in that direction is a chance neighbour
+        assert!((dist("HD 10180").unwrap() - 38.96).abs() < 0.1);
+        // the position agrees with the distance
+        let i = u.find_system("TRAPPIST-1").unwrap();
+        assert!((u.exos[i].pos.length() / PC - 12.47).abs() < 0.1);
+    }
+
+    #[test]
+    fn the_cluster_table_matches_the_3d_app_and_ned() {
+        let js = include_str!("../pantheon-web/js/scene/cosmos.js");
+        for (name, ra, dec, dist, size) in COSMIC_NODES {
+            let row = js
+                .lines()
+                .find(|l| l.trim_start().starts_with(&format!("['{name}',")))
+                .unwrap_or_else(|| panic!("{name} isn't in cosmos.js"));
+            let nums: Vec<f64> = row
+                .split(',')
+                .skip(1)
+                .filter_map(|f| f.trim().trim_end_matches(['[', ']', ',']).parse().ok())
+                .collect();
+            assert_eq!(
+                nums,
+                vec![ra, dec, dist, size],
+                "{name} differs in cosmos.js"
+            );
+        }
+        // NASA NED: "Hydra Cluster" is Abell 1060, and the Pegasus cluster
+        let at = |name: &str| COSMIC_NODES.iter().find(|n| n.0 == name).unwrap();
+        let hydra = at("Hydra Cluster");
+        assert!((hydra.1 - 159.18).abs() < 0.01 && (hydra.2 + 27.53).abs() < 0.01);
+        let pegasus = at("Pegasus I Cluster");
+        assert!((pegasus.1 - 350.13).abs() < 0.01 && (pegasus.2 - 8.19).abs() < 0.01);
     }
 
     #[test]

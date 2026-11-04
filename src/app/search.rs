@@ -184,14 +184,17 @@ impl SearchState {
             }
         }
         for (i, s) in u.exos.iter().enumerate() {
-            if s.dist_pc.is_none() {
-                continue;
-            }
             let n = s.planets.len();
             let plural = if n == 1 { "planet" } else { "planets" };
+            // findable even with no distance, so picking it can say why it can't be placed
+            let placed = if s.dist_pc.is_some() {
+                ""
+            } else {
+                ", no measured distance"
+            };
             e.push(entry(
                 &s.host,
-                format!("star with {n} {plural}"),
+                format!("star with {n} {plural}{placed}"),
                 3,
                 Dest::Obj(ObjectRef::ExoHost(i)),
             ));
@@ -325,6 +328,28 @@ mod tests {
         let es: Vec<Entry> = (0..30).map(|k| e(&format!("Star {k}"), 2)).collect();
         assert!(names(&es, "galaxy").is_empty());
         assert_eq!(rank(&es, "star", 9).len(), 9);
+    }
+
+    #[test]
+    fn trappist_is_found_and_suggested() {
+        let u = crate::data::Universe::load();
+        let s = SearchState::new(&u);
+        assert_eq!(names(&s.entries, "TRAPPIST")[0], "TRAPPIST-1");
+        assert!(s
+            .suggestions
+            .iter()
+            .any(|i| s.entries[*i].name == "TRAPPIST-1"));
+    }
+
+    #[test]
+    fn a_host_with_no_distance_is_found_and_says_so() {
+        let u = crate::data::Universe::load();
+        let s = SearchState::new(&u);
+        let Some(host) = u.exos.iter().find(|x| x.dist_pc.is_none()) else {
+            return;
+        };
+        let e = s.entries.iter().find(|e| e.name == host.host).unwrap();
+        assert!(e.detail.contains("no measured distance"), "{}", e.detail);
     }
 
     #[test]
