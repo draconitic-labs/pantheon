@@ -57,7 +57,11 @@ impl FrameGraph {
     pub fn build(u: &Universe) -> FrameGraph {
         let mut nodes = Vec::new();
         let mut push = |name: String, parent: Option<FrameId>, provider: Provider| -> FrameId {
-            nodes.push(FrameNode { name, parent, provider });
+            nodes.push(FrameNode {
+                name,
+                parent,
+                provider,
+            });
             FrameId(nodes.len() as u32 - 1)
         };
         let root = push("heliocentric ecliptic J2000".into(), None, Provider::Root);
@@ -71,7 +75,11 @@ impl FrameGraph {
             .iter()
             .enumerate()
             .map(|(mi, m)| {
-                push(m.name.into(), Some(planets[m.planet]), Provider::MoonOrbit(mi))
+                push(
+                    m.name.into(),
+                    Some(planets[m.planet]),
+                    Provider::MoonOrbit(mi),
+                )
             })
             .collect();
         let craft: Vec<FrameId> = u
@@ -85,7 +93,15 @@ impl FrameGraph {
             Some(root),
             Provider::Fixed(u.gal.center),
         );
-        FrameGraph { nodes, root, sun, planets, moons, craft, galactic_center }
+        FrameGraph {
+            nodes,
+            root,
+            sun,
+            planets,
+            moons,
+            craft,
+            galactic_center,
+        }
     }
 
     pub fn root(&self) -> FrameId {
@@ -114,12 +130,14 @@ impl FrameGraph {
             Provider::Fixed(p) => p,
             Provider::PlanetEphemeris(i) => sim::body_pos(i, jd),
             Provider::MoonOrbit(mi) => sim::moon_rel(mi, jd),
-            Provider::CraftTrack(ci) => u.craft[ci]
-                .track
-                .pos_at(jd)
-                .unwrap_or_else(|| {
-                    u.craft[ci].track.samples.last().map(|s| s.1).unwrap_or(DVec3::ZERO)
-                }),
+            Provider::CraftTrack(ci) => u.craft[ci].track.pos_at(jd).unwrap_or_else(|| {
+                u.craft[ci]
+                    .track
+                    .samples
+                    .last()
+                    .map(|s| s.1)
+                    .unwrap_or(DVec3::ZERO)
+            }),
             Provider::Star(si) => u.stars[si].pos_at(jd),
             Provider::ExoHost(ei) => u.exos[ei].pos,
             Provider::ExoPlanetOrbit(ei, k) => {
@@ -145,8 +163,7 @@ impl FrameGraph {
     pub fn leaf_in_root(&self, u: &Universe, provider: Provider, jd: f64) -> DVec3 {
         match provider {
             Provider::ExoPlanetOrbit(ei, _) => {
-                self.local_origin(u, Provider::ExoHost(ei), jd)
-                    + self.local_origin(u, provider, jd)
+                self.local_origin(u, Provider::ExoHost(ei), jd) + self.local_origin(u, provider, jd)
             }
             _ => self.local_origin(u, provider, jd),
         }
@@ -178,19 +195,29 @@ mod tests {
         }
         for mi in 0..sim::MOONS.len() {
             let legacy = sim::body_pos(sim::MOONS[mi].planet, jd) + sim::moon_rel(mi, jd);
-            assert!(close(g.origin_in_root(&u, g.moon(mi), jd), legacy), "moon {mi}");
+            assert!(
+                close(g.origin_in_root(&u, g.moon(mi), jd), legacy),
+                "moon {mi}"
+            );
         }
         for ci in 0..u.craft.len() {
             let legacy = u.craft[ci].track.pos_at(jd).unwrap_or_else(|| {
-                u.craft[ci].track.samples.last().map(|s| s.1).unwrap_or(DVec3::ZERO)
+                u.craft[ci]
+                    .track
+                    .samples
+                    .last()
+                    .map(|s| s.1)
+                    .unwrap_or(DVec3::ZERO)
             });
-            assert!(close(g.origin_in_root(&u, g.craft_frame(ci), jd), legacy), "craft {ci}");
+            assert!(
+                close(g.origin_in_root(&u, g.craft_frame(ci), jd), legacy),
+                "craft {ci}"
+            );
         }
         // hierarchical leaves: an exoplanet composes host + conic
         if let Some(ei) = u.find_system("TRAPPIST-1") {
             let p = g.leaf_in_root(&u, Provider::ExoPlanetOrbit(ei, 3), jd);
-            let legacy =
-                u.exos[ei].pos + crate::atlas::exo_planet_rel(&u, ei, 3, jd).unwrap();
+            let legacy = u.exos[ei].pos + crate::atlas::exo_planet_rel(&u, ei, 3, jd).unwrap();
             assert!(close(p, legacy), "exo planet");
         }
         // frames really are parent-linked, not flat

@@ -15,7 +15,11 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { intro_seen: false, ambience_on: false, ambience_vol: 0.5 }
+        Self {
+            intro_seen: false,
+            ambience_on: false,
+            ambience_vol: 0.5,
+        }
     }
 }
 
@@ -30,7 +34,9 @@ fn config_path() -> Option<PathBuf> {
 
 impl Settings {
     pub fn load() -> Self {
-        config_path().and_then(|p| Self::load_from(&p)).unwrap_or_default()
+        config_path()
+            .and_then(|p| Self::load_from(&p))
+            .unwrap_or_default()
     }
 
     fn load_from(path: &std::path::Path) -> Option<Self> {
@@ -62,7 +68,11 @@ mod tests {
     fn round_trips_and_tolerates_bad_or_partial_files() {
         let dir = std::env::temp_dir().join(format!("pantheon-settings-{}", std::process::id()));
         let path = dir.join("nested").join("settings.json");
-        let s = Settings { intro_seen: true, ambience_on: true, ambience_vol: 0.25 };
+        let s = Settings {
+            intro_seen: true,
+            ambience_on: true,
+            ambience_vol: 0.25,
+        };
         s.save_to(&path).unwrap();
         let back = Settings::load_from(&path).unwrap();
         assert!(back.intro_seen && back.ambience_on);

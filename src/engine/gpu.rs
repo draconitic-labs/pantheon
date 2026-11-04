@@ -36,7 +36,10 @@ impl GpuContext {
     }
 
     pub fn from_eframe(rs: &eframe::egui_wgpu::RenderState) -> Self {
-        Self { device: rs.device.clone(), queue: rs.queue.clone() }
+        Self {
+            device: rs.device.clone(),
+            queue: rs.queue.clone(),
+        }
     }
 }
 
@@ -81,7 +84,11 @@ impl ViewTarget {
     fn new_with(gpu: &GpuContext, width: u32, height: u32, hdr: bool) -> Self {
         let width = width.max(8);
         let height = height.max(8);
-        let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+        let size = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
         let color_fmt = if hdr { FORMAT_HDR } else { FORMAT };
         let msaa = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("view-msaa"),
@@ -114,7 +121,11 @@ impl ViewTarget {
             let levels = (32 - bw.min(bh).leading_zeros()).clamp(1, 7);
             let t = gpu.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("view-bloom"),
-                size: wgpu::Extent3d { width: bw, height: bh, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: bw,
+                    height: bh,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: levels,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -227,7 +238,7 @@ impl ViewTarget {
     }
 
     pub fn read_pixels(&self, gpu: &GpuContext) -> Result<Vec<u8>> {
-        let bpr = (self.width * 4 + 255) / 256 * 256;
+        let bpr = (self.width * 4).div_ceil(256) * 256;
         let buf = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("readback"),
             size: (bpr * self.height) as u64,
@@ -250,7 +261,11 @@ impl ViewTarget {
                     rows_per_image: Some(self.height),
                 },
             },
-            wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
         );
         gpu.queue.submit([encoder.finish()]);
         let slice = buf.slice(..);
@@ -276,8 +291,7 @@ pub fn save_png(path: &Path, w: u32, h: u32, rgba: &[u8]) -> Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let img =
-        image::RgbaImage::from_raw(w, h, rgba.to_vec()).context("bad pixel buffer size")?;
+    let img = image::RgbaImage::from_raw(w, h, rgba.to_vec()).context("bad pixel buffer size")?;
     img.save(path)?;
     Ok(())
 }

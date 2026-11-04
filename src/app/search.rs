@@ -3,16 +3,20 @@
 
 use glam::DVec3;
 
+use super::ui::fmt_words;
 use crate::atlas::ObjectRef;
 use crate::data::Universe;
-use super::ui::fmt_words;
 use crate::frames::{KPC, MPC};
 use crate::sim::{MOONS, PLANETS};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Dest {
     Obj(ObjectRef),
-    Place { center: DVec3, width_m: f64, name: &'static str },
+    Place {
+        center: DVec3,
+        width_m: f64,
+        name: &'static str,
+    },
 }
 
 #[derive(Clone)]
@@ -37,30 +41,90 @@ pub struct SearchState {
 
 fn entry(name: impl Into<String>, detail: impl Into<String>, rank: u8, dest: Dest) -> Entry {
     let name = name.into();
-    Entry { lower: name.to_lowercase(), name, detail: detail.into(), rank, dest }
+    Entry {
+        lower: name.to_lowercase(),
+        name,
+        detail: detail.into(),
+        rank,
+        dest,
+    }
 }
 
 /// Regions you can fly to that aren't a single object.
 fn places(u: &Universe) -> Vec<Entry> {
     let gc = u.gal.center;
-    let ga = u.nodes.iter().find(|n| n.name.contains("Great Attractor")).map(|n| n.pos).unwrap_or(DVec3::ZERO);
+    let ga = u
+        .nodes
+        .iter()
+        .find(|n| n.name.contains("Great Attractor"))
+        .map(|n| n.pos)
+        .unwrap_or(DVec3::ZERO);
     let p = |name: &'static str, detail: &str, center: DVec3, width_m: f64| {
-        entry(name, detail, 1, Dest::Place { center, width_m, name })
+        entry(
+            name,
+            detail,
+            1,
+            Dest::Place {
+                center,
+                width_m,
+                name,
+            },
+        )
     };
     vec![
         p("Solar System", "the eight planets", DVec3::ZERO, 1.4e13),
         p("Inner planets", "Mercury to Mars", DVec3::ZERO, 8.0e11),
-        p("Asteroid belt", "between Mars and Jupiter", DVec3::ZERO, 1.4e12),
+        p(
+            "Asteroid belt",
+            "between Mars and Jupiter",
+            DVec3::ZERO,
+            1.4e12,
+        ),
         p("Kuiper belt", "beyond Neptune", DVec3::ZERO, 1.8e13),
-        p("Heliosphere", "where the solar wind ends", DVec3::ZERO, 8.0e13),
-        p("Oort cloud", "a theoretical shell of comets", DVec3::ZERO, 3.5e16),
-        p("Nearest stars", "the Sun's closest neighbours", DVec3::ZERO, 6.0e17),
-        p("Solar neighbourhood", "the nearby stars of this atlas", DVec3::ZERO, 8.0e18),
+        p(
+            "Heliosphere",
+            "where the solar wind ends",
+            DVec3::ZERO,
+            8.0e13,
+        ),
+        p(
+            "Oort cloud",
+            "a theoretical shell of comets",
+            DVec3::ZERO,
+            3.5e16,
+        ),
+        p(
+            "Nearest stars",
+            "the Sun's closest neighbours",
+            DVec3::ZERO,
+            6.0e17,
+        ),
+        p(
+            "Solar neighbourhood",
+            "the nearby stars of this atlas",
+            DVec3::ZERO,
+            8.0e18,
+        ),
         p("Milky Way", "our galaxy", gc, 2.6e21),
         p("Galactic centre", "Sagittarius A*", gc, 3.0e20),
-        p("Local Group", "the Milky Way, Andromeda and their dwarfs", DVec3::ZERO, 7.0e22),
-        p("Laniakea", "our supercluster, around the Great Attractor", ga, 5.0e24),
-        p("Cosmic web", "the largest structure there is", DVec3::ZERO, 8.0e24),
+        p(
+            "Local Group",
+            "the Milky Way, Andromeda and their dwarfs",
+            DVec3::ZERO,
+            7.0e22,
+        ),
+        p(
+            "Laniakea",
+            "our supercluster, around the Great Attractor",
+            ga,
+            5.0e24,
+        ),
+        p(
+            "Cosmic web",
+            "the largest structure there is",
+            DVec3::ZERO,
+            8.0e24,
+        ),
     ]
 }
 
@@ -69,24 +133,54 @@ impl SearchState {
         let mut e: Vec<Entry> = Vec::new();
         e.push(entry("Sun", "our star", 0, Dest::Obj(ObjectRef::Sun)));
         for (i, p) in PLANETS.iter().enumerate() {
-            e.push(entry(p.name, format!("planet, {:.2} AU from the Sun", p.el[0]), 0, Dest::Obj(ObjectRef::Planet(i))));
+            e.push(entry(
+                p.name,
+                format!("planet, {:.2} AU from the Sun", p.el[0]),
+                0,
+                Dest::Obj(ObjectRef::Planet(i)),
+            ));
         }
         for (i, m) in MOONS.iter().enumerate() {
-            e.push(entry(m.name, format!("moon of {}", PLANETS[m.planet].name), 1, Dest::Obj(ObjectRef::Moon(i))));
+            e.push(entry(
+                m.name,
+                format!("moon of {}", PLANETS[m.planet].name),
+                1,
+                Dest::Obj(ObjectRef::Moon(i)),
+            ));
         }
         e.extend(places(u));
         for (i, c) in u.craft.iter().enumerate() {
-            e.push(entry(c.name, "spacecraft", 1, Dest::Obj(ObjectRef::Craft(i))));
+            e.push(entry(
+                c.name,
+                "spacecraft",
+                1,
+                Dest::Obj(ObjectRef::Craft(i)),
+            ));
         }
         for (i, g) in u.galaxies.iter().enumerate() {
-            e.push(entry(g.name, format!("galaxy, {}", fmt_words(g.dist_kpc * KPC)), 2, Dest::Obj(ObjectRef::Galaxy(i))));
+            e.push(entry(
+                g.name,
+                format!("galaxy, {}", fmt_words(g.dist_kpc * KPC)),
+                2,
+                Dest::Obj(ObjectRef::Galaxy(i)),
+            ));
         }
         for (i, n) in u.nodes.iter().enumerate() {
-            e.push(entry(n.name, format!("galaxy cluster, {}", fmt_words(n.dist_mpc * MPC)), 2, Dest::Obj(ObjectRef::Node(i))));
+            e.push(entry(
+                n.name,
+                format!("galaxy cluster, {}", fmt_words(n.dist_mpc * MPC)),
+                2,
+                Dest::Obj(ObjectRef::Node(i)),
+            ));
         }
         for (i, s) in u.stars.iter().enumerate() {
             if let Some(n) = s.name {
-                e.push(entry(n, format!("star, {:.1} light-years", s.dist_pc * 3.2616), 2, Dest::Obj(ObjectRef::Star(i))));
+                e.push(entry(
+                    n,
+                    format!("star, {:.1} light-years", s.dist_pc * 3.2616),
+                    2,
+                    Dest::Obj(ObjectRef::Star(i)),
+                ));
             }
         }
         for (i, s) in u.exos.iter().enumerate() {
@@ -95,14 +189,33 @@ impl SearchState {
             }
             let n = s.planets.len();
             let plural = if n == 1 { "planet" } else { "planets" };
-            e.push(entry(&s.host, format!("star with {n} {plural}"), 3, Dest::Obj(ObjectRef::ExoHost(i))));
+            e.push(entry(
+                &s.host,
+                format!("star with {n} {plural}"),
+                3,
+                Dest::Obj(ObjectRef::ExoHost(i)),
+            ));
             for (k, p) in s.planets.iter().enumerate() {
-                e.push(entry(&p.name, format!("exoplanet of {}", s.host), 4, Dest::Obj(ObjectRef::ExoPlanet(i, k))));
+                e.push(entry(
+                    &p.name,
+                    format!("exoplanet of {}", s.host),
+                    4,
+                    Dest::Obj(ObjectRef::ExoPlanet(i, k)),
+                ));
             }
         }
         let suggestions = [
-            "Earth", "Moon", "Mars", "Saturn", "Sun", "Proxima Centauri", "TRAPPIST-1", "Milky Way",
-            "Andromeda (M31)", "Virgo Cluster", "Cosmic web",
+            "Earth",
+            "Moon",
+            "Mars",
+            "Saturn",
+            "Sun",
+            "Proxima Centauri",
+            "TRAPPIST-1",
+            "Milky Way",
+            "Andromeda (M31)",
+            "Virgo Cluster",
+            "Cosmic web",
         ]
         .iter()
         .filter_map(|want| e.iter().position(|x| x.name == *want))
@@ -181,7 +294,10 @@ mod tests {
     }
 
     fn names(entries: &[Entry], q: &str) -> Vec<String> {
-        rank(entries, q, 9).into_iter().map(|i| entries[i].name.clone()).collect()
+        rank(entries, q, 9)
+            .into_iter()
+            .map(|i| entries[i].name.clone())
+            .collect()
     }
 
     #[test]
@@ -192,7 +308,10 @@ mod tests {
             e("Blue Moon", 0),
             e("Harmoon", 0),
         ];
-        assert_eq!(names(&es, "moon"), ["Moon", "Moonstone", "Blue Moon", "Harmoon"]);
+        assert_eq!(
+            names(&es, "moon"),
+            ["Moon", "Moonstone", "Blue Moon", "Harmoon"]
+        );
     }
 
     #[test]

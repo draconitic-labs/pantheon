@@ -48,7 +48,11 @@ pub struct Clock {
 
 impl Clock {
     pub fn now() -> Self {
-        Self { jd: jd_now(), rate: 86_400.0, playing: false }
+        Self {
+            jd: jd_now(),
+            rate: 86_400.0,
+            playing: false,
+        }
     }
     pub fn tick(&mut self, real_dt: f64) {
         if self.playing {
@@ -71,8 +75,7 @@ pub fn cal_to_jd(y: i32, m: i32, d: f64) -> f64 {
     let (yy, mm) = if m <= 2 { (y - 1, m + 12) } else { (y, m) };
     let a = yy / 100;
     let b = 2 - a + a / 4;
-    (365.25 * (yy as f64 + 4716.0)).floor() + (30.6001 * (mm as f64 + 1.0)).floor() + d
-        + b as f64
+    (365.25 * (yy as f64 + 4716.0)).floor() + (30.6001 * (mm as f64 + 1.0)).floor() + d + b as f64
         - 1524.5
 }
 
@@ -134,8 +137,22 @@ pub struct PlanetDef {
 pub const PLANETS: [PlanetDef; 9] = [
     PlanetDef {
         name: "Mercury",
-        el: [0.387_099_27, 0.205_635_93, 7.004_979_02, 252.250_323_50, 77.457_796_28, 48.330_765_93],
-        rate: [0.000_000_37, 0.000_019_06, -0.005_947_49, 149_472.674_111_75, 0.160_476_89, -0.125_340_81],
+        el: [
+            0.387_099_27,
+            0.205_635_93,
+            7.004_979_02,
+            252.250_323_50,
+            77.457_796_28,
+            48.330_765_93,
+        ],
+        rate: [
+            0.000_000_37,
+            0.000_019_06,
+            -0.005_947_49,
+            149_472.674_111_75,
+            0.160_476_89,
+            -0.125_340_81,
+        ],
         radius_km: 2_439.7,
         gm: 2.2032e13,
         obliquity_deg: 0.03,
@@ -148,8 +165,22 @@ pub const PLANETS: [PlanetDef; 9] = [
     },
     PlanetDef {
         name: "Venus",
-        el: [0.723_335_66, 0.006_776_72, 3.394_676_05, 181.979_099_50, 131.602_467_18, 76.679_842_55],
-        rate: [0.000_003_90, -0.000_041_07, -0.000_788_90, 58_517.815_387_29, 0.002_683_29, -0.277_694_18],
+        el: [
+            0.723_335_66,
+            0.006_776_72,
+            3.394_676_05,
+            181.979_099_50,
+            131.602_467_18,
+            76.679_842_55,
+        ],
+        rate: [
+            0.000_003_90,
+            -0.000_041_07,
+            -0.000_788_90,
+            58_517.815_387_29,
+            0.002_683_29,
+            -0.277_694_18,
+        ],
         radius_km: 6_051.8,
         gm: 3.248_59e14,
         obliquity_deg: 177.4,
@@ -162,8 +193,22 @@ pub const PLANETS: [PlanetDef; 9] = [
     },
     PlanetDef {
         name: "Earth",
-        el: [1.000_002_61, 0.016_711_23, -0.000_015_31, 100.464_571_66, 102.937_681_93, 0.0],
-        rate: [0.000_005_62, -0.000_043_92, -0.012_946_68, 35_999.372_449_81, 0.323_273_64, 0.0],
+        el: [
+            1.000_002_61,
+            0.016_711_23,
+            -0.000_015_31,
+            100.464_571_66,
+            102.937_681_93,
+            0.0,
+        ],
+        rate: [
+            0.000_005_62,
+            -0.000_043_92,
+            -0.012_946_68,
+            35_999.372_449_81,
+            0.323_273_64,
+            0.0,
+        ],
         radius_km: 6_371.0,
         gm: 3.986_004_418e14,
         obliquity_deg: 23.44,
@@ -176,8 +221,22 @@ pub const PLANETS: [PlanetDef; 9] = [
     },
     PlanetDef {
         name: "Mars",
-        el: [1.523_710_34, 0.093_394_10, 1.849_691_42, -4.553_432_05, -23.943_629_59, 49.559_538_91],
-        rate: [0.000_018_47, 0.000_078_82, -0.008_131_31, 19_140.302_684_99, 0.444_410_88, -0.292_573_43],
+        el: [
+            1.523_710_34,
+            0.093_394_10,
+            1.849_691_42,
+            -4.553_432_05,
+            -23.943_629_59,
+            49.559_538_91,
+        ],
+        rate: [
+            0.000_018_47,
+            0.000_078_82,
+            -0.008_131_31,
+            19_140.302_684_99,
+            0.444_410_88,
+            -0.292_573_43,
+        ],
         radius_km: 3_389.5,
         gm: 4.282_837_5e13,
         obliquity_deg: 25.19,
@@ -190,8 +249,22 @@ pub const PLANETS: [PlanetDef; 9] = [
     },
     PlanetDef {
         name: "Jupiter",
-        el: [5.202_887_00, 0.048_386_24, 1.304_396_95, 34.396_440_51, 14.728_479_83, 100.473_909_09],
-        rate: [-0.000_116_07, -0.000_132_53, -0.001_837_14, 3_034.746_127_75, 0.212_526_68, 0.204_691_06],
+        el: [
+            5.202_887_00,
+            0.048_386_24,
+            1.304_396_95,
+            34.396_440_51,
+            14.728_479_83,
+            100.473_909_09,
+        ],
+        rate: [
+            -0.000_116_07,
+            -0.000_132_53,
+            -0.001_837_14,
+            3_034.746_127_75,
+            0.212_526_68,
+            0.204_691_06,
+        ],
         radius_km: 69_911.0,
         gm: 1.266_865_34e17,
         obliquity_deg: 3.13,
@@ -204,8 +277,22 @@ pub const PLANETS: [PlanetDef; 9] = [
     },
     PlanetDef {
         name: "Saturn",
-        el: [9.536_675_94, 0.053_861_79, 2.485_991_87, 49.954_244_23, 92.598_878_31, 113.662_424_48],
-        rate: [-0.001_250_60, -0.000_509_91, 0.001_936_09, 1_222.493_622_01, -0.418_972_16, -0.288_677_94],
+        el: [
+            9.536_675_94,
+            0.053_861_79,
+            2.485_991_87,
+            49.954_244_23,
+            92.598_878_31,
+            113.662_424_48,
+        ],
+        rate: [
+            -0.001_250_60,
+            -0.000_509_91,
+            0.001_936_09,
+            1_222.493_622_01,
+            -0.418_972_16,
+            -0.288_677_94,
+        ],
         radius_km: 58_232.0,
         gm: 3.793_118_7e16,
         obliquity_deg: 26.73,
@@ -218,8 +305,22 @@ pub const PLANETS: [PlanetDef; 9] = [
     },
     PlanetDef {
         name: "Uranus",
-        el: [19.189_164_64, 0.047_257_44, 0.772_637_83, 313.238_104_51, 170.954_276_30, 74.016_925_03],
-        rate: [-0.001_961_76, -0.000_043_97, -0.002_429_39, 428.482_027_85, 0.408_052_81, 0.042_405_89],
+        el: [
+            19.189_164_64,
+            0.047_257_44,
+            0.772_637_83,
+            313.238_104_51,
+            170.954_276_30,
+            74.016_925_03,
+        ],
+        rate: [
+            -0.001_961_76,
+            -0.000_043_97,
+            -0.002_429_39,
+            428.482_027_85,
+            0.408_052_81,
+            0.042_405_89,
+        ],
         radius_km: 25_362.0,
         gm: 5.793_939e15,
         obliquity_deg: 97.8,
@@ -232,8 +333,22 @@ pub const PLANETS: [PlanetDef; 9] = [
     },
     PlanetDef {
         name: "Neptune",
-        el: [30.069_922_76, 0.008_590_48, 1.770_043_47, -55.120_029_69, 44.964_762_27, 131.784_225_74],
-        rate: [0.000_262_91, 0.000_051_05, 0.000_353_72, 218.459_453_25, -0.322_414_64, -0.005_086_64],
+        el: [
+            30.069_922_76,
+            0.008_590_48,
+            1.770_043_47,
+            -55.120_029_69,
+            44.964_762_27,
+            131.784_225_74,
+        ],
+        rate: [
+            0.000_262_91,
+            0.000_051_05,
+            0.000_353_72,
+            218.459_453_25,
+            -0.322_414_64,
+            -0.005_086_64,
+        ],
         radius_km: 24_622.0,
         gm: 6.836_529e15,
         obliquity_deg: 28.3,
@@ -246,8 +361,22 @@ pub const PLANETS: [PlanetDef; 9] = [
     },
     PlanetDef {
         name: "Pluto",
-        el: [39.482_116_75, 0.248_827_30, 17.140_012_06, 238.929_038_33, 224.068_916_29, 110.303_936_84],
-        rate: [-0.000_315_96, 0.000_051_70, 0.000_048_18, 145.207_805_15, -0.040_629_42, -0.011_834_82],
+        el: [
+            39.482_116_75,
+            0.248_827_30,
+            17.140_012_06,
+            238.929_038_33,
+            224.068_916_29,
+            110.303_936_84,
+        ],
+        rate: [
+            -0.000_315_96,
+            0.000_051_70,
+            0.000_048_18,
+            145.207_805_15,
+            -0.040_629_42,
+            -0.011_834_82,
+        ],
         radius_km: 1_188.3,
         gm: 8.71e11,
         obliquity_deg: 122.5,
@@ -317,8 +446,8 @@ pub const NAIF_IDS: [i32; 9] = [199, 299, 399, 4, 5, 6, 7, 8, 9];
 pub const PLANET_CENTER_IDS: [i32; 9] = [199, 299, 399, 499, 599, 699, 799, 899, 999];
 /// Satellite NAIF ids aligned with [`MOONS`].
 pub const MOON_NAIF: [i32; 21] = [
-    301, 401, 402, 501, 502, 503, 504, 601, 602, 603, 604, 605, 606, 608, 705, 701, 702, 703,
-    704, 801, 901,
+    301, 401, 402, 501, 502, 503, 504, 601, 602, 603, 604, 605, 606, 608, 705, 701, 702, 703, 704,
+    801, 901,
 ];
 
 /// True when the SPICE kernels cover this epoch (the state source shown
@@ -350,7 +479,9 @@ pub fn body_pos(i: usize, jd: f64) -> DVec3 {
 
 /// True when this moon's state comes from a satellite SPK at this epoch.
 pub fn moon_is_spice(mi: usize, jd: f64) -> bool {
-    crate::spice::spice().map(|s| s.has(MOON_NAIF[mi], jd)).unwrap_or(false)
+    crate::spice::spice()
+        .map(|s| s.has(MOON_NAIF[mi], jd))
+        .unwrap_or(false)
 }
 
 /// Sampled full orbit ellipse (root frame) for engraving, at the osculating epoch.
@@ -413,29 +544,260 @@ pub struct MoonDef {
 /// approximation (status=modeled; orbital plane approximated by the parent's
 /// equatorial plane, phases illustrative except the Moon).
 pub const MOONS: [MoonDef; 21] = [
-    MoonDef { planet: 2, name: "Moon", a_km: 384_400.0, period_d: 27.321_661, radius_km: 1_737.4, e: 0.0549, m0_deg: 135.27, color: [0.62, 0.62, 0.6], color2: [0.42, 0.42, 0.42], kind: 5.0 },
-    MoonDef { planet: 3, name: "Phobos", a_km: 9_376.0, period_d: 0.318_9, radius_km: 11.3, e: 0.0151, m0_deg: 30.0, color: [0.55, 0.5, 0.46], color2: [0.35, 0.32, 0.3], kind: 5.0 },
-    MoonDef { planet: 3, name: "Deimos", a_km: 23_463.0, period_d: 1.262_4, radius_km: 6.2, e: 0.0002, m0_deg: 200.0, color: [0.58, 0.53, 0.48], color2: [0.38, 0.35, 0.32], kind: 5.0 },
-    MoonDef { planet: 4, name: "Io", a_km: 421_800.0, period_d: 1.769_138, radius_km: 1_821.6, e: 0.0041, m0_deg: 20.0, color: [0.92, 0.82, 0.45], color2: [0.7, 0.55, 0.3], kind: 1.0 },
-    MoonDef { planet: 4, name: "Europa", a_km: 671_100.0, period_d: 3.551_181, radius_km: 1_560.8, e: 0.0094, m0_deg: 140.0, color: [0.85, 0.82, 0.75], color2: [0.65, 0.6, 0.55], kind: 5.0 },
-    MoonDef { planet: 4, name: "Ganymede", a_km: 1_070_400.0, period_d: 7.154_553, radius_km: 2_634.1, e: 0.0013, m0_deg: 260.0, color: [0.62, 0.58, 0.52], color2: [0.45, 0.42, 0.38], kind: 5.0 },
-    MoonDef { planet: 4, name: "Callisto", a_km: 1_882_700.0, period_d: 16.689_017, radius_km: 2_410.3, e: 0.0074, m0_deg: 80.0, color: [0.5, 0.46, 0.42], color2: [0.32, 0.3, 0.28], kind: 5.0 },
-    MoonDef { planet: 5, name: "Mimas", a_km: 185_540.0, period_d: 0.942_422, radius_km: 198.2, e: 0.0196, m0_deg: 10.0, color: [0.7, 0.7, 0.68], color2: [0.5, 0.5, 0.48], kind: 5.0 },
-    MoonDef { planet: 5, name: "Enceladus", a_km: 238_040.0, period_d: 1.370_218, radius_km: 252.1, e: 0.0047, m0_deg: 90.0, color: [0.92, 0.94, 0.96], color2: [0.75, 0.78, 0.82], kind: 5.0 },
-    MoonDef { planet: 5, name: "Tethys", a_km: 294_670.0, period_d: 1.887_802, radius_km: 531.1, e: 0.0001, m0_deg: 170.0, color: [0.78, 0.78, 0.76], color2: [0.58, 0.58, 0.56], kind: 5.0 },
-    MoonDef { planet: 5, name: "Dione", a_km: 377_420.0, period_d: 2.736_915, radius_km: 561.4, e: 0.0022, m0_deg: 250.0, color: [0.75, 0.75, 0.73], color2: [0.55, 0.55, 0.53], kind: 5.0 },
-    MoonDef { planet: 5, name: "Rhea", a_km: 527_070.0, period_d: 4.517_5, radius_km: 763.8, e: 0.001, m0_deg: 330.0, color: [0.72, 0.72, 0.7], color2: [0.52, 0.52, 0.5], kind: 5.0 },
-    MoonDef { planet: 5, name: "Titan", a_km: 1_221_870.0, period_d: 15.945_421, radius_km: 2_574.7, e: 0.0288, m0_deg: 60.0, color: [0.88, 0.68, 0.4], color2: [0.7, 0.5, 0.3], kind: 2.0 },
-    MoonDef { planet: 5, name: "Iapetus", a_km: 3_560_840.0, period_d: 79.330_183, radius_km: 734.5, e: 0.0293, m0_deg: 120.0, color: [0.66, 0.62, 0.55], color2: [0.25, 0.22, 0.2], kind: 5.0 },
-    MoonDef { planet: 6, name: "Miranda", a_km: 129_900.0, period_d: 1.413_479, radius_km: 235.8, e: 0.0013, m0_deg: 15.0, color: [0.68, 0.7, 0.72], color2: [0.5, 0.52, 0.54], kind: 5.0 },
-    MoonDef { planet: 6, name: "Ariel", a_km: 190_900.0, period_d: 2.520_379, radius_km: 578.9, e: 0.0012, m0_deg: 100.0, color: [0.7, 0.72, 0.74], color2: [0.52, 0.54, 0.56], kind: 5.0 },
-    MoonDef { planet: 6, name: "Umbriel", a_km: 266_000.0, period_d: 4.144_177, radius_km: 584.7, e: 0.0039, m0_deg: 190.0, color: [0.5, 0.52, 0.55], color2: [0.35, 0.37, 0.4], kind: 5.0 },
-    MoonDef { planet: 6, name: "Titania", a_km: 436_300.0, period_d: 8.705_872, radius_km: 788.9, e: 0.0011, m0_deg: 280.0, color: [0.65, 0.67, 0.7], color2: [0.48, 0.5, 0.52], kind: 5.0 },
-    MoonDef { planet: 6, name: "Oberon", a_km: 583_500.0, period_d: 13.463_239, radius_km: 761.4, e: 0.0014, m0_deg: 340.0, color: [0.6, 0.6, 0.62], color2: [0.44, 0.44, 0.46], kind: 5.0 },
+    MoonDef {
+        planet: 2,
+        name: "Moon",
+        a_km: 384_400.0,
+        period_d: 27.321_661,
+        radius_km: 1_737.4,
+        e: 0.0549,
+        m0_deg: 135.27,
+        color: [0.62, 0.62, 0.6],
+        color2: [0.42, 0.42, 0.42],
+        kind: 5.0,
+    },
+    MoonDef {
+        planet: 3,
+        name: "Phobos",
+        a_km: 9_376.0,
+        period_d: 0.318_9,
+        radius_km: 11.3,
+        e: 0.0151,
+        m0_deg: 30.0,
+        color: [0.55, 0.5, 0.46],
+        color2: [0.35, 0.32, 0.3],
+        kind: 5.0,
+    },
+    MoonDef {
+        planet: 3,
+        name: "Deimos",
+        a_km: 23_463.0,
+        period_d: 1.262_4,
+        radius_km: 6.2,
+        e: 0.0002,
+        m0_deg: 200.0,
+        color: [0.58, 0.53, 0.48],
+        color2: [0.38, 0.35, 0.32],
+        kind: 5.0,
+    },
+    MoonDef {
+        planet: 4,
+        name: "Io",
+        a_km: 421_800.0,
+        period_d: 1.769_138,
+        radius_km: 1_821.6,
+        e: 0.0041,
+        m0_deg: 20.0,
+        color: [0.92, 0.82, 0.45],
+        color2: [0.7, 0.55, 0.3],
+        kind: 1.0,
+    },
+    MoonDef {
+        planet: 4,
+        name: "Europa",
+        a_km: 671_100.0,
+        period_d: 3.551_181,
+        radius_km: 1_560.8,
+        e: 0.0094,
+        m0_deg: 140.0,
+        color: [0.85, 0.82, 0.75],
+        color2: [0.65, 0.6, 0.55],
+        kind: 5.0,
+    },
+    MoonDef {
+        planet: 4,
+        name: "Ganymede",
+        a_km: 1_070_400.0,
+        period_d: 7.154_553,
+        radius_km: 2_634.1,
+        e: 0.0013,
+        m0_deg: 260.0,
+        color: [0.62, 0.58, 0.52],
+        color2: [0.45, 0.42, 0.38],
+        kind: 5.0,
+    },
+    MoonDef {
+        planet: 4,
+        name: "Callisto",
+        a_km: 1_882_700.0,
+        period_d: 16.689_017,
+        radius_km: 2_410.3,
+        e: 0.0074,
+        m0_deg: 80.0,
+        color: [0.5, 0.46, 0.42],
+        color2: [0.32, 0.3, 0.28],
+        kind: 5.0,
+    },
+    MoonDef {
+        planet: 5,
+        name: "Mimas",
+        a_km: 185_540.0,
+        period_d: 0.942_422,
+        radius_km: 198.2,
+        e: 0.0196,
+        m0_deg: 10.0,
+        color: [0.7, 0.7, 0.68],
+        color2: [0.5, 0.5, 0.48],
+        kind: 5.0,
+    },
+    MoonDef {
+        planet: 5,
+        name: "Enceladus",
+        a_km: 238_040.0,
+        period_d: 1.370_218,
+        radius_km: 252.1,
+        e: 0.0047,
+        m0_deg: 90.0,
+        color: [0.92, 0.94, 0.96],
+        color2: [0.75, 0.78, 0.82],
+        kind: 5.0,
+    },
+    MoonDef {
+        planet: 5,
+        name: "Tethys",
+        a_km: 294_670.0,
+        period_d: 1.887_802,
+        radius_km: 531.1,
+        e: 0.0001,
+        m0_deg: 170.0,
+        color: [0.78, 0.78, 0.76],
+        color2: [0.58, 0.58, 0.56],
+        kind: 5.0,
+    },
+    MoonDef {
+        planet: 5,
+        name: "Dione",
+        a_km: 377_420.0,
+        period_d: 2.736_915,
+        radius_km: 561.4,
+        e: 0.0022,
+        m0_deg: 250.0,
+        color: [0.75, 0.75, 0.73],
+        color2: [0.55, 0.55, 0.53],
+        kind: 5.0,
+    },
+    MoonDef {
+        planet: 5,
+        name: "Rhea",
+        a_km: 527_070.0,
+        period_d: 4.517_5,
+        radius_km: 763.8,
+        e: 0.001,
+        m0_deg: 330.0,
+        color: [0.72, 0.72, 0.7],
+        color2: [0.52, 0.52, 0.5],
+        kind: 5.0,
+    },
+    MoonDef {
+        planet: 5,
+        name: "Titan",
+        a_km: 1_221_870.0,
+        period_d: 15.945_421,
+        radius_km: 2_574.7,
+        e: 0.0288,
+        m0_deg: 60.0,
+        color: [0.88, 0.68, 0.4],
+        color2: [0.7, 0.5, 0.3],
+        kind: 2.0,
+    },
+    MoonDef {
+        planet: 5,
+        name: "Iapetus",
+        a_km: 3_560_840.0,
+        period_d: 79.330_183,
+        radius_km: 734.5,
+        e: 0.0293,
+        m0_deg: 120.0,
+        color: [0.66, 0.62, 0.55],
+        color2: [0.25, 0.22, 0.2],
+        kind: 5.0,
+    },
+    MoonDef {
+        planet: 6,
+        name: "Miranda",
+        a_km: 129_900.0,
+        period_d: 1.413_479,
+        radius_km: 235.8,
+        e: 0.0013,
+        m0_deg: 15.0,
+        color: [0.68, 0.7, 0.72],
+        color2: [0.5, 0.52, 0.54],
+        kind: 5.0,
+    },
+    MoonDef {
+        planet: 6,
+        name: "Ariel",
+        a_km: 190_900.0,
+        period_d: 2.520_379,
+        radius_km: 578.9,
+        e: 0.0012,
+        m0_deg: 100.0,
+        color: [0.7, 0.72, 0.74],
+        color2: [0.52, 0.54, 0.56],
+        kind: 5.0,
+    },
+    MoonDef {
+        planet: 6,
+        name: "Umbriel",
+        a_km: 266_000.0,
+        period_d: 4.144_177,
+        radius_km: 584.7,
+        e: 0.0039,
+        m0_deg: 190.0,
+        color: [0.5, 0.52, 0.55],
+        color2: [0.35, 0.37, 0.4],
+        kind: 5.0,
+    },
+    MoonDef {
+        planet: 6,
+        name: "Titania",
+        a_km: 436_300.0,
+        period_d: 8.705_872,
+        radius_km: 788.9,
+        e: 0.0011,
+        m0_deg: 280.0,
+        color: [0.65, 0.67, 0.7],
+        color2: [0.48, 0.5, 0.52],
+        kind: 5.0,
+    },
+    MoonDef {
+        planet: 6,
+        name: "Oberon",
+        a_km: 583_500.0,
+        period_d: 13.463_239,
+        radius_km: 761.4,
+        e: 0.0014,
+        m0_deg: 340.0,
+        color: [0.6, 0.6, 0.62],
+        color2: [0.44, 0.44, 0.46],
+        kind: 5.0,
+    },
     // retrograde motion is encoded by the 156.9° inclination in MOON_INCL,
     // NOT by a negative period (audit SCI-026: never encode it twice)
-    MoonDef { planet: 7, name: "Triton", a_km: 354_759.0, period_d: 5.876_854, radius_km: 1_353.4, e: 0.000_02, m0_deg: 50.0, color: [0.78, 0.8, 0.85], color2: [0.6, 0.62, 0.68], kind: 5.0 },
-    MoonDef { planet: 8, name: "Charon", a_km: 19_591.0, period_d: 6.387_23, radius_km: 606.0, e: 0.0002, m0_deg: 220.0, color: [0.6, 0.58, 0.56], color2: [0.42, 0.4, 0.38], kind: 5.0 },
+    MoonDef {
+        planet: 7,
+        name: "Triton",
+        a_km: 354_759.0,
+        period_d: 5.876_854,
+        radius_km: 1_353.4,
+        e: 0.000_02,
+        m0_deg: 50.0,
+        color: [0.78, 0.8, 0.85],
+        color2: [0.6, 0.62, 0.68],
+        kind: 5.0,
+    },
+    MoonDef {
+        planet: 8,
+        name: "Charon",
+        a_km: 19_591.0,
+        period_d: 6.387_23,
+        radius_km: 606.0,
+        e: 0.0002,
+        m0_deg: 220.0,
+        color: [0.6, 0.58, 0.56],
+        color2: [0.42, 0.4, 0.38],
+        kind: 5.0,
+    },
 ];
 
 /// IAU 2015 rotation elements per planet (aligned with [`PLANETS`]):
@@ -443,15 +805,36 @@ pub const MOONS: [MoonDef; 21] = [
 /// Small trigonometric series (Neptune's pole nutation, lunar libration) are
 /// omitted — documented approximation, status=modeled.
 pub const IAU_ROT: [[f64; 6]; 9] = [
-    [281.010_3, -0.032_8, 61.415_5, -0.004_9, 329.598_8, 6.138_510_8], // Mercury
-    [272.76, 0.0, 67.16, 0.0, 160.20, -1.481_368_8],                   // Venus (retrograde)
-    [0.0, -0.641, 90.0, -0.557, 190.147, 360.985_623_5],               // Earth
-    [317.269_202, -0.109_275, 54.432_516, -0.058_271, 176.049_863, 350.891_982_443], // Mars
-    [268.056_595, -0.006_499, 64.495_303, 0.002_413, 284.95, 870.536], // Jupiter (Sys III)
-    [40.589, -0.036, 83.537, -0.004, 38.90, 810.793_902_4],            // Saturn
-    [257.311, 0.0, -15.175, 0.0, 203.81, -501.160_092_8],              // Uranus (retrograde)
-    [299.36, 0.0, 43.46, 0.0, 249.978, 541.139_775_7],                 // Neptune
-    [132.993, 0.0, -6.163, 0.0, 302.695, 56.362_522_5],                // Pluto
+    [
+        281.010_3,
+        -0.032_8,
+        61.415_5,
+        -0.004_9,
+        329.598_8,
+        6.138_510_8,
+    ], // Mercury
+    [272.76, 0.0, 67.16, 0.0, 160.20, -1.481_368_8], // Venus (retrograde)
+    [0.0, -0.641, 90.0, -0.557, 190.147, 360.985_623_5], // Earth
+    [
+        317.269_202,
+        -0.109_275,
+        54.432_516,
+        -0.058_271,
+        176.049_863,
+        350.891_982_443,
+    ], // Mars
+    [
+        268.056_595,
+        -0.006_499,
+        64.495_303,
+        0.002_413,
+        284.95,
+        870.536,
+    ], // Jupiter (Sys III)
+    [40.589, -0.036, 83.537, -0.004, 38.90, 810.793_902_4], // Saturn
+    [257.311, 0.0, -15.175, 0.0, 203.81, -501.160_092_8], // Uranus (retrograde)
+    [299.36, 0.0, 43.46, 0.0, 249.978, 541.139_775_7], // Neptune
+    [132.993, 0.0, -6.163, 0.0, 302.695, 56.362_522_5], // Pluto
 ];
 
 /// Body equatorial basis in the root frame at jd (S3): columns are the node
@@ -463,7 +846,11 @@ pub fn body_equator(pi: usize, jd: f64) -> DMat3 {
     let alpha = (r[0] + r[1] * t).to_radians();
     let delta = (r[2] + r[3] * t).to_radians();
     let m = crate::frames::ecl_from_icrs();
-    let pole = m * DVec3::new(delta.cos() * alpha.cos(), delta.cos() * alpha.sin(), delta.sin());
+    let pole = m * DVec3::new(
+        delta.cos() * alpha.cos(),
+        delta.cos() * alpha.sin(),
+        delta.sin(),
+    );
     let z_icrs = m * DVec3::Z;
     let mut q = z_icrs.cross(pole);
     if q.length_squared() < 1e-12 {
@@ -520,7 +907,11 @@ pub fn moon_rel(mi: usize, jd: f64) -> DVec3 {
     let ma = m.m0_deg.to_radians() + n * (jd - J2000) * DAY;
     let ea = kepler_solve(ma % std::f64::consts::TAU, m.e);
     let a = m.a_km * 1e3;
-    let local = DVec3::new(a * (ea.cos() - m.e), a * (1.0 - m.e * m.e).sqrt() * ea.sin(), 0.0);
+    let local = DVec3::new(
+        a * (ea.cos() - m.e),
+        a * (1.0 - m.e * m.e).sqrt() * ea.sin(),
+        0.0,
+    );
     body_equator(m.planet, jd) * (DMat3::from_rotation_x(MOON_INCL[mi].to_radians()) * local)
 }
 
@@ -530,14 +921,20 @@ pub fn moon_orbit(mi: usize, jd: f64, n: usize) -> Vec<DVec3> {
     let m = &MOONS[mi];
     if m.name == "Moon" {
         let p = m.period_d;
-        return (0..n).map(|k| luna_rel(jd + p * k as f64 / n as f64)).collect();
+        return (0..n)
+            .map(|k| luna_rel(jd + p * k as f64 / n as f64))
+            .collect();
     }
     let a = m.a_km * 1e3;
     let rot = body_equator(m.planet, jd) * DMat3::from_rotation_x(MOON_INCL[mi].to_radians());
     (0..n)
         .map(|k| {
             let ea = k as f64 / n as f64 * std::f64::consts::TAU;
-            rot * DVec3::new(a * (ea.cos() - m.e), a * (1.0 - m.e * m.e).sqrt() * ea.sin(), 0.0)
+            rot * DVec3::new(
+                a * (ea.cos() - m.e),
+                a * (1.0 - m.e * m.e).sqrt() * ea.sin(),
+                0.0,
+            )
         })
         .collect()
 }
@@ -629,13 +1026,16 @@ pub const RINGS: [RingDef; 2] = [
     RingDef {
         planet: 5,
         zones: &[
-            (74_658.0, 92_000.0, 0.35),  // C
-            (92_000.0, 117_580.0, 1.0),  // B
-            (122_170.0, 136_775.0, 0.7), // A (Cassini division gap before)
+            (74_658.0, 92_000.0, 0.35),   // C
+            (92_000.0, 117_580.0, 1.0),   // B
+            (122_170.0, 136_775.0, 0.7),  // A (Cassini division gap before)
             (140_180.0, 140_680.0, 0.25), // F
         ],
     },
-    RingDef { planet: 6, zones: &[(51_149.0, 51_650.0, 0.3)] }, // ε ring
+    RingDef {
+        planet: 6,
+        zones: &[(51_149.0, 51_650.0, 0.3)],
+    }, // ε ring
 ];
 
 // ------------------------------------------------------ mechanics
@@ -814,13 +1214,13 @@ impl NBody {
             a
         };
         let a0 = acc(&self.pos, &self.gm);
-        for i in 0..n {
-            self.vel[i] += a0[i] * (0.5 * dt);
+        for (i, a) in a0.iter().enumerate() {
+            self.vel[i] += *a * (0.5 * dt);
             self.pos[i] += self.vel[i] * dt;
         }
         let a1 = acc(&self.pos, &self.gm);
-        for i in 0..n {
-            self.vel[i] += a1[i] * (0.5 * dt);
+        for (v, a) in self.vel.iter_mut().zip(&a1) {
+            *v += *a * (0.5 * dt);
         }
     }
 }

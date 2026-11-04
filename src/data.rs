@@ -85,7 +85,11 @@ impl Csv {
         row.get(i)?.trim().parse().ok()
     }
     fn s<'a>(&self, row: &'a [String], col: &str) -> &'a str {
-        self.cols.get(col).and_then(|&i| row.get(i)).map(|s| s.trim()).unwrap_or("")
+        self.cols
+            .get(col)
+            .and_then(|&i| row.get(i))
+            .map(|s| s.trim())
+            .unwrap_or("")
     }
 }
 
@@ -227,7 +231,9 @@ fn load_stars(root: &std::path::Path) -> Vec<Star> {
     let mut stars: Vec<Star> = Vec::new();
     let mut seen: HashMap<String, usize> = HashMap::new();
     for file in ["gaia_nearby.csv", "gaia_bright.csv"] {
-        let Some(csv) = Csv::load(&root.join("data").join(file)) else { continue };
+        let Some(csv) = Csv::load(&root.join("data").join(file)) else {
+            continue;
+        };
         for row in &csv.rows {
             let sid = csv.s(row, "source_id").to_string();
             if sid.is_empty() || seen.contains_key(&sid) {
@@ -287,9 +293,7 @@ fn load_stars(root: &std::path::Path) -> Vec<Star> {
             // tightened crossmatch (AUDIT DATA-012): ~0.11° cone, distance
             // within ~40%, magnitude within 2.5 (G vs V tolerance)
             let d = s.pos.normalize_or_zero().dot(dir);
-            if d > 0.999_998
-                && (s.dist_pc / dist).ln().abs() < 0.35
-                && (s.gmag - vmag).abs() < 2.5
+            if d > 0.999_998 && (s.dist_pc / dist).ln().abs() < 0.35 && (s.gmag - vmag).abs() < 2.5
             {
                 let score = 1.0 - d;
                 if best.map(|(_, b)| score < b).unwrap_or(true) {
@@ -368,7 +372,9 @@ fn load_exo(root: &std::path::Path) -> Vec<ExoSystem> {
         if host.is_empty() {
             continue;
         }
-        let (Some(ra), Some(dec)) = (csv.f(row, "ra"), csv.f(row, "dec")) else { continue };
+        let (Some(ra), Some(dec)) = (csv.f(row, "ra"), csv.f(row, "dec")) else {
+            continue;
+        };
         let dist = csv.f(row, "sy_dist");
         let entry = sys.entry(host.clone()).or_insert_with(|| ExoSystem {
             host,
@@ -438,7 +444,10 @@ impl Track {
         if s.is_empty() || jd < s[0].0 || jd > s[s.len() - 1].0 {
             return None;
         }
-        let i = s.partition_point(|(t, _, _)| *t <= jd).min(s.len() - 1).max(1);
+        let i = s
+            .partition_point(|(t, _, _)| *t <= jd)
+            .min(s.len() - 1)
+            .max(1);
         let (t0, p0, v0) = s[i - 1];
         let (t1, p1, v1) = s[i];
         let h = t1 - t0;
@@ -474,10 +483,16 @@ pub fn load_horizons_pub(path: &std::path::Path, expect_center: &str) -> Result<
 /// Parse a cached Horizons vector file, validating center and reference frame
 /// from the header (AUDIT SCI-016) and requiring monotonic finite samples.
 fn load_horizons(path: &std::path::Path, expect_center: &str) -> Result<Track, String> {
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("?").to_string();
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("?")
+        .to_string();
     let text = std::fs::read_to_string(path).map_err(|_| format!("{name}: MISSING"))?;
     if !text.contains("Ecliptic of J2000.0") {
-        return Err(format!("{name}: INVALID — reference plane is not ecliptic J2000"));
+        return Err(format!(
+            "{name}: INVALID — reference plane is not ecliptic J2000"
+        ));
     }
     let center_ok = text
         .lines()
@@ -487,8 +502,12 @@ fn load_horizons(path: &std::path::Path, expect_center: &str) -> Result<Track, S
     if !center_ok {
         return Err(format!("{name}: INVALID — center is not {expect_center}"));
     }
-    let soe = text.find("$$SOE").ok_or_else(|| format!("{name}: INVALID — no $$SOE"))?;
-    let eoe = text.find("$$EOE").ok_or_else(|| format!("{name}: INVALID — no $$EOE"))?;
+    let soe = text
+        .find("$$SOE")
+        .ok_or_else(|| format!("{name}: INVALID — no $$SOE"))?;
+    let eoe = text
+        .find("$$EOE")
+        .ok_or_else(|| format!("{name}: INVALID — no $$EOE"))?;
     let mut samples: Vec<(f64, DVec3, DVec3)> = Vec::new();
     for line in text[soe + 5..eoe].lines() {
         let f: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
@@ -525,13 +544,48 @@ pub struct Craft {
 }
 
 const CRAFT_FILES: [(&str, &str, [f32; 3], &str); 7] = [
-    ("voyager1", "Voyager 1", [0.55, 0.75, 1.0], "launched 1977; interstellar space since 2012"),
-    ("voyager2", "Voyager 2", [0.55, 0.9, 0.9], "launched 1977; interstellar space since 2018"),
-    ("pioneer10", "Pioneer 10", [0.9, 0.7, 0.5], "launched 1972; contact lost 2003"),
-    ("pioneer11", "Pioneer 11", [0.9, 0.6, 0.6], "launched 1973; contact lost 1995"),
-    ("newhorizons", "New Horizons", [0.7, 0.85, 1.0], "Pluto flyby 2015; Kuiper belt"),
-    ("parker", "Parker Solar Probe", [1.0, 0.85, 0.4], "corona-grazing solar orbits"),
-    ("cassini", "Cassini", [0.85, 0.8, 0.55], "Saturn orbiter 2004–2017 (mission ended)"),
+    (
+        "voyager1",
+        "Voyager 1",
+        [0.55, 0.75, 1.0],
+        "launched 1977; interstellar space since 2012",
+    ),
+    (
+        "voyager2",
+        "Voyager 2",
+        [0.55, 0.9, 0.9],
+        "launched 1977; interstellar space since 2018",
+    ),
+    (
+        "pioneer10",
+        "Pioneer 10",
+        [0.9, 0.7, 0.5],
+        "launched 1972; contact lost 2003",
+    ),
+    (
+        "pioneer11",
+        "Pioneer 11",
+        [0.9, 0.6, 0.6],
+        "launched 1973; contact lost 1995",
+    ),
+    (
+        "newhorizons",
+        "New Horizons",
+        [0.7, 0.85, 1.0],
+        "Pluto flyby 2015; Kuiper belt",
+    ),
+    (
+        "parker",
+        "Parker Solar Probe",
+        [1.0, 0.85, 0.4],
+        "corona-grazing solar orbits",
+    ),
+    (
+        "cassini",
+        "Cassini",
+        [0.85, 0.8, 0.55],
+        "Saturn orbiter 2004–2017 (mission ended)",
+    ),
 ];
 
 // ------------------------------------------------- local group & cosmos
@@ -615,7 +669,8 @@ impl Universe {
     /// The frame graph (ENTITY-001) — built lazily from the loaded catalogs;
     /// the single authority for object positions via `atlas::obj_pos`.
     pub fn graph(&self) -> &crate::entity::FrameGraph {
-        self.graph.get_or_init(|| crate::entity::FrameGraph::build(self))
+        self.graph
+            .get_or_init(|| crate::entity::FrameGraph::build(self))
     }
 }
 
@@ -638,7 +693,10 @@ impl Universe {
         health.push(if stars.len() > 1000 {
             format!("stars: OK — {} sources", stars.len())
         } else {
-            format!("stars: MISSING/INVALID — only {} sources loaded", stars.len())
+            format!(
+                "stars: MISSING/INVALID — only {} sources loaded",
+                stars.len()
+            )
         });
         let exos = load_exo(&root);
         health.push(if exos.len() > 500 {
@@ -646,8 +704,11 @@ impl Universe {
         } else {
             format!("exoplanets: MISSING/INVALID — only {} systems", exos.len())
         });
-        let exo_by_host =
-            exos.iter().enumerate().map(|(i, s)| (s.host.clone(), i)).collect();
+        let exo_by_host = exos
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.host.clone(), i))
+            .collect();
         let craft: Vec<Craft> = CRAFT_FILES
             .iter()
             .filter_map(|(file, name, color, note)| {
@@ -656,8 +717,16 @@ impl Universe {
                     "Sun",
                 ) {
                     Ok(track) => {
-                        health.push(format!("craft {name}: OK — {} samples", track.samples.len()));
-                        Some(Craft { name, color: *color, track, note })
+                        health.push(format!(
+                            "craft {name}: OK — {} samples",
+                            track.samples.len()
+                        ));
+                        Some(Craft {
+                            name,
+                            color: *color,
+                            track,
+                            note,
+                        })
                     }
                     Err(e) => {
                         health.push(format!("craft {name}: {e}"));
@@ -697,7 +766,11 @@ impl Universe {
         let land = load_land_rings(&root);
         let night_lights = generate_night_lights(&land);
         health.push(if night_lights.len() > 500 {
-            format!("land/night lights: OK — {} rings, {} lights", land.len(), night_lights.len())
+            format!(
+                "land/night lights: OK — {} rings, {} lights",
+                land.len(),
+                night_lights.len()
+            )
         } else {
             format!(
                 "land/night lights: MISSING/INVALID — {} rings, {} lights (optional)",
@@ -759,13 +832,19 @@ impl Universe {
         }
         // case-insensitive host, then planet-name prefix (AUDIT UI-009)
         let lower = name.to_lowercase();
-        if let Some(i) = self.exos.iter().position(|s| s.host.to_lowercase() == lower) {
+        if let Some(i) = self
+            .exos
+            .iter()
+            .position(|s| s.host.to_lowercase() == lower)
+        {
             return Some(i);
         }
         let prefix = format!("{lower} ");
-        self.exos
-            .iter()
-            .position(|s| s.planets.iter().any(|p| p.name.to_lowercase().starts_with(&prefix)))
+        self.exos.iter().position(|s| {
+            s.planets
+                .iter()
+                .any(|p| p.name.to_lowercase().starts_with(&prefix))
+        })
     }
 
     /// Model-vs-Horizons residual for a planet at jd, if truth data covers it.
@@ -798,7 +877,9 @@ fn load_land_rings(root: &std::path::Path) -> Vec<Vec<[f64; 2]>> {
             }
         }
     };
-    let Some(features) = v["features"].as_array() else { return rings };
+    let Some(features) = v["features"].as_array() else {
+        return rings;
+    };
     for f in features {
         let geom = &f["geometry"];
         match geom["type"].as_str() {
@@ -854,7 +935,9 @@ fn generate_night_lights(rings: &[Vec<[f64; 2]>]) -> Vec<[f32; 2]> {
     let mut out: Vec<[f32; 2]> = Vec::new();
     let mut rng: u64 = 0x51_9E37_79B9_7F4A;
     let mut next = move || -> f64 {
-        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        rng = rng
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (rng >> 11) as f64 / (1u64 << 53) as f64
     };
     let mut tries = 0;
@@ -891,7 +974,9 @@ fn load_coast(root: &std::path::Path) -> Vec<Vec<[f32; 2]>> {
         return Vec::new();
     };
     let mut out = Vec::new();
-    let Some(features) = v["features"].as_array() else { return out };
+    let Some(features) = v["features"].as_array() else {
+        return out;
+    };
     for f in features {
         let geom = &f["geometry"];
         let push_line = |out: &mut Vec<Vec<[f32; 2]>>, coords: &serde_json::Value| {

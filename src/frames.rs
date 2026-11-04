@@ -52,7 +52,12 @@ pub fn galactic_frame() -> GalacticFrame {
     let xg0 = m * unit_radec(266.405_100, -28.936_175); // galactic center dir
     let yg = zg.cross(xg0).normalize();
     let xg = yg.cross(zg).normalize();
-    GalacticFrame { center: xg0 * (8178.0 * PC), x: xg, y: yg, z: zg }
+    GalacticFrame {
+        center: xg0 * (8178.0 * PC),
+        x: xg,
+        y: yg,
+        z: zg,
+    }
 }
 
 /// Supergalactic basis in the root frame (de Vaucouleurs): derived from the
@@ -116,7 +121,13 @@ impl ZoomPan {
         if u1 < 1e-9 * w0.min(w1) {
             let s = (w1 / w0).ln().abs() / rho;
             let k = if w1 >= w0 { 1.0 } else { -1.0 };
-            return Self { w0, r0: 0.0, s_total: s, pure_k: k, u1 };
+            return Self {
+                w0,
+                r0: 0.0,
+                s_total: s,
+                pure_k: k,
+                u1,
+            };
         }
         let r2 = rho * rho;
         // b = (w1^2 - w0^2 +- rho^4 u^2) / (2 w rho^2 u), written in ratios so it
@@ -125,7 +136,13 @@ impl ZoomPan {
         let b1 = (w1 / u1) / (2.0 * r2) - (w0 / w1) * (w0 / u1) / (2.0 * r2) - r2 * (u1 / w1) / 2.0;
         let r0 = -b0.asinh();
         let r1 = -b1.asinh();
-        Self { w0, r0, s_total: ((r1 - r0) / rho).max(0.0), pure_k: 0.0, u1 }
+        Self {
+            w0,
+            r0,
+            s_total: ((r1 - r0) / rho).max(0.0),
+            pure_k: 0.0,
+            u1,
+        }
     }
 
     /// (lateral travel fraction 0..=1, view width) at path position s.
@@ -168,6 +185,12 @@ pub struct Camera {
 
 pub const MPP_MIN: f64 = 4.0;
 pub const MPP_MAX: f64 = 2.0e22; // ~ 1e25 m across a 1600 px window
+
+impl Default for Camera {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Camera {
     pub fn new() -> Self {
@@ -232,12 +255,25 @@ impl Camera {
     /// A pleasant duration for a hop to this view, in seconds.
     pub fn flight_seconds(&self, center: DVec3, mpp: f64, screen_w: f64) -> f64 {
         let dist = (center - self.frame_origin - self.center).length();
-        let s = ZoomPan::new(self.mpp * screen_w, mpp.clamp(MPP_MIN, MPP_MAX) * screen_w, dist).s_total;
+        let s = ZoomPan::new(
+            self.mpp * screen_w,
+            mpp.clamp(MPP_MIN, MPP_MAX) * screen_w,
+            dist,
+        )
+        .s_total;
         (0.75 + 0.1 * s).clamp(0.75, 4.5)
     }
 
     /// Same flight, also gliding the user tilt and yaw to new values.
-    pub fn fly_to_view(&mut self, center: DVec3, mpp: f64, tilt: f64, yaw: f64, screen_w: f64, dur: f64) {
+    pub fn fly_to_view(
+        &mut self,
+        center: DVec3,
+        mpp: f64,
+        tilt: f64,
+        yaw: f64,
+        screen_w: f64,
+        dur: f64,
+    ) {
         self.fly_to(center, mpp, screen_w, dur);
         if let Some(a) = &mut self.anim {
             a.tilt1 = tilt;
@@ -247,7 +283,9 @@ impl Camera {
 
     /// Advance animation; returns true while animating.
     pub fn tick(&mut self, dt: f64, screen_w: f64) -> bool {
-        let Some(a) = &mut self.anim else { return false };
+        let Some(a) = &mut self.anim else {
+            return false;
+        };
         a.t += dt;
         let s = (a.t / a.dur).clamp(0.0, 1.0);
         let e = s * s * (3.0 - 2.0 * s);
@@ -338,7 +376,11 @@ impl Proj {
         let vx = rel.dot(self.right);
         let vy = rel.dot(self.up);
         let vz = rel.dot(self.out);
-        [self.w * 0.5 + vx / self.mpp, self.h * 0.5 - vy / self.mpp, vz]
+        [
+            self.w * 0.5 + vx / self.mpp,
+            self.h * 0.5 - vy / self.mpp,
+            vz,
+        ]
     }
 
     pub fn px(&self, world: DVec3) -> [f32; 2] {
@@ -403,6 +445,36 @@ impl Proj {
             [(v1 - v0) as f32, (v2 - v0) as f32, v0 as f32],
             incidence,
         ))
+    }
+}
+
+/// Human-readable length with adaptive units.
+pub fn fmt_len(m: f64) -> String {
+    let a = m.abs();
+    if a < 1e4 {
+        format!("{m:.0} m")
+    } else if a < 0.05 * AU {
+        format!("{:.0} km", m / 1e3)
+    } else if a < 0.1 * LY {
+        let v = m / AU;
+        if v < 100.0 {
+            format!("{v:.2} AU")
+        } else {
+            format!("{v:.0} AU")
+        }
+    } else if a < 0.8 * PC {
+        format!("{:.2} ly", m / LY)
+    } else if a < 1e3 * PC {
+        let v = m / PC;
+        if v < 100.0 {
+            format!("{v:.1} pc")
+        } else {
+            format!("{v:.0} pc")
+        }
+    } else if a < 1e6 * PC {
+        format!("{:.1} kpc", m / KPC)
+    } else {
+        format!("{:.1} Mpc", m / MPC)
     }
 }
 
@@ -556,35 +628,5 @@ mod tests {
         // center direction agrees with the x axis to well under a degree
         let d = g.center.normalize().dot(g.x);
         assert!(d > 0.9999, "center/x misalignment: cos = {d}");
-    }
-}
-
-/// Human-readable length with adaptive units.
-pub fn fmt_len(m: f64) -> String {
-    let a = m.abs();
-    if a < 1e4 {
-        format!("{m:.0} m")
-    } else if a < 0.05 * AU {
-        format!("{:.0} km", m / 1e3)
-    } else if a < 0.1 * LY {
-        let v = m / AU;
-        if v < 100.0 {
-            format!("{v:.2} AU")
-        } else {
-            format!("{v:.0} AU")
-        }
-    } else if a < 0.8 * PC {
-        format!("{:.2} ly", m / LY)
-    } else if a < 1e3 * PC {
-        let v = m / PC;
-        if v < 100.0 {
-            format!("{v:.1} pc")
-        } else {
-            format!("{v:.0} pc")
-        }
-    } else if a < 1e6 * PC {
-        format!("{:.1} kpc", m / KPC)
-    } else {
-        format!("{:.1} Mpc", m / MPC)
     }
 }

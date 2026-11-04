@@ -36,8 +36,13 @@ mod mapped {
             size_lo: u32,
             name: *const u16,
         ) -> isize;
-        fn MapViewOfFile(map: isize, access: u32, off_hi: u32, off_lo: u32, size: usize)
-            -> *const u8;
+        fn MapViewOfFile(
+            map: isize,
+            access: u32,
+            off_hi: u32,
+            off_lo: u32,
+            size: usize,
+        ) -> *const u8;
         fn UnmapViewOfFile(ptr: *const u8) -> i32;
         fn CloseHandle(h: isize) -> i32;
     }
@@ -122,7 +127,9 @@ impl Buffer {
                 }
             }
         }
-        std::fs::read(path).map(Buffer::Heap).map_err(|e| format!("read {}: {e}", path.display()))
+        std::fs::read(path)
+            .map(Buffer::Heap)
+            .map_err(|e| format!("read {}: {e}", path.display()))
     }
     fn as_slice(&self) -> &[u8] {
         match self {
@@ -171,12 +178,12 @@ impl SpkFile {
         if buf.len() < 1024 || &buf[0..8] != b"DAF/SPK " {
             return Err("not a DAF/SPK file".into());
         }
-        let nd = i32_at_byte(&buf, 8);
-        let ni = i32_at_byte(&buf, 12);
+        let nd = i32_at_byte(buf, 8);
+        let ni = i32_at_byte(buf, 12);
         if nd != 2 || ni != 6 {
             return Err(format!("unexpected DAF ND/NI = {nd}/{ni}"));
         }
-        let fward = i32_at_byte(&buf, 76) as usize;
+        let fward = i32_at_byte(buf, 76) as usize;
         if &buf[88..96] != b"LTL-IEEE" {
             return Err("only little-endian (LTL-IEEE) kernels supported".into());
         }
@@ -223,7 +230,10 @@ impl SpkFile {
         if segments.is_empty() {
             return Err("no Type 2/3 segments found".into());
         }
-        Ok(SpkFile { buf: buffer, segments })
+        Ok(SpkFile {
+            buf: buffer,
+            segments,
+        })
     }
 
     pub fn segment_count(&self) -> usize {
@@ -273,7 +283,9 @@ impl SpkFile {
     }
 
     fn find(&self, target: i32, et: f64) -> Option<&Segment> {
-        self.segments.iter().find(|s| s.target == target && et >= s.t0 && et <= s.t1)
+        self.segments
+            .iter()
+            .find(|s| s.target == target && et >= s.t0 && et <= s.t1)
     }
 }
 
@@ -292,10 +304,11 @@ impl Lsk {
         ];
         let mut entries = Vec::new();
         // pairs look like:  37,   @2017-JAN-1
-        let mut tokens = text.split(&[',', '(', ')', '\n', '\r', ' ', '\t'][..])
+        let tokens = text
+            .split(&[',', '(', ')', '\n', '\r', ' ', '\t'][..])
             .filter(|t| !t.is_empty());
         let mut pending: Option<f64> = None;
-        while let Some(tok) = tokens.next() {
+        for tok in tokens {
             if let Some(date) = tok.strip_prefix('@') {
                 if let Some(dat) = pending.take() {
                     let parts: Vec<&str> = date.split('-').collect();
@@ -362,7 +375,11 @@ impl SpiceSet {
         let entries = std::fs::read_dir(dir).map_err(|e| format!("{e}"))?;
         for entry in entries.flatten() {
             let path = entry.path();
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
             if !name.ends_with(".bsp") {
                 continue;
             }
@@ -449,7 +466,12 @@ pub fn spice() -> Option<&'static SpiceSet> {
             let dir = crate::data::asset_root().join("data/spice");
             match SpiceSet::load(&dir) {
                 Ok(s) => {
-                    log::info!("spice: loaded {} · JD {:.1}–{:.1}", s.kernel_summary(), s.jd0, s.jd1);
+                    log::info!(
+                        "spice: loaded {} · JD {:.1}–{:.1}",
+                        s.kernel_summary(),
+                        s.jd0,
+                        s.jd1
+                    );
                     Some(s)
                 }
                 Err(e) => {
@@ -469,7 +491,9 @@ mod tests {
     #[test]
     fn lsk_parses_known_epochs() {
         let Some(s) = spice() else { return }; // kernels optional in CI
-        let Some(lsk) = &s.lsk else { panic!("lsk should load") };
+        let Some(lsk) = &s.lsk else {
+            panic!("lsk should load")
+        };
         // 2020: ΔAT = 37 → TT−UTC = 69.184 ; 1999: ΔAT = 32
         assert!((lsk.tt_minus_utc(J2000 + 7_500.0) - 69.184).abs() < 1e-9);
         assert!((lsk.tt_minus_utc(J2000 - 360.0) - 64.184).abs() < 1e-9);
@@ -518,11 +542,9 @@ mod tests {
                 eprintln!("kernel for {moon_id} not loaded — gate skipped");
                 continue;
             }
-            let track = crate::data::load_horizons_pub(
-                &root.join("data/spacecraft").join(file),
-                center,
-            )
-            .unwrap_or_else(|e| panic!("{file}: {e}"));
+            let track =
+                crate::data::load_horizons_pub(&root.join("data/spacecraft").join(file), center)
+                    .unwrap_or_else(|e| panic!("{file}: {e}"));
             let last = track.samples.len() - 1;
             for k in [0usize, last / 2, last] {
                 let (jd, rel, _) = track.samples[k];

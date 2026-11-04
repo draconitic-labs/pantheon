@@ -166,7 +166,10 @@ pub fn exo_planet_rel(u: &Universe, ei: usize, k: usize, jd: f64) -> Option<DVec
         ea -= (ea - ecc * ea.sin() - ma % std::f64::consts::TAU) / (1.0 - ecc * ea.cos());
     }
     let a = a_au * AU;
-    let (x, y) = (a * (ea.cos() - ecc), a * (1.0 - ecc * ecc).sqrt() * ea.sin());
+    let (x, y) = (
+        a * (ea.cos() - ecc),
+        a * (1.0 - ecc * ecc).sqrt() * ea.sin(),
+    );
     let (e1, e2) = exo_plane(u, ei);
     Some(e1 * x + e2 * y)
 }
@@ -215,12 +218,14 @@ pub fn obj_name(u: &Universe, obj: ObjectRef) -> String {
 
 /// Outer radius of a planet's rings (m), if it has any.
 pub fn ring_outer_m(pi: usize) -> Option<f64> {
-    RINGS
-        .iter()
-        .find(|r| r.planet == pi)
-        .and_then(|r| r.zones.iter().map(|z| z.1 * 1e3).fold(None, |a: Option<f64>, b| {
-            Some(a.map_or(b, |x: f64| x.max(b)))
-        }))
+    RINGS.iter().find(|r| r.planet == pi).and_then(|r| {
+        r.zones
+            .iter()
+            .map(|z| z.1 * 1e3)
+            .fold(None, |a: Option<f64>, b| {
+                Some(a.map_or(b, |x: f64| x.max(b)))
+            })
+    })
 }
 
 /// Physical radius of a solid body (m), rings included where it has them.
@@ -230,7 +235,11 @@ pub fn body_frame_radius(obj: ObjectRef) -> Option<f64> {
         ObjectRef::Planet(i) => {
             let body = PLANETS[i].radius_km * 1e3;
             // a faint thin ring system shouldn't push the planet away
-            Some(if PLANETS[i].name == "Saturn" { ring_outer_m(i).unwrap_or(body) } else { body })
+            Some(if PLANETS[i].name == "Saturn" {
+                ring_outer_m(i).unwrap_or(body)
+            } else {
+                body
+            })
         }
         ObjectRef::Moon(mi) => Some(MOONS[mi].radius_km * 1e3),
         _ => None,
@@ -261,7 +270,10 @@ pub fn obj_half_extent(u: &Universe, obj: ObjectRef) -> f64 {
         }
         ObjectRef::ExoPlanet(i, k) => {
             let s = &u.exos[i];
-            s.planets[k].rade.map(|r| r * R_EARTH_M * 2.0).unwrap_or(0.05 * AU)
+            s.planets[k]
+                .rade
+                .map(|r| r * R_EARTH_M * 2.0)
+                .unwrap_or(0.05 * AU)
         }
         ObjectRef::Galaxy(i) => u.galaxies[i].size_kpc * KPC * 0.75,
         ObjectRef::Node(i) => u.nodes[i].size_mpc * MPC * 2.2,
@@ -281,7 +293,12 @@ pub fn moon_system_extent(pi: usize) -> Option<f64> {
 /// A pleasant viewpoint for a sunlit body: the sun about 35 degrees to one side
 /// so the terminator shows, north up, seen from above the orbital plane. Bodies
 /// with rings get enough elevation for the rings to open. Returns (tilt, yaw).
-pub fn presentation_angles(u: &Universe, obj: ObjectRef, jd: f64, isl: Option<&Island>) -> (f64, f64) {
+pub fn presentation_angles(
+    u: &Universe,
+    obj: ObjectRef,
+    jd: f64,
+    isl: Option<&Island>,
+) -> (f64, f64) {
     use std::f64::consts::FRAC_PI_2;
     let pos = obj_pos(u, obj, jd, isl);
     let to_sun = (-pos).normalize_or_zero();
@@ -303,7 +320,9 @@ pub fn presentation_angles(u: &Universe, obj: ObjectRef, jd: f64, isl: Option<&I
             // rings: open them, and stay on their sunlit face where there is one
             let pole = planet_axis(i, jd);
             let sun_side = to_sun.dot(pole);
-            for try_deg in [22.0f64, 30.0, 38.0, 46.0, 54.0, -22.0, -30.0, -38.0, -46.0, -54.0] {
+            for try_deg in [
+                22.0f64, 30.0, 38.0, 46.0, 54.0, -22.0, -30.0, -38.0, -46.0, -54.0,
+            ] {
                 elev = try_deg.to_radians();
                 let c = DVec3::new(elev.cos() * lon.cos(), elev.cos() * lon.sin(), elev.sin());
                 let open = c.dot(pole);
@@ -351,7 +370,11 @@ fn zmap(z_view: f64, view_w: f64) -> f32 {
 
 /// A body's frame as view-space axes.
 fn view_axes(proj: &Proj, m: DMat3) -> ([f32; 3], [f32; 3], [f32; 3]) {
-    (view_dir(proj, m.col(0)), view_dir(proj, m.col(1)), view_dir(proj, m.col(2)))
+    (
+        view_dir(proj, m.col(0)),
+        view_dir(proj, m.col(1)),
+        view_dir(proj, m.col(2)),
+    )
 }
 
 /// Any right-handed frame around a pole (for bodies with no known prime meridian).
@@ -367,7 +390,11 @@ fn frame_about(pole: DVec3) -> DMat3 {
 fn sun_basis(jd: f64) -> DMat3 {
     let (alpha, delta) = (286.13f64.to_radians(), 63.87f64.to_radians());
     let m = crate::frames::ecl_from_icrs();
-    let pole = m * DVec3::new(delta.cos() * alpha.cos(), delta.cos() * alpha.sin(), delta.sin());
+    let pole = m * DVec3::new(
+        delta.cos() * alpha.cos(),
+        delta.cos() * alpha.sin(),
+        delta.sin(),
+    );
     let q = (m * DVec3::Z).cross(pole).normalize_or_zero();
     let y = pole.cross(q);
     let w = (84.176 + 14.184_4 * (jd - J2000)).to_radians();
@@ -500,7 +527,9 @@ fn draw_curve(
 }
 
 fn seeded(i: usize, k: usize) -> f64 {
-    let mut x = (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(k as u64 * 0x632B_E5AB);
+    let mut x = (i as u64)
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(k as u64 * 0x632B_E5AB);
     x ^= x >> 29;
     x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
     x ^= x >> 32;
@@ -534,17 +563,72 @@ fn gravity_run(inp: &BuildIn, proj: &Proj, _lw: f64, dl: &mut DrawList, out: &mu
 }
 
 pub const LAYERS: &[LayerDef] = &[
-    LayerDef { name: "scale rings", lw: (12.4, f64::MAX), gate: gate_always, run: ruler_layer },
-    LayerDef { name: "sky", lw: (f64::MIN, 17.8), gate: gate_always, run: sky_layer },
-    LayerDef { name: "solar system", lw: (5.0, 17.5), gate: gate_no_exo, run: solar_layer },
-    LayerDef { name: "belts", lw: (10.4, 17.4), gate: gate_no_exo, run: belts_layer },
-    LayerDef { name: "moon systems", lw: (f64::MIN, 11.4), gate: gate_no_exo, run: moons_layer },
-    LayerDef { name: "heliosphere", lw: (11.8, 17.1), gate: gate_no_exo, run: heliosphere_layer },
-    LayerDef { name: "star field", lw: (15.8, 20.2), gate: gate_always, run: stars_layer },
-    LayerDef { name: "galaxy", lw: (18.0, 23.5), gate: gate_always, run: galaxy_layer },
-    LayerDef { name: "local group", lw: (19.8, 25.0), gate: gate_always, run: localgroup_layer },
-    LayerDef { name: "cosmic web", lw: (22.8, 26.5), gate: gate_always, run: cosmic_layer },
-    LayerDef { name: "gravity view", lw: (f64::MIN, f64::MAX), gate: gate_gravity, run: gravity_run },
+    LayerDef {
+        name: "scale rings",
+        lw: (12.4, f64::MAX),
+        gate: gate_always,
+        run: ruler_layer,
+    },
+    LayerDef {
+        name: "sky",
+        lw: (f64::MIN, 17.8),
+        gate: gate_always,
+        run: sky_layer,
+    },
+    LayerDef {
+        name: "solar system",
+        lw: (5.0, 17.5),
+        gate: gate_no_exo,
+        run: solar_layer,
+    },
+    LayerDef {
+        name: "belts",
+        lw: (10.4, 17.4),
+        gate: gate_no_exo,
+        run: belts_layer,
+    },
+    LayerDef {
+        name: "moon systems",
+        lw: (f64::MIN, 11.4),
+        gate: gate_no_exo,
+        run: moons_layer,
+    },
+    LayerDef {
+        name: "heliosphere",
+        lw: (11.8, 17.1),
+        gate: gate_no_exo,
+        run: heliosphere_layer,
+    },
+    LayerDef {
+        name: "star field",
+        lw: (15.8, 20.2),
+        gate: gate_always,
+        run: stars_layer,
+    },
+    LayerDef {
+        name: "galaxy",
+        lw: (18.0, 23.5),
+        gate: gate_always,
+        run: galaxy_layer,
+    },
+    LayerDef {
+        name: "local group",
+        lw: (19.8, 25.0),
+        gate: gate_always,
+        run: localgroup_layer,
+    },
+    LayerDef {
+        name: "cosmic web",
+        lw: (22.8, 26.5),
+        gate: gate_always,
+        run: cosmic_layer,
+    },
+    LayerDef {
+        name: "gravity view",
+        lw: (f64::MIN, f64::MAX),
+        gate: gate_gravity,
+        run: gravity_run,
+    },
 ];
 
 // ------------------------------------------------------------------ build
@@ -684,7 +768,9 @@ pub fn build(inp: &BuildIn, dl: &mut DrawList) -> FrameOut {
     if dl.discs.len() == dl.disc_z.len() && dl.discs.len() > 1 {
         let mut idx: Vec<usize> = (0..dl.discs.len()).collect();
         idx.sort_by(|&a, &b| {
-            dl.disc_z[b].partial_cmp(&dl.disc_z[a]).unwrap_or(std::cmp::Ordering::Equal)
+            dl.disc_z[b]
+                .partial_cmp(&dl.disc_z[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
         dl.discs = idx.iter().map(|&i| dl.discs[i]).collect();
         dl.disc_tex = idx.iter().map(|&i| dl.disc_tex[i]).collect();
@@ -780,7 +866,11 @@ fn ruler_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
     let fade = smoothstep(12.4, 12.9, lw) as f32;
     let r_px = (nice * unit_m / inp.cam.mpp) as f32;
     if (34.0..(inp.w as f32 * 1.25)).contains(&r_px) {
-        dl.circle(c, r_px, StrokeStyle::new(theme::rgba(theme::INK_FAINT, 0.13 * fade), 1.0));
+        dl.circle(
+            c,
+            r_px,
+            StrokeStyle::new(theme::rgba(theme::INK_FAINT, 0.13 * fade), 1.0),
+        );
         let ang = 0.62f32;
         let txt = if nice >= 1.0 {
             format!("{} {unit_name}", nice.round())
@@ -810,7 +900,13 @@ fn sky_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut F
         return;
     }
     let gal = &inp.u.gal;
-    let in_gal = |v: DVec3| [v.dot(gal.x) as f32, v.dot(gal.y) as f32, v.dot(gal.z) as f32];
+    let in_gal = |v: DVec3| {
+        [
+            v.dot(gal.x) as f32,
+            v.dot(gal.y) as f32,
+            v.dot(gal.z) as f32,
+        ]
+    };
     let k = SKY_TAN_HALF_FOV / (inp.w * 0.5);
     let (r, up, fwd) = (in_gal(proj.right), in_gal(proj.up), in_gal(-proj.out));
     // a photograph of the sky is true only near where it was taken
@@ -818,10 +914,19 @@ fn sky_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut F
     if near_sun {
         dl.want(TexId::Sky);
     }
-    let has_map = if near_sun { inp.tex.fade(TexId::Sky) } else { 0.0 };
+    let has_map = if near_sun {
+        inp.tex.fade(TexId::Sky)
+    } else {
+        0.0
+    };
     out.uni.sky_r = [r[0], r[1], r[2], (w_sky as f32) * has_map.max(0.7)];
     out.uni.sky_u = [up[0], up[1], up[2], k as f32];
-    out.uni.sky_f = [fwd[0], fwd[1], fwd[2], if has_map > 0.0 { 1.0 } else { 0.0 }];
+    out.uni.sky_f = [
+        fwd[0],
+        fwd[1],
+        fwd[2],
+        if has_map > 0.0 { 1.0 } else { 0.0 },
+    ];
     if has_map > 0.0 {
         seen(out, crate::evidence::Ev::SkyPanorama, "sky panorama");
     } else {
@@ -833,7 +938,11 @@ fn sky_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut F
 
     // naked-eye stars by true direction: the real constellations, crisp above
     // the panorama. They occupy the sky, so they never move with pan or zoom.
-    seen(out, crate::evidence::Ev::GaiaDr3, "bright stars by direction");
+    seen(
+        out,
+        crate::evidence::Ev::GaiaDr3,
+        "bright stars by direction",
+    );
     let truth = inp.modes.truth;
     let (cx, cy) = (inp.w * 0.5, inp.h * 0.5);
     for s in &inp.u.stars {
@@ -879,7 +988,11 @@ fn solar_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
     use crate::evidence::Ev;
     seen(
         out,
-        if sim::eph_is_spice(jd) { Ev::De440 } else { Ev::ApproxElements },
+        if sim::eph_is_spice(jd) {
+            Ev::De440
+        } else {
+            Ev::ApproxElements
+        },
         "planet states",
     );
     if inp.modes.orbits {
@@ -888,8 +1001,7 @@ fn solar_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
 
     sun_body(inp, proj, lw, w_solar, dl, out);
 
-    for i in 0..PLANETS.len() {
-        let p = &PLANETS[i];
+    for (i, p) in PLANETS.iter().enumerate() {
         let pos = obj_pos(u, ObjectRef::Planet(i), jd, inp.island);
         let a_px = (p.el[0] * AU / cam.mpp) as f32;
         let px = proj.px(pos);
@@ -912,7 +1024,9 @@ fn solar_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             };
             let body_px = (p.radius_km * 1e3 / cam.mpp) as f32;
             let close = 1.0 - ((body_px - 40.0) / 160.0).clamp(0.0, 1.0);
-            let fade = ((a_px - 7.0) / 18.0).clamp(0.0, 1.0) * (0.3 + 0.7 * (1800.0 / a_px).min(1.0)) * close;
+            let fade = ((a_px - 7.0) / 18.0).clamp(0.0, 1.0)
+                * (0.3 + 0.7 * (1800.0 / a_px).min(1.0))
+                * close;
             let base = [
                 theme::INK_GOLD[0] * 0.7 + p.color[0] * 0.3,
                 theme::INK_GOLD[1] * 0.7 + p.color[1] * 0.3,
@@ -934,18 +1048,25 @@ fn solar_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             seen(out, Ev::HorizonsVectors, "ephemeris arcs");
             if let Some(Some(t)) = u.planet_truth.get(i) {
                 if t.covers(jd, 30.0) && a_px > 40.0 {
-                    let pts: Vec<[f32; 2]> =
-                        t.samples.iter().step_by(2).map(|(_, w, _)| proj.px(*w)).collect();
+                    let pts: Vec<[f32; 2]> = t
+                        .samples
+                        .iter()
+                        .step_by(2)
+                        .map(|(_, w, _)| proj.px(*w))
+                        .collect();
                     dl.polyline(
                         &pts,
                         false,
-                        StrokeStyle::new(theme::rgba(Prov::Measured.rgb(), 0.35), 1.0).dashed(6.0, 0.5),
+                        StrokeStyle::new(theme::rgba(Prov::Measured.rgb(), 0.35), 1.0)
+                            .dashed(6.0, 0.5),
                     );
                 }
             }
         }
         let r_px = (p.radius_km * 1e3 / cam.mpp) as f32;
-        let ring_reach = ring_outer_m(i).map(|m| (m / cam.mpp) as f32).unwrap_or(r_px);
+        let ring_reach = ring_outer_m(i)
+            .map(|m| (m / cam.mpp) as f32)
+            .unwrap_or(r_px);
         if !on_screen(px, inp.w, inp.h, ring_reach.max(r_px * 1.3) + 40.0) {
             continue;
         }
@@ -961,7 +1082,11 @@ fn solar_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             dl.point(px, s, s * 1.8, 0.0, c);
         }
         let pick_r = if p.name == "Saturn" { ring_reach } else { r_px };
-        out.picks.push(Pickable { pos: px, r: pick_r.max(9.0), obj: ObjectRef::Planet(i) });
+        out.picks.push(Pickable {
+            pos: px,
+            r: pick_r.max(9.0),
+            obj: ObjectRef::Planet(i),
+        });
         if a_px > 26.0 {
             out.labels.push(Label {
                 pos: [px[0], px[1] - pick_r.max(4.0) - 11.0],
@@ -980,7 +1105,14 @@ fn solar_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
     }
 }
 
-fn sun_body(inp: &BuildIn, proj: &Proj, lw: f64, w_solar: f64, dl: &mut DrawList, out: &mut FrameOut) {
+fn sun_body(
+    inp: &BuildIn,
+    proj: &Proj,
+    lw: f64,
+    w_solar: f64,
+    dl: &mut DrawList,
+    out: &mut FrameOut,
+) {
     let cam = inp.cam;
     let jd = inp.clock.jd;
     let sun_px = proj.px(DVec3::ZERO);
@@ -996,7 +1128,11 @@ fn sun_body(inp: &BuildIn, proj: &Proj, lw: f64, w_solar: f64, dl: &mut DrawList
         if r > 6.0 {
             dl.want(tex);
         }
-        let fade = if inp.tex.on_disk(tex) { inp.tex.fade(tex) } else { 0.0 };
+        let fade = if inp.tex.on_disk(tex) {
+            inp.tex.fade(tex)
+        } else {
+            0.0
+        };
         // a body close-up keeps surface detail; a distant Sun blazes
         let emission = 1.45 + 6.5 * (1.0 - smoothstep(6.0, 150.0, r as f64)) as f32;
         let mut d = DiscInst::plain(sun_px, [r, 0.0, KIND_STAR, 0.13], zd);
@@ -1009,9 +1145,17 @@ fn sun_body(inp: &BuildIn, proj: &Proj, lw: f64, w_solar: f64, dl: &mut DrawList
         d.flags = [0.0, 0.0, 0.0, emission];
         dl.disc(d, zd, [fade.gt(&0.0).then_some(tex), None, None]);
         note_surface(out, r, SurfaceSource::Sun);
-        seen(out, crate::evidence::Ev::CoronaIllustrative, "solar corona and granulation motion");
+        seen(
+            out,
+            crate::evidence::Ev::CoronaIllustrative,
+            "solar corona and granulation motion",
+        );
         if fade > 0.0 {
-            seen(out, crate::evidence::Ev::SurfaceImagery, "solar surface map");
+            seen(
+                out,
+                crate::evidence::Ev::SurfaceImagery,
+                "solar surface map",
+            );
         }
     }
     // glare: fades out as the disc resolves, so there is no size pop
@@ -1020,9 +1164,20 @@ fn sun_body(inp: &BuildIn, proj: &Proj, lw: f64, w_solar: f64, dl: &mut DrawList
         let far = smoothstep(15.0, 17.2, lw) as f32;
         let core = (1.8 - 0.7 * far).max(1.1);
         let a = (2.8 - 1.4 * far) * glare * w_solar as f32;
-        dl.point_z(sun_px, core.max(r * 0.8), 13.0 - 7.0 * far, 0.22 * (1.0 - far), [1.0, 0.84, 0.58, a], zd - 0.001);
+        dl.point_z(
+            sun_px,
+            core.max(r * 0.8),
+            13.0 - 7.0 * far,
+            0.22 * (1.0 - far),
+            [1.0, 0.84, 0.58, a],
+            zd - 0.001,
+        );
     }
-    out.picks.push(Pickable { pos: sun_px, r: r.max(10.0), obj: ObjectRef::Sun });
+    out.picks.push(Pickable {
+        pos: sun_px,
+        r: r.max(10.0),
+        obj: ObjectRef::Sun,
+    });
     if lw > 10.5 && lw < 16.6 {
         out.labels.push(Label {
             pos: [sun_px[0], sun_px[1] - r.max(8.0) - 12.0],
@@ -1108,7 +1263,10 @@ fn draw_planet_disc(
             dl.want(t);
         }
     }
-    let fade = tex.filter(|t| inp.tex.on_disk(*t)).map(|t| inp.tex.fade(t)).unwrap_or(0.0);
+    let fade = tex
+        .filter(|t| inp.tex.on_disk(*t))
+        .map(|t| inp.tex.fade(t))
+        .unwrap_or(0.0);
     let is_earth = p.kind == 4.0;
     let has_night = is_earth && r_px > 10.0 && inp.tex.on_disk(TexId::EarthNight);
     let has_clouds = is_earth && r_px > 10.0 && inp.tex.on_disk(TexId::EarthClouds);
@@ -1131,7 +1289,11 @@ fn draw_planet_disc(
     // rings
     let ring_def = RINGS.iter().find(|r| r.planet == i);
     let mut ring_fx = (0.0f32, 0.0f32, 0.0f32);
-    let mut tex_c = if clouds_on { Some(TexId::EarthClouds) } else { None };
+    let mut tex_c = if clouds_on {
+        Some(TexId::EarthClouds)
+    } else {
+        None
+    };
     if let Some(ring) = ring_def {
         let inner = ring.zones.iter().map(|z| z.0).fold(f64::MAX, f64::min);
         let outer = ring.zones.iter().map(|z| z.1).fold(0.0f64, f64::max);
@@ -1175,7 +1337,8 @@ fn draw_planet_disc(
     d.axis = [bz[0], bz[1], bz[2], sim::body_w(i, jd) as f32];
     d.bx = [bx[0], bx[1], bx[2], fade];
     // clouds drift gently against the ground: one snapshot, not today's weather
-    let cloud_off = (((jd - J2000) * 0.06) % std::f64::consts::TAU) as f32 + inp.anim_t as f32 * 0.0012;
+    let cloud_off =
+        (((jd - J2000) * 0.06) % std::f64::consts::TAU) as f32 + inp.anim_t as f32 * 0.0012;
     d.by = [by[0], by[1], by[2], cloud_off];
     d.ca = [p.color[0], p.color[1], p.color[2], cap];
     d.cb = [p.color2[0], p.color2[1], p.color2[2], det];
@@ -1200,7 +1363,14 @@ fn draw_planet_disc(
     // mask the point-to-disc transition with a fading glow (UX B1)
     if r_px < 3.2 {
         let a = ((3.2 - r_px) / 2.0).clamp(0.0, 1.0) * 1.2;
-        dl.point_z(px, r_px.max(1.6), 3.2, 0.0, [p.color[0], p.color[1], p.color[2], a], zd - 0.001);
+        dl.point_z(
+            px,
+            r_px.max(1.6),
+            3.2,
+            0.0,
+            [p.color[0], p.color[1], p.color[2], a],
+            zd - 0.001,
+        );
     }
     // Earth: vector overlays. With real imagery the coastlines become an audit
     // overlay for Truth mode; without it they carry the map.
@@ -1238,7 +1408,11 @@ fn earth_vector_layer(
         pos + local * r_m
     };
     let front = |w: DVec3| -> bool { (w - pos).dot(proj.out) > 0.0 };
-    let coast_alpha = if truth { 0.85 } else { 0.62 * (1.0 - imagery_fade) };
+    let coast_alpha = if truth {
+        0.85
+    } else {
+        0.62 * (1.0 - imagery_fade)
+    };
     if coast_alpha > 0.01 {
         seen(out, crate::evidence::Ev::Coastlines, "Earth coastlines");
         dl.set_over(true);
@@ -1304,7 +1478,14 @@ fn earth_vector_layer(
                 continue;
             }
             let a = 0.6 * ((night - 0.02) / 0.16).clamp(0.0, 1.0) as f32;
-            dl.point_z(proj.px(w), 0.85 * scale, 2.4 * scale, 0.0, [1.0, 0.78, 0.46, a], zd);
+            dl.point_z(
+                proj.px(w),
+                0.85 * scale,
+                2.4 * scale,
+                0.0,
+                [1.0, 0.78, 0.46, a],
+                zd,
+            );
         }
     }
 }
@@ -1318,8 +1499,7 @@ fn moons_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
     }
     let mut any_spice = false;
     let mut any_mean = false;
-    for mi in 0..MOONS.len() {
-        let m = &MOONS[mi];
+    for (mi, m) in MOONS.iter().enumerate() {
         let a_px = (m.a_km * 1e3 / cam.mpp) as f32;
         // the ORBIT is only worth drawing in a size window, but the BODY must
         // never be culled by its own orbit size (diving to a moon previously
@@ -1362,18 +1542,32 @@ fn moons_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
                 truth,
                 Prov::Modeled,
             );
-            draw_curve(inp, proj, dl, StrokeStyle::new(c, 0.95).glow(0.9), &f, &grade, -1.0, 0.0, 40);
+            draw_curve(
+                inp,
+                proj,
+                dl,
+                StrokeStyle::new(c, 0.95).glow(0.9),
+                &f,
+                &grade,
+                -1.0,
+                0.0,
+                40,
+            );
         }
         // measured Moon arc from Horizons (geocentric): Truth-mode audit overlay
         if truth && is_luna && inp.modes.trails {
             if let Some(t) = &u.moon_truth {
                 if t.covers(jd, 5.0) {
-                    let pts: Vec<[f32; 2]> =
-                        t.samples.iter().map(|(_, rel, _)| proj.px(ppos + *rel)).collect();
+                    let pts: Vec<[f32; 2]> = t
+                        .samples
+                        .iter()
+                        .map(|(_, rel, _)| proj.px(ppos + *rel))
+                        .collect();
                     dl.polyline(
                         &pts,
                         false,
-                        StrokeStyle::new(theme::rgba(Prov::Measured.rgb(), 0.4), 1.0).dashed(5.0, 0.55),
+                        StrokeStyle::new(theme::rgba(Prov::Measured.rgb(), 0.4), 1.0)
+                            .dashed(5.0, 0.55),
                     );
                 }
             }
@@ -1391,7 +1585,11 @@ fn moons_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             let zd = zmap(proj.screen(mpos)[2], cam.mpp * inp.w);
             // moons keep one face to the parent (mean tidal lock, no libration)
             let pole = planet_axis(m.planet, jd);
-            let pole = if is_luna { (DVec3::Z + pole * 0.05).normalize() } else { pole };
+            let pole = if is_luna {
+                (DVec3::Z + pole * 0.05).normalize()
+            } else {
+                pole
+            };
             let to_parent = (-rel).normalize_or_zero();
             let x = (to_parent - pole * to_parent.dot(pole)).normalize_or_zero();
             let (bx, by, bz) = view_axes(proj, DMat3::from_cols(x, pole.cross(x), pole));
@@ -1401,13 +1599,20 @@ fn moons_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
                     dl.want(t);
                 }
             }
-            let fade = tex.filter(|t| inp.tex.on_disk(*t)).map(|t| inp.tex.fade(t)).unwrap_or(0.0);
+            let fade = tex
+                .filter(|t| inp.tex.on_disk(*t))
+                .map(|t| inp.tex.fade(t))
+                .unwrap_or(0.0);
             if fade > 0.0 {
                 note_surface(out, r_px, SurfaceSource::Map);
                 seen(out, crate::evidence::Ev::SurfaceImagery, "surface maps");
             } else {
                 note_surface(out, r_px, SurfaceSource::Procedural);
-                seen(out, crate::evidence::Ev::ProceduralSurface, "surface patterns");
+                seen(
+                    out,
+                    crate::evidence::Ev::ProceduralSurface,
+                    "surface patterns",
+                );
             }
             let mut d = DiscInst::plain(mpx, [r_px, 0.0, m.kind, 0.23 + mi as f32 * 0.041], zd);
             d.sun = [sun_dir[0], sun_dir[1], sun_dir[2], 0.05];
@@ -1424,12 +1629,23 @@ fn moons_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             dl.disc(d, zd, [(fade > 0.0).then_some(TexId::Moon), None, None]);
             if r_px < 3.2 {
                 let a = ((3.2 - r_px) / 2.0).clamp(0.0, 1.0) * 1.1;
-                dl.point_z(mpx, r_px.max(1.4), 2.6, 0.0, [m.color[0], m.color[1], m.color[2], a], zd - 0.001);
+                dl.point_z(
+                    mpx,
+                    r_px.max(1.4),
+                    2.6,
+                    0.0,
+                    [m.color[0], m.color[1], m.color[2], a],
+                    zd - 0.001,
+                );
             }
         } else {
             dl.point(mpx, 1.2, 2.0, 0.0, ink(m.color, 1.25, truth, Prov::Modeled));
         }
-        out.picks.push(Pickable { pos: mpx, r: r_px.max(8.0), obj: ObjectRef::Moon(mi) });
+        out.picks.push(Pickable {
+            pos: mpx,
+            r: r_px.max(8.0),
+            obj: ObjectRef::Moon(mi),
+        });
         if a_px > 60.0 {
             out.labels.push(Label {
                 pos: [mpx[0], mpx[1] - r_px.max(3.0) - 10.0],
@@ -1445,7 +1661,11 @@ fn moons_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
         seen(out, crate::evidence::Ev::SatelliteSpk, "moon states");
     }
     if any_mean {
-        seen(out, crate::evidence::Ev::MoonMeanElements, "moon states (no kernel)");
+        seen(
+            out,
+            crate::evidence::Ev::MoonMeanElements,
+            "moon states (no kernel)",
+        );
     }
 }
 
@@ -1485,14 +1705,30 @@ fn belt(
 fn belts_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut FrameOut) {
     let aw = band(lw, 10.5, 13.3, 0.5) * ((2.75 * AU / inp.cam.mpp) / 140.0).clamp(0.08, 1.0);
     if aw > 0.01 {
-        seen(out, crate::evidence::Ev::GlyphIllustrative, "asteroid belt sample");
+        seen(
+            out,
+            crate::evidence::Ev::GlyphIllustrative,
+            "asteroid belt sample",
+        );
         // the Kirkwood gaps (resonances with Jupiter) are real; the rocks are not
         let radius = |k: usize| {
             let r = 2.1 + 1.2 * seeded(k, 11);
-            let gap = [2.50, 2.82, 2.95, 3.27].iter().any(|g| (r - g).abs() < 0.035);
+            let gap = [2.50, 2.82, 2.95, 3.27]
+                .iter()
+                .any(|g| (r - g).abs() < 0.035);
             (!gap).then_some(r)
         };
-        belt(inp, proj, dl, 3200, 11, &radius, 0.28, 0.55 * aw as f32, [0.74, 0.68, 0.58]);
+        belt(
+            inp,
+            proj,
+            dl,
+            3200,
+            11,
+            &radius,
+            0.28,
+            0.55 * aw as f32,
+            [0.74, 0.68, 0.58],
+        );
         // Jupiter's Trojans, clustered 60 degrees ahead of and behind the planet
         let jpos = obj_pos(inp.u, ObjectRef::Planet(4), inp.clock.jd, inp.island);
         let jlon = jpos.y.atan2(jpos.x);
@@ -1504,13 +1740,23 @@ fn belts_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             let p = proj.px(DVec3::new(r * lon.cos(), r * lon.sin(), z));
             if on_screen(p, inp.w, inp.h, 3.0) {
                 let a = 0.5 * aw as f32 * (0.4 + 0.8 * seeded(k, 24) as f32);
-                dl.point(p, 0.55, 0.9, 0.0, ink([0.70, 0.62, 0.52], a, inp.modes.truth, Prov::Illustrative));
+                dl.point(
+                    p,
+                    0.55,
+                    0.9,
+                    0.0,
+                    ink([0.70, 0.62, 0.52], a, inp.modes.truth, Prov::Illustrative),
+                );
             }
         }
     }
     let kw = band(lw, 12.2, 15.2, 0.5) * ((44.0 * AU / inp.cam.mpp) / 240.0).clamp(0.08, 1.0);
     if kw > 0.01 {
-        seen(out, crate::evidence::Ev::GlyphIllustrative, "Kuiper belt sample");
+        seen(
+            out,
+            crate::evidence::Ev::GlyphIllustrative,
+            "Kuiper belt sample",
+        );
         let radius = |k: usize| {
             // plutinos pile up at the 3:2 resonance; the cold belt lies at 42-48 AU
             Some(if k % 4 == 0 {
@@ -1519,7 +1765,17 @@ fn belts_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
                 41.5 + 6.5 * seeded(k, 31)
             })
         };
-        belt(inp, proj, dl, 3200, 31, &radius, 0.18, 0.62 * kw as f32, [0.62, 0.70, 0.84]);
+        belt(
+            inp,
+            proj,
+            dl,
+            3200,
+            31,
+            &radius,
+            0.18,
+            0.62 * kw as f32,
+            [0.62, 0.70, 0.84],
+        );
     }
     if lw > 12.3 && lw < 14.2 {
         let a = (band(lw, 12.3, 14.2, 0.3) * 0.5) as f32;
@@ -1566,17 +1822,39 @@ fn heliosphere_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out
     let (dx, dy) = (down.dot(proj.right), -down.dot(proj.up));
     let len = (dx * dx + dy * dy).sqrt().max(1e-3);
     let w_helio = band(lw, 12.4, 15.4, 0.6);
-    out.uni.helio = [sun_px[0], sun_px[1], px_per_au, (w_helio * if truth { 0.35 } else { 1.0 }) as f32];
+    out.uni.helio = [
+        sun_px[0],
+        sun_px[1],
+        px_per_au,
+        (w_helio * if truth { 0.35 } else { 1.0 }) as f32,
+    ];
     let w_oort = band(lw, 14.5, 17.5, 0.7);
-    out.uni.helio_b = [(dx / len) as f32, (dy / len) as f32, (w_oort * if truth { 0.35 } else { 1.0 }) as f32, 0.0];
+    out.uni.helio_b = [
+        (dx / len) as f32,
+        (dy / len) as f32,
+        (w_oort * if truth { 0.35 } else { 1.0 }) as f32,
+        0.0,
+    ];
     if w <= 0.01 {
         return;
     }
-    seen(out, crate::evidence::Ev::GlyphIllustrative, "heliosphere and Oort cloud");
-    for (r_au, name, dash) in [(90.0, "Termination shock", 9.0), (123.0, "Heliopause", 14.0)] {
+    seen(
+        out,
+        crate::evidence::Ev::GlyphIllustrative,
+        "heliosphere and Oort cloud",
+    );
+    for (r_au, name, dash) in [
+        (90.0, "Termination shock", 9.0),
+        (123.0, "Heliopause", 14.0),
+    ] {
         let r_px = (r_au * AU / inp.cam.mpp) as f32;
         if r_px > 60.0 && r_px < 4_000.0 {
-            let c = ink([0.5, 0.62, 0.85], 0.32 * w as f32, truth, Prov::Illustrative);
+            let c = ink(
+                [0.5, 0.62, 0.85],
+                0.32 * w as f32,
+                truth,
+                Prov::Illustrative,
+            );
             dl.circle(sun_px, r_px, StrokeStyle::new(c, 1.0).dashed(dash, 0.55));
             out.labels.push(Label {
                 pos: [sun_px[0] + r_px * 0.71, sun_px[1] - r_px * 0.71],
@@ -1596,10 +1874,20 @@ fn heliosphere_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out
             let th = seeded(k, 6) * std::f64::consts::TAU;
             let sinph = 2.0 * seeded(k, 7) - 1.0;
             let cosph = (1.0 - sinph * sinph).sqrt();
-            let p = proj.px(DVec3::new(r * cosph * th.cos(), r * cosph * th.sin(), r * sinph));
+            let p = proj.px(DVec3::new(
+                r * cosph * th.cos(),
+                r * cosph * th.sin(),
+                r * sinph,
+            ));
             if on_screen(p, inp.w, inp.h, 4.0) {
                 let a = 0.5 * ow as f32 * (0.3 + 0.9 * seeded(k, 8) as f32);
-                dl.point(p, 0.55, 0.9, 0.0, ink([0.58, 0.66, 0.84], a, truth, Prov::Illustrative));
+                dl.point(
+                    p,
+                    0.55,
+                    0.9,
+                    0.0,
+                    ink([0.58, 0.66, 0.84], a, truth, Prov::Illustrative),
+                );
             }
         }
     }
@@ -1611,7 +1899,11 @@ fn craft_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
     if w <= 0.01 || u.craft.is_empty() {
         return;
     }
-    seen(out, crate::evidence::Ev::HorizonsVectors, "spacecraft trajectories");
+    seen(
+        out,
+        crate::evidence::Ev::HorizonsVectors,
+        "spacecraft trajectories",
+    );
     for (ci, c) in u.craft.iter().enumerate() {
         let (jd0, jd1) = c.track.span();
         let selected = inp.focus == Some(ObjectRef::Craft(ci));
@@ -1620,12 +1912,22 @@ fn craft_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             // resampled through the Hermite track, so looping paths stay smooth;
             // Parker's rosette around the Sun is kept quiet unless it's selected
             let quiet = c.name == "Parker Solar Probe" && !selected;
-            let a = (if selected { 0.85 } else if quiet { 0.05 } else { 0.24 }) * w as f32;
+            let a = (if selected {
+                0.85
+            } else if quiet {
+                0.05
+            } else {
+                0.24
+            }) * w as f32;
             let mut st = StrokeStyle::new(ink(c.color, a, truth, Prov::Measured), 1.0);
             if !quiet {
                 st = st.glow(0.9);
             }
-            let f = |t: f64| c.track.pos_at(jd0 + (upto - jd0) * t).unwrap_or(DVec3::ZERO);
+            let f = |t: f64| {
+                c.track
+                    .pos_at(jd0 + (upto - jd0) * t)
+                    .unwrap_or(DVec3::ZERO)
+            };
             let one = |_t: f64| 1.0f32;
             let seeds = (c.track.samples.len() / 3).clamp(48, 320);
             draw_curve(inp, proj, dl, st, &f, &one, 0.0, 1.0, seeds);
@@ -1642,11 +1944,25 @@ fn craft_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             if on_screen(px, inp.w, inp.h, 40.0) {
                 let ended = past_horizon && c.name == "Cassini";
                 let a = if past_horizon { 0.4 } else { 1.4 };
-                dl.point(px, 1.4, 3.2, 0.0, ink(c.color, a * w as f32, truth, Prov::Measured));
-                out.picks.push(Pickable { pos: px, r: 9.0, obj: ObjectRef::Craft(ci) });
+                dl.point(
+                    px,
+                    1.4,
+                    3.2,
+                    0.0,
+                    ink(c.color, a * w as f32, truth, Prov::Measured),
+                );
+                out.picks.push(Pickable {
+                    pos: px,
+                    r: 9.0,
+                    obj: ObjectRef::Craft(ci),
+                });
                 out.labels.push(Label {
                     pos: [px[0] + 8.0, px[1] - 10.0],
-                    text: if ended { format!("{} (ended 2017)", c.name) } else { c.name.into() },
+                    text: if ended {
+                        format!("{} (ended 2017)", c.name)
+                    } else {
+                        c.name.into()
+                    },
                     size: 11.0,
                     color: theme::rgba(c.color, 0.85 * w as f32),
                     priority: 10,
@@ -1679,11 +1995,18 @@ fn stars_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
         }
         let m = s.absmag;
         let core = (1.45 - 0.09 * m).clamp(0.6, 2.9) * (0.72 + 0.28 * crowd);
-        let bright = (2.3 - 0.17 * m).clamp(0.28, 5.0) * w as f32 * (crowd + (m < 1.0) as i32 as f32 * 0.5 * crowd);
+        let bright = (2.3 - 0.17 * m).clamp(0.28, 5.0)
+            * w as f32
+            * (crowd + (m < 1.0) as i32 as f32 * 0.5 * crowd);
         let rgb = crate::data::star_rgb(s.bp_rp);
         let c = if truth {
             let p = Prov::Measured.rgb();
-            [p[0] * 0.6 + rgb[0] * 0.4, p[1] * 0.6 + rgb[1] * 0.4, p[2] * 0.6 + rgb[2] * 0.4, bright]
+            [
+                p[0] * 0.6 + rgb[0] * 0.4,
+                p[1] * 0.6 + rgb[1] * 0.4,
+                p[2] * 0.6 + rgb[2] * 0.4,
+                bright,
+            ]
         } else {
             [rgb[0], rgb[1], rgb[2], bright]
         };
@@ -1692,7 +2015,11 @@ fn stars_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
         let glow = core * (1.5 + (1.6 - m * 0.16).clamp(0.0, 1.6));
         dl.point(px, core, glow, spike, c);
         if core > 1.2 || s.name.is_some() {
-            out.picks.push(Pickable { pos: px, r: core.max(7.0), obj: ObjectRef::Star(si) });
+            out.picks.push(Pickable {
+                pos: px,
+                r: core.max(7.0),
+                obj: ObjectRef::Star(si),
+            });
         }
         if let Some(name) = s.name {
             if lw > 16.6 {
@@ -1718,14 +2045,22 @@ fn stars_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             priority: 60,
             obj: Some(ObjectRef::Sun),
         });
-        dl.circle(sun_px, 7.0, StrokeStyle::new(theme::rgba(theme::INK_GOLD, 0.75 * w as f32), 1.0));
+        dl.circle(
+            sun_px,
+            7.0,
+            StrokeStyle::new(theme::rgba(theme::INK_GOLD, 0.75 * w as f32), 1.0),
+        );
     }
     // where measurement stops: honest and, at this scale, useful
     let edge_w = band(lw, 17.9, 19.3, 0.35) as f32;
     if edge_w > 0.01 {
         let r_px = (83.0 * PC / inp.cam.mpp) as f32;
         if r_px > 24.0 {
-            dl.circle(sun_px, r_px, StrokeStyle::new(theme::rgba(theme::INK_BLUE, 0.22 * edge_w), 1.0).dashed(9.0, 0.5));
+            dl.circle(
+                sun_px,
+                r_px,
+                StrokeStyle::new(theme::rgba(theme::INK_BLUE, 0.22 * edge_w), 1.0).dashed(9.0, 0.5),
+            );
             out.labels.push(Label {
                 pos: [sun_px[0] - r_px * 0.71, sun_px[1] + r_px * 0.71],
                 text: "Gaia sample in this atlas ends here (83 pc)".into(),
@@ -1759,9 +2094,18 @@ fn stars_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
         for (k, (_, ei, px)) in cands.iter().take(40).enumerate() {
             let e = &u.exos[*ei];
             let fade = if k < 16 { 1.0 } else { 0.45 };
-            let c = ink(theme::INK_GOLD, 0.62 * pw as f32 * fade, truth, Prov::Measured);
+            let c = ink(
+                theme::INK_GOLD,
+                0.62 * pw as f32 * fade,
+                truth,
+                Prov::Measured,
+            );
             dl.circle(*px, 5.0, StrokeStyle::new(c, 0.9));
-            out.picks.push(Pickable { pos: *px, r: 8.0, obj: ObjectRef::ExoHost(*ei) });
+            out.picks.push(Pickable {
+                pos: *px,
+                r: 8.0,
+                obj: ObjectRef::ExoHost(*ei),
+            });
             if lw < 17.6 && k < 14 {
                 out.labels.push(Label {
                     pos: [px[0], px[1] + 14.0],
@@ -1792,13 +2136,27 @@ fn galaxy_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mu
     if w <= 0.01 {
         return;
     }
-    seen(out, crate::evidence::Ev::GalaxyFog, "Milky Way illustration");
+    seen(
+        out,
+        crate::evidence::Ev::GalaxyFog,
+        "Milky Way illustration",
+    );
     let gc_px = proj.px(u.gal.center);
     // Sun marker
     let sun_px = proj.px(DVec3::ZERO);
     if on_screen(sun_px, inp.w, inp.h, 60.0) && w > 0.15 && lw < 22.8 {
-        dl.circle(sun_px, 6.0, StrokeStyle::new(theme::rgba(theme::INK_GOLD, 0.9 * w as f32), 1.1));
-        dl.point(sun_px, 1.2, 3.0, 0.0, theme::rgba(theme::INK_GOLD, 1.5 * w as f32));
+        dl.circle(
+            sun_px,
+            6.0,
+            StrokeStyle::new(theme::rgba(theme::INK_GOLD, 0.9 * w as f32), 1.1),
+        );
+        dl.point(
+            sun_px,
+            1.2,
+            3.0,
+            0.0,
+            theme::rgba(theme::INK_GOLD, 1.5 * w as f32),
+        );
         out.labels.push(Label {
             pos: [sun_px[0], sun_px[1] - 16.0],
             text: "You are here".into(),
@@ -1881,11 +2239,17 @@ fn push_galaxy(
     let r_px = (radius_m / mpp) as f32;
     let (a, b): ([f32; 2], [f32; 2]) = match plane {
         Some((ax, ay)) => (
-            [(ax.dot(proj.right) * radius_m / mpp) as f32, (-ax.dot(proj.up) * radius_m / mpp) as f32],
-            [(ay.dot(proj.right) * radius_m / mpp) as f32, (-ay.dot(proj.up) * radius_m / mpp) as f32],
+            [
+                (ax.dot(proj.right) * radius_m / mpp) as f32,
+                (-ax.dot(proj.up) * radius_m / mpp) as f32,
+            ],
+            [
+                (ay.dot(proj.right) * radius_m / mpp) as f32,
+                (-ay.dot(proj.up) * radius_m / mpp) as f32,
+            ],
         ),
         None => {
-            let ang = seed * 6.283;
+            let ang = seed * std::f32::consts::TAU;
             let (c, s) = (ang.cos(), ang.sin());
             ([r_px * c, r_px * s], [-r_px * s * 0.72, r_px * c * 0.72])
         }
@@ -1907,7 +2271,11 @@ fn push_galaxy(
     }
     // inverse of [a b]: screen px -> galaxy plane in units of its radius
     let m = [bb[1] / det, -bb[0] / det, -a[1] / det, a[0] / det];
-    let quad = la.max((bb[0] * bb[0] + bb[1] * bb[1]).sqrt()).max(r_px * 0.3) * 1.06 + 2.0;
+    let quad = la
+        .max((bb[0] * bb[0] + bb[1] * bb[1]).sqrt())
+        .max(r_px * 0.3)
+        * 1.06
+        + 2.0;
     dl.galaxies.push(GalaxyInst {
         center: px,
         m,
@@ -1931,8 +2299,17 @@ fn draw_galaxy_glyph(
     let plane = galaxy_orientation(g.name).map(|(pa, inc)| galaxy_plane(g.pos, pa, inc));
     let irregular = matches!(
         g.name,
-        "Large Magellanic Cloud" | "Small Magellanic Cloud" | "NGC 6822" | "IC 10" | "WLM"
-            | "IC 1613" | "Sextans A" | "Sextans B" | "NGC 3109" | "Leo A" | "Pegasus dIrr"
+        "Large Magellanic Cloud"
+            | "Small Magellanic Cloud"
+            | "NGC 6822"
+            | "IC 10"
+            | "WLM"
+            | "IC 1613"
+            | "Sextans A"
+            | "Sextans B"
+            | "NGC 3109"
+            | "Leo A"
+            | "Pegasus dIrr"
     );
     let kind = if g.spiral {
         0.0
@@ -1952,13 +2329,27 @@ fn draw_galaxy_glyph(
         let quiet = smoothstep(4.0, 22.0, r_px as f64) as f32;
         [0.72, 0.78, 1.0, (1.7 - 1.3 * quiet) * w as f32]
     };
-    push_galaxy(proj, dl, px, g.size_kpc * 0.5 * KPC, plane, kind, seed, tint, inp.cam.mpp);
+    push_galaxy(
+        proj,
+        dl,
+        px,
+        g.size_kpc * 0.5 * KPC,
+        plane,
+        kind,
+        seed,
+        tint,
+        inp.cam.mpp,
+    );
     // something to see and click, however small on screen
     if r_px < 2.5 {
         dl.point(px, 0.9, 1.8, 0.0, [0.86, 0.86, 1.0, 1.1 * w as f32]);
     }
     let pick = r_px.max(9.0);
-    out.picks.push(Pickable { pos: px, r: pick, obj: ObjectRef::Galaxy(gi) });
+    out.picks.push(Pickable {
+        pos: px,
+        r: pick,
+        obj: ObjectRef::Galaxy(gi),
+    });
     out.labels.push(Label {
         pos: [px[0], px[1] - r_px.max(4.0) - 10.0],
         text: g.name.into(),
@@ -1977,11 +2368,23 @@ fn localgroup_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out:
     if w <= 0.02 {
         return;
     }
-    seen(out, crate::evidence::Ev::CompiledCatalog, "Local Group positions");
-    seen(out, crate::evidence::Ev::GlyphIllustrative, "galaxy appearance, background galaxies");
+    seen(
+        out,
+        crate::evidence::Ev::CompiledCatalog,
+        "Local Group positions",
+    );
+    seen(
+        out,
+        crate::evidence::Ev::GlyphIllustrative,
+        "galaxy appearance, background galaxies",
+    );
     for (gi, g) in u.galaxies.iter().enumerate() {
         // nearby satellites belong to the galaxy band's own fade window too
-        let gw = if g.dist_kpc <= 500.0 { w } else { band(lw, 21.4, 24.9, 0.6) };
+        let gw = if g.dist_kpc <= 500.0 {
+            w
+        } else {
+            band(lw, 21.4, 24.9, 0.6)
+        };
         if gw <= 0.02 {
             continue;
         }
@@ -1996,10 +2399,30 @@ fn localgroup_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out:
     let halo_w = band(lw, 22.0, 24.6, 0.6) as f32;
     if halo_w > 0.01 {
         let tint = [0.42, 0.52, 0.92, halo_w];
-        push_galaxy(proj, dl, proj.px(u.gal.center), 300.0 * KPC, None, 3.0, 0.21, tint, inp.cam.mpp);
+        push_galaxy(
+            proj,
+            dl,
+            proj.px(u.gal.center),
+            300.0 * KPC,
+            None,
+            3.0,
+            0.21,
+            tint,
+            inp.cam.mpp,
+        );
         if let Some(m31) = u.galaxies.iter().find(|g| g.name.contains("M31")) {
             let tint = [0.52, 0.50, 0.90, halo_w];
-            push_galaxy(proj, dl, proj.px(m31.pos), 300.0 * KPC, None, 3.0, 0.47, tint, inp.cam.mpp);
+            push_galaxy(
+                proj,
+                dl,
+                proj.px(m31.pos),
+                300.0 * KPC,
+                None,
+                3.0,
+                0.47,
+                tint,
+                inp.cam.mpp,
+            );
         }
     }
     // The Milky Way itself, as a galaxy like the others, once the map's own
@@ -2009,7 +2432,17 @@ fn localgroup_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out:
     if mw_w > 0.02 && on_screen(mw_px, inp.w, inp.h, 200.0) {
         let radius = 15.0 * KPC;
         let tint = [0.62, 0.74, 1.0, 1.9 * mw_w as f32];
-        push_galaxy(proj, dl, mw_px, radius, Some((u.gal.x, u.gal.y)), 0.0, 0.42, tint, inp.cam.mpp);
+        push_galaxy(
+            proj,
+            dl,
+            mw_px,
+            radius,
+            Some((u.gal.x, u.gal.y)),
+            0.0,
+            0.42,
+            tint,
+            inp.cam.mpp,
+        );
         let r_px = (radius / inp.cam.mpp) as f32;
         if r_px < 2.5 {
             dl.point(mw_px, 1.0, 2.2, 0.0, [0.9, 0.9, 1.0, 1.2 * mw_w as f32]);
@@ -2050,11 +2483,24 @@ fn cosmic_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mu
         for k in 0..36 {
             let ang = seeded(k, ni * 7 + 3) * std::f64::consts::TAU;
             let rad = spread * (seeded(k, ni * 7 + 4)).powf(1.4) * 1.3;
-            let p = [px[0] + (rad * ang.cos()) as f32, px[1] + (rad * ang.sin()) as f32];
+            let p = [
+                px[0] + (rad * ang.cos()) as f32,
+                px[1] + (rad * ang.sin()) as f32,
+            ];
             let a = (0.35 + seeded(k, ni * 7 + 5) as f32) * 0.8 * w as f32;
-            dl.point(p, 0.6, 1.0, 0.0, ink([1.0, 0.88, 0.72], a, truth, Prov::Illustrative));
+            dl.point(
+                p,
+                0.6,
+                1.0,
+                0.0,
+                ink([1.0, 0.88, 0.72], a, truth, Prov::Illustrative),
+            );
         }
-        out.picks.push(Pickable { pos: px, r: r_px.max(11.0), obj: ObjectRef::Node(ni) });
+        out.picks.push(Pickable {
+            pos: px,
+            r: r_px.max(11.0),
+            obj: ObjectRef::Node(ni),
+        });
         out.labels.push(Label {
             pos: [px[0], px[1] - r_px.max(4.0) - 11.0],
             text: n.name.into(),
@@ -2067,7 +2513,11 @@ fn cosmic_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mu
     // You are here, at the scale of everything
     let sun_px = proj.px(DVec3::ZERO);
     if lw > 23.7 && on_screen(sun_px, inp.w, inp.h, 20.0) {
-        dl.circle(sun_px, 6.0, StrokeStyle::new(theme::rgba(theme::INK_GOLD, 0.95), 1.1));
+        dl.circle(
+            sun_px,
+            6.0,
+            StrokeStyle::new(theme::rgba(theme::INK_GOLD, 0.95), 1.1),
+        );
         out.labels.push(Label {
             pos: [sun_px[0], sun_px[1] - 16.0],
             text: "You are here".into(),
@@ -2095,7 +2545,14 @@ fn exo_active_system(inp: &BuildIn) -> Option<usize> {
     Some(ei)
 }
 
-fn exo_layer(inp: &BuildIn, proj: &Proj, lw: f64, ei: usize, dl: &mut DrawList, out: &mut FrameOut) {
+fn exo_layer(
+    inp: &BuildIn,
+    proj: &Proj,
+    lw: f64,
+    ei: usize,
+    dl: &mut DrawList,
+    out: &mut FrameOut,
+) {
     let (u, cam, jd, truth) = (inp.u, inp.cam, inp.clock.jd, inp.modes.truth);
     let s = &u.exos[ei];
     let host = s.pos;
@@ -2125,7 +2582,11 @@ fn exo_layer(inp: &BuildIn, proj: &Proj, lw: f64, ei: usize, dl: &mut DrawList, 
 
     // schematic radius remapping for System View
     let a_list: Vec<Option<(f64, Prov)>> = s.planets.iter().map(|p| s.a_au_of(p)).collect();
-    let a_min = a_list.iter().flatten().map(|(a, _)| *a).fold(f64::MAX, f64::min);
+    let a_min = a_list
+        .iter()
+        .flatten()
+        .map(|(a, _)| *a)
+        .fold(f64::MAX, f64::min);
     let remap = |a: f64| -> f64 {
         if !inp.modes.system_view || a_min == f64::MAX {
             return a;
@@ -2161,26 +2622,44 @@ fn exo_layer(inp: &BuildIn, proj: &Proj, lw: f64, ei: usize, dl: &mut DrawList, 
     // host star — a measured radius earns a physical disc; an unknown radius
     // gets an explicitly schematic glyph (AUDIT FND-020: never silently render
     // a default 1 R☉ as if measured).
-    let rgb = s.st_teff.map(crate::data::teff_rgb).unwrap_or([1.0, 0.85, 0.6]);
+    let rgb = s
+        .st_teff
+        .map(crate::data::teff_rgb)
+        .unwrap_or([1.0, 0.85, 0.6]);
     let host_z = zmap(local_z(DVec3::ZERO), cam.mpp * inp.w);
     let r_px = match s.st_rad {
         Some(rad) => {
             let r_px = (rad * R_SUN_M / cam.mpp) as f32;
             if r_px > 2.0 {
                 let (bx, by, bz) = view_axes(proj, frame_about(DVec3::new(0.0, 0.34, 0.94)));
-                let mut d = DiscInst::plain(host_px, [r_px, 0.0, KIND_STAR, 0.4 + ei as f32 * 0.013], host_z);
+                let mut d = DiscInst::plain(
+                    host_px,
+                    [r_px, 0.0, KIND_STAR, 0.4 + ei as f32 * 0.013],
+                    host_z,
+                );
                 d.sun = [0.0, 0.0, 1.0, 1.0];
                 d.axis = [bz[0], bz[1], bz[2], (inp.anim_t * 0.02) as f32];
                 d.bx = [bx[0], bx[1], bx[2], 0.0];
                 d.by = [by[0], by[1], by[2], 0.0];
                 d.ca = [rgb[0], rgb[1], rgb[2], 1.0];
                 d.cb = [rgb[0] * 0.9, rgb[1] * 0.65, rgb[2] * 0.5, 1.0];
-                d.flags = [0.0, 0.0, 0.0, 1.45 + 6.5 * (1.0 - smoothstep(6.0, 150.0, r_px as f64)) as f32];
+                d.flags = [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.45 + 6.5 * (1.0 - smoothstep(6.0, 150.0, r_px as f64)) as f32,
+                ];
                 dl.disc(d, host_z, [None, None, None]);
             }
             if r_px < 90.0 {
                 let a = 3.0 * (1.0 - smoothstep(4.0, 90.0, r_px as f64)) as f32;
-                dl.point(host_px, 1.8f32.max(r_px * 0.8), 13.0, 0.25, [rgb[0], rgb[1], rgb[2], a]);
+                dl.point(
+                    host_px,
+                    1.8f32.max(r_px * 0.8),
+                    13.0,
+                    0.25,
+                    [rgb[0], rgb[1], rgb[2], a],
+                );
             }
             r_px
         }
@@ -2191,10 +2670,22 @@ fn exo_layer(inp: &BuildIn, proj: &Proj, lw: f64, ei: usize, dl: &mut DrawList, 
             11.0
         }
     };
-    out.picks.push(Pickable { pos: host_px, r: r_px.max(10.0), obj: ObjectRef::ExoHost(ei) });
+    out.picks.push(Pickable {
+        pos: host_px,
+        r: r_px.max(10.0),
+        obj: ObjectRef::ExoHost(ei),
+    });
     out.labels.push(Label {
         pos: [host_px[0], host_px[1] - r_px.max(8.0) - 12.0],
-        text: format!("{}{}", s.host, if s.st_rad.is_none() { " (radius unknown)" } else { "" }),
+        text: format!(
+            "{}{}",
+            s.host,
+            if s.st_rad.is_none() {
+                " (radius unknown)"
+            } else {
+                ""
+            }
+        ),
         size: 13.0,
         color: theme::rgba(theme::INK_WHITE, 0.85),
         priority: 40,
@@ -2207,10 +2698,12 @@ fn exo_layer(inp: &BuildIn, proj: &Proj, lw: f64, ei: usize, dl: &mut DrawList, 
     let mut prev_per: Option<f64> = None;
     let mut prev_a_px = 0.0f32;
     for (k, p) in s.planets.iter().enumerate() {
-        let Some((a_au, a_prov)) = a_list[k] else { continue };
+        let Some((a_au, a_prov)) = a_list[k] else {
+            continue;
+        };
         let a_draw = remap(a_au);
         let a_px = (a_draw * AU / cam.mpp) as f32;
-        if a_px < 4.0 || a_px > 60_000.0 {
+        if !(4.0..=60_000.0).contains(&a_px) {
             continue;
         }
         let ecc = p.e.unwrap_or(0.0).clamp(0.0, 0.95);
@@ -2224,7 +2717,16 @@ fn exo_layer(inp: &BuildIn, proj: &Proj, lw: f64, ei: usize, dl: &mut DrawList, 
             })
             .collect();
         let mut st = StrokeStyle::new(
-            ink(theme::INK_GOLD, 0.5 * w as f32, truth, if p.a_au.is_some() { Prov::Measured } else { a_prov }),
+            ink(
+                theme::INK_GOLD,
+                0.5 * w as f32,
+                truth,
+                if p.a_au.is_some() {
+                    Prov::Measured
+                } else {
+                    a_prov
+                },
+            ),
             1.0,
         )
         .glow(1.3);
@@ -2236,19 +2738,44 @@ fn exo_layer(inp: &BuildIn, proj: &Proj, lw: f64, ei: usize, dl: &mut DrawList, 
         // marker: same conic, schematic-scaled when System View is active
         let rel = exo_planet_rel(u, ei, k, jd).unwrap_or(DVec3::ZERO) * (a_draw / a_au);
         let ppx = to_px(rel);
-        let pr_px = p.rade.map(|r| (r * R_EARTH_M / cam.mpp) as f32).unwrap_or(0.0);
+        let pr_px = p
+            .rade
+            .map(|r| (r * R_EARTH_M / cam.mpp) as f32)
+            .unwrap_or(0.0);
         let rocky = p.rade.map(|r| r < 1.8).unwrap_or(true);
         if pr_px > 1.8 {
             let sun_dir = view_dir(proj, (-rel).normalize_or_zero());
             let zd = zmap(local_z(rel), cam.mpp * inp.w);
             let (bx, by, bz) = view_axes(proj, frame_about(DVec3::new(0.1, 0.37, 0.92)));
-            let mut d = DiscInst::plain(ppx, [pr_px, 0.0, if rocky { 1.0 } else { 2.0 }, 0.29 + k as f32 * 0.047], zd);
+            let mut d = DiscInst::plain(
+                ppx,
+                [
+                    pr_px,
+                    0.0,
+                    if rocky { 1.0 } else { 2.0 },
+                    0.29 + k as f32 * 0.047,
+                ],
+                zd,
+            );
             d.sun = [sun_dir[0], sun_dir[1], sun_dir[2], 0.06];
-            d.axis = [bz[0], bz[1], bz[2], ((jd - J2000) * 0.3 % std::f64::consts::TAU) as f32];
+            d.axis = [
+                bz[0],
+                bz[1],
+                bz[2],
+                ((jd - J2000) * 0.3 % std::f64::consts::TAU) as f32,
+            ];
             d.bx = [bx[0], bx[1], bx[2], 0.0];
             d.by = [by[0], by[1], by[2], 0.0];
-            d.ca = if rocky { [0.72, 0.58, 0.45, 0.0] } else { [0.62, 0.72, 0.85, 0.0] };
-            d.cb = if rocky { [0.45, 0.36, 0.3, 1.0] } else { [0.4, 0.5, 0.68, 1.0] };
+            d.ca = if rocky {
+                [0.72, 0.58, 0.45, 0.0]
+            } else {
+                [0.62, 0.72, 0.85, 0.0]
+            };
+            d.cb = if rocky {
+                [0.45, 0.36, 0.3, 1.0]
+            } else {
+                [0.4, 0.5, 0.68, 1.0]
+            };
             d.rim = [0.6, 0.75, 1.0, if rocky { 0.2 } else { 0.5 }];
             d.fx[0] = 0.02;
             dl.disc(d, zd, [None, None, None]);
@@ -2260,7 +2787,11 @@ fn exo_layer(inp: &BuildIn, proj: &Proj, lw: f64, ei: usize, dl: &mut DrawList, 
             };
             dl.point(ppx, 2.4, 6.0, 0.0, c);
         }
-        out.picks.push(Pickable { pos: ppx, r: pr_px.max(8.0), obj: ObjectRef::ExoPlanet(ei, k) });
+        out.picks.push(Pickable {
+            pos: ppx,
+            r: pr_px.max(8.0),
+            obj: ObjectRef::ExoPlanet(ei, k),
+        });
         if a_px > 30.0 {
             let short = p.name.rsplit(' ').next().unwrap_or(&p.name);
             out.labels.push(Label {
@@ -2280,7 +2811,10 @@ fn exo_layer(inp: &BuildIn, proj: &Proj, lw: f64, ei: usize, dl: &mut DrawList, 
                 if (ratio / ideal - 1.0).abs() < 0.02 && a_px > 40.0 {
                     let mid = (a_px + prev_a_px) * 0.5;
                     out.labels.push(Label {
-                        pos: [host_px[0] + mid * 0.7071, host_px[1] + mid * 0.7071],
+                        pos: [
+                            host_px[0] + mid * std::f32::consts::FRAC_1_SQRT_2,
+                            host_px[1] + mid * std::f32::consts::FRAC_1_SQRT_2,
+                        ],
                         // near-commensurability of periods, not a proven resonance
                         text: format!("≈ {num}:{den}"),
                         size: 10.5,
@@ -2332,10 +2866,17 @@ fn focused_star_layer(
     dl.point(px, 3.2, 34.0, 0.8, [rgb[0], rgb[1], rgb[2], 0.95]);
     let c = ink(Prov::Unknown.rgb(), 0.6, true, Prov::Unknown);
     dl.circle(px, 13.0, StrokeStyle::new(c, 1.0).dashed(4.0, 0.55));
-    out.picks.push(Pickable { pos: px, r: 13.0, obj: ObjectRef::Star(si) });
+    out.picks.push(Pickable {
+        pos: px,
+        r: 13.0,
+        obj: ObjectRef::Star(si),
+    });
     out.labels.push(Label {
         pos: [px[0], px[1] - 24.0],
-        text: format!("{} — schematic (no measured radius)", obj_name(inp.u, ObjectRef::Star(si))),
+        text: format!(
+            "{} — schematic (no measured radius)",
+            obj_name(inp.u, ObjectRef::Star(si))
+        ),
         size: 11.5,
         color: theme::rgba(theme::INK_WHITE, 0.75),
         priority: 35,
@@ -2348,7 +2889,9 @@ fn focused_star_layer(
 fn gravity_layer(inp: &BuildIn, proj: &Proj, dl: &mut DrawList, out: &mut FrameOut) {
     let (u, jd, truth) = (inp.u, inp.clock.jd, inp.modes.truth);
     // choose the pair: focused moon → (planet, moon); focused planet → (Sun, planet)
-    let pair: Option<(DVec3, f64, DVec3, f64, f64)> = match inp.focus {
+    // primary position and GM, secondary position and GM, separation
+    type Pair = (DVec3, f64, DVec3, f64, f64);
+    let pair: Option<Pair> = match inp.focus {
         Some(ObjectRef::Moon(mi)) => {
             let m = &MOONS[mi];
             let pp = obj_pos(u, ObjectRef::Planet(m.planet), jd, inp.island);
@@ -2362,7 +2905,9 @@ fn gravity_layer(inp: &BuildIn, proj: &Proj, dl: &mut DrawList, out: &mut FrameO
         }
         _ => None,
     };
-    let Some((pa, gm1, pb, gm2, a_m)) = pair else { return };
+    let Some((pa, gm1, pb, gm2, a_m)) = pair else {
+        return;
+    };
     seen(out, crate::evidence::Ev::GravityModel, "gravity view");
     let apx = proj.px(pa);
     let bpx = proj.px(pb);
@@ -2381,8 +2926,7 @@ fn gravity_layer(inp: &BuildIn, proj: &Proj, dl: &mut DrawList, out: &mut FrameO
     let e1w = (pb - pa) / sep_m;
     let dtd = 0.01; // days, for the relative velocity direction
     let obj_b = inp.focus.unwrap_or(ObjectRef::Sun);
-    let vrel = (obj_pos(u, obj_b, jd + dtd, inp.island)
-        - obj_pos(u, obj_b, jd - dtd, inp.island))
+    let vrel = (obj_pos(u, obj_b, jd + dtd, inp.island) - obj_pos(u, obj_b, jd - dtd, inp.island))
         / (2.0 * dtd);
     let mut nrm = e1w.cross(vrel.normalize_or_zero());
     if nrm.length_squared() < 1e-6 {
@@ -2452,8 +2996,10 @@ mod tests {
     use super::*;
     use crate::frames::galactic_frame;
 
+    type Runs = Vec<Vec<(f64, f64, f64)>>;
+
     /// Tessellate a circle of `radius_px` centred off to one side of the view.
-    fn circle_runs(radius_px: f64, mpp: f64) -> (Vec<Vec<(f64, f64, f64)>>, f64) {
+    fn circle_runs(radius_px: f64, mpp: f64) -> (Runs, f64) {
         let mut cam = Camera::new();
         cam.mpp = mpp;
         let radius = radius_px * mpp;
@@ -2461,7 +3007,15 @@ mod tests {
         let gal = galactic_frame();
         let proj = Proj::new(&cam, 1600.0, 900.0, &gal);
         let f = move |t: f64| DVec3::new(radius * t.cos(), radius * t.sin(), 0.0);
-        let mut c = Curve { proj: &proj, f: &f, x0: -8.0, y0: -8.0, x1: 1608.0, y1: 908.0, runs: Vec::new() };
+        let mut c = Curve {
+            proj: &proj,
+            f: &f,
+            x0: -8.0,
+            y0: -8.0,
+            x1: 1608.0,
+            y1: 908.0,
+            runs: Vec::new(),
+        };
         let tau = std::f64::consts::TAU;
         let seeds = 64;
         let mut prev = (0.0, c.scr(0.0));
@@ -2487,12 +3041,19 @@ mod tests {
                     let (a, b) = (w[0], w[1]);
                     // inside the clip rectangle, where f32 keeps sub-pixel accuracy
                     for p in [a, b] {
-                        assert!(p.0 >= -8.01 && p.0 <= 1608.01 && p.1 >= -8.01 && p.1 <= 908.01, "{p:?}");
+                        assert!(
+                            p.0 >= -8.01 && p.0 <= 1608.01 && p.1 >= -8.01 && p.1 <= 908.01,
+                            "{p:?}"
+                        );
                     }
                     // chord error against the true circle, whose centre is at x = 800 - r
                     let mid = (0.5 * (a.0 + b.0), 0.5 * (a.1 + b.1));
                     let d = ((mid.0 - (800.0 - r)).powi(2) + (mid.1 - 450.0).powi(2)).sqrt();
-                    assert!((d - r).abs() < 0.5, "chord error {} at radius {radius_px}", (d - r).abs());
+                    assert!(
+                        (d - r).abs() < 0.5,
+                        "chord error {} at radius {radius_px}",
+                        (d - r).abs()
+                    );
                 }
             }
         }
@@ -2506,7 +3067,15 @@ mod tests {
         let proj = Proj::new(&cam, 1600.0, 900.0, &gal);
         let far = 1.0e7;
         let f = move |t: f64| DVec3::new(far + 100.0 * t.cos(), far + 100.0 * t.sin(), 0.0);
-        let mut c = Curve { proj: &proj, f: &f, x0: -8.0, y0: -8.0, x1: 1608.0, y1: 908.0, runs: Vec::new() };
+        let mut c = Curve {
+            proj: &proj,
+            f: &f,
+            x0: -8.0,
+            y0: -8.0,
+            x1: 1608.0,
+            y1: 908.0,
+            runs: Vec::new(),
+        };
         let (p0, p1) = (c.scr(0.0), c.scr(3.0));
         c.seg(0.0, p0, 3.0, p1, 0);
         assert!(c.runs.is_empty());

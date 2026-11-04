@@ -5,7 +5,9 @@
 fn main() {
     #[cfg(windows)]
     {
-        let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
+        let Ok(out_dir) = std::env::var("OUT_DIR") else {
+            return;
+        };
         // OUT_DIR = target/<profile>/build/pantheon-<hash>/out
         let Some(profile_dir) = std::path::Path::new(&out_dir)
             .ancestors()
@@ -19,9 +21,14 @@ fn main() {
         if dest.exists() {
             return;
         }
-        let Ok(entries) = std::fs::read_dir(&build_dir) else { return };
+        let Ok(entries) = std::fs::read_dir(&build_dir) else {
+            return;
+        };
         for e in entries.flatten() {
-            if e.file_name().to_string_lossy().starts_with("webview2-com-sys-") {
+            if e.file_name()
+                .to_string_lossy()
+                .starts_with("webview2-com-sys-")
+            {
                 let src = e.path().join("out").join("x64").join("WebView2Loader.dll");
                 if src.exists() && std::fs::copy(&src, &dest).is_ok() {
                     return;

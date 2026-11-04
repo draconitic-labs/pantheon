@@ -54,7 +54,10 @@ pub fn install_fonts(ctx: &egui::Context) {
     let mut add = |name: &str, file: &str| -> bool {
         let path = root.join("fonts").join(file);
         if let Ok(bytes) = std::fs::read(&path) {
-            fonts.font_data.insert(name.to_string(), std::sync::Arc::new(FontData::from_owned(bytes)));
+            fonts.font_data.insert(
+                name.to_string(),
+                std::sync::Arc::new(FontData::from_owned(bytes)),
+            );
             true
         } else {
             log::warn!("font missing: {}", path.display());
@@ -88,7 +91,10 @@ pub fn install_fonts(ctx: &egui::Context) {
     );
     fonts.families.insert(
         FontFamily::Name("heading".into()),
-        with_first(cormorant.then_some("cormorant"), spectral.then_some("spectral")),
+        with_first(
+            cormorant.then_some("cormorant"),
+            spectral.then_some("spectral"),
+        ),
     );
     ctx.set_fonts(fonts);
 }

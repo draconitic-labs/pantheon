@@ -60,7 +60,10 @@ impl Synth {
     }
 
     fn rand(&mut self) -> f64 {
-        self.rng = self.rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.rng = self
+            .rng
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (self.rng >> 11) as f64 / (1u64 << 53) as f64
     }
 
@@ -107,7 +110,11 @@ impl Synth {
                 let ni = (self.rand() * 5.0) as usize % 5;
                 let oct = if self.rand() < 0.3 { 24.0 } else { 12.0 };
                 let pan = (self.rand() as f32) * 0.8 + 0.1;
-                self.chimes.push(Chime { freq: midi_hz(CHORDS[ci][ni] + oct), born: t, pan });
+                self.chimes.push(Chime {
+                    freq: midi_hz(CHORDS[ci][ni] + oct),
+                    born: t,
+                    pan,
+                });
                 if self.chimes.len() > 5 {
                     self.chimes.remove(0);
                 }
@@ -188,8 +195,15 @@ impl Ambience {
                 drop(stream);
             })
             .ok()?;
-        if ready_rx.recv_timeout(std::time::Duration::from_secs(3)).unwrap_or(false) {
-            Some(Ambience { stop, gain, thread: Some(thread) })
+        if ready_rx
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .unwrap_or(false)
+        {
+            Some(Ambience {
+                stop,
+                gain,
+                thread: Some(thread),
+            })
         } else {
             stop.store(true, Ordering::Relaxed);
             None
@@ -198,13 +212,16 @@ impl Ambience {
 
     /// 0.0 = silent (ramped smoothly, no clicks), ~0.5 = pleasant default.
     pub fn set_gain(&self, g: f32) {
-        self.gain.store(g.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+        self.gain
+            .store(g.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
     }
 }
 
 fn open_stream(gain: Arc<AtomicU32>) -> Result<cpal::Stream, String> {
     let host = cpal::default_host();
-    let device = host.default_output_device().ok_or("no default output device")?;
+    let device = host
+        .default_output_device()
+        .ok_or("no default output device")?;
     let config = device.default_output_config().map_err(|e| e.to_string())?;
     let format = config.sample_format();
     let config: cpal::StreamConfig = config.into();
@@ -219,7 +236,12 @@ fn open_stream(gain: Arc<AtomicU32>) -> Result<cpal::Stream, String> {
         cpal::SampleFormat::F32 => device.build_output_stream(
             &config,
             move |out: &mut [f32], _| {
-                synth.fill(out, f32::from_bits(gain.load(Ordering::Relaxed)), sr, channels);
+                synth.fill(
+                    out,
+                    f32::from_bits(gain.load(Ordering::Relaxed)),
+                    sr,
+                    channels,
+                );
             },
             on_err,
             None,
@@ -230,7 +252,12 @@ fn open_stream(gain: Arc<AtomicU32>) -> Result<cpal::Stream, String> {
                 &config,
                 move |out: &mut [i16], _| {
                     tmp.resize(out.len(), 0.0);
-                    synth.fill(&mut tmp, f32::from_bits(gain.load(Ordering::Relaxed)), sr, channels);
+                    synth.fill(
+                        &mut tmp,
+                        f32::from_bits(gain.load(Ordering::Relaxed)),
+                        sr,
+                        channels,
+                    );
                     for (o, v) in out.iter_mut().zip(&tmp) {
                         *o = (*v * 32_767.0) as i16;
                     }
@@ -245,7 +272,12 @@ fn open_stream(gain: Arc<AtomicU32>) -> Result<cpal::Stream, String> {
                 &config,
                 move |out: &mut [u16], _| {
                     tmp.resize(out.len(), 0.0);
-                    synth.fill(&mut tmp, f32::from_bits(gain.load(Ordering::Relaxed)), sr, channels);
+                    synth.fill(
+                        &mut tmp,
+                        f32::from_bits(gain.load(Ordering::Relaxed)),
+                        sr,
+                        channels,
+                    );
                     for (o, v) in out.iter_mut().zip(&tmp) {
                         *o = ((*v * 0.5 + 0.5) * 65_535.0) as u16;
                     }
@@ -290,7 +322,9 @@ mod tests {
         let mut quiet = vec![0f32; 48_000 * 2];
         s.fill(&mut quiet, 0.0, 48_000.0, 2);
         s.fill(&mut quiet, 0.0, 48_000.0, 2);
-        let tail = quiet[quiet.len() - 4_000..].iter().fold(0f32, |a, v| a.max(v.abs()));
+        let tail = quiet[quiet.len() - 4_000..]
+            .iter()
+            .fold(0f32, |a, v| a.max(v.abs()));
         assert!(tail < 1e-3, "tail {tail}");
     }
 

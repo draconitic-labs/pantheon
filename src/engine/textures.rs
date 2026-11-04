@@ -91,7 +91,10 @@ impl TexStatus {
 
 impl Default for TexStatus {
     fn default() -> Self {
-        Self { present: [false; 14], fade: [0.0; 14] }
+        Self {
+            present: [false; 14],
+            fade: [0.0; 14],
+        }
     }
 }
 
@@ -116,7 +119,12 @@ struct Upload {
 enum Slot {
     Empty,
     Loading,
-    Ready { view: wgpu::TextureView, bytes: u64, born: f64, last_used: f64 },
+    Ready {
+        view: wgpu::TextureView,
+        bytes: u64,
+        born: f64,
+        last_used: f64,
+    },
     Failed,
 }
 
@@ -179,7 +187,9 @@ fn decode(id: TexId, path: PathBuf, max_dim: u32) -> Result<Decoded, (TexId, Str
         .map_err(|e| (id, format!("{}: {e}", path.display())))?;
     let mut reader = reader;
     reader.no_limits();
-    let img = reader.decode().map_err(|e| (id, format!("{}: {e}", path.display())))?;
+    let img = reader
+        .decode()
+        .map_err(|e| (id, format!("{}: {e}", path.display())))?;
     let mut rgba = img.to_rgba8();
     drop(img);
     // respect the device limit: halve (cheap box filter) until it fits
@@ -191,7 +201,12 @@ fn decode(id: TexId, path: PathBuf, max_dim: u32) -> Result<Decoded, (TexId, Str
         h = nh;
     }
     let mips = mip_chain(w, h, rgba.into_raw());
-    Ok(Decoded { id, width: w, height: h, mips })
+    Ok(Decoded {
+        id,
+        width: w,
+        height: h,
+        mips,
+    })
 }
 
 impl TextureBank {
@@ -211,20 +226,22 @@ impl TextureBank {
             },
             count: None,
         };
-        let bgl = gpu.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("surface-bgl"),
-            entries: &[
-                tex_entry(0),
-                tex_entry(1),
-                tex_entry(2),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
+        let bgl = gpu
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("surface-bgl"),
+                entries: &[
+                    tex_entry(0),
+                    tex_entry(1),
+                    tex_entry(2),
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
         let sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("surface-sampler"),
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -237,7 +254,11 @@ impl TextureBank {
         });
         let fallback = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("surface-fallback"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -253,7 +274,11 @@ impl TextureBank {
                 bytes_per_row: Some(4),
                 rows_per_image: Some(1),
             },
-            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
         );
         let fallback_view = fallback.create_view(&Default::default());
         let (tx, rx) = channel();
@@ -336,7 +361,11 @@ impl TextureBank {
     fn begin_upload(&mut self, gpu: &GpuContext, d: Decoded) {
         let tex = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some(d.id.file()),
-            size: wgpu::Extent3d { width: d.width, height: d.height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: d.width,
+                height: d.height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: d.mips.len() as u32,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -358,7 +387,9 @@ impl TextureBank {
 
     /// Upload up to `budget` bytes of the first queued texture; returns what's left.
     fn upload_slice(&mut self, gpu: &GpuContext, budget: usize) -> usize {
-        let Some(up) = self.uploads.first_mut() else { return 0 };
+        let Some(up) = self.uploads.first_mut() else {
+            return 0;
+        };
         let w = (up.size.0 >> up.level).max(1);
         let h = (up.size.1 >> up.level).max(1);
         let row_bytes = (w * 4) as usize;
@@ -369,7 +400,11 @@ impl TextureBank {
             wgpu::TexelCopyTextureInfo {
                 texture: &up.tex,
                 mip_level: up.level as u32,
-                origin: wgpu::Origin3d { x: 0, y: up.row, z: 0 },
+                origin: wgpu::Origin3d {
+                    x: 0,
+                    y: up.row,
+                    z: 0,
+                },
                 aspect: wgpu::TextureAspect::All,
             },
             &up.mips[up.level][start..end],
@@ -378,7 +413,11 @@ impl TextureBank {
                 bytes_per_row: Some(w * 4),
                 rows_per_image: Some(rows),
             },
-            wgpu::Extent3d { width: w, height: rows, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: w,
+                height: rows,
+                depth_or_array_layers: 1,
+            },
         );
         up.row += rows;
         let spent = rows as usize * row_bytes;
@@ -390,8 +429,12 @@ impl TextureBank {
         if up.level >= up.mips.len() {
             let up = self.uploads.remove(0);
             let view = up.tex.create_view(&Default::default());
-            self.slots[up.id.index()] =
-                Slot::Ready { view, bytes: up.bytes, born: self.now, last_used: self.now };
+            self.slots[up.id.index()] = Slot::Ready {
+                view,
+                bytes: up.bytes,
+                born: self.now,
+                last_used: self.now,
+            };
             self.groups.clear();
         }
         budget.saturating_sub(spent)
@@ -401,7 +444,13 @@ impl TextureBank {
         let total: u64 = self
             .slots
             .iter()
-            .map(|s| if let Slot::Ready { bytes, .. } = s { *bytes } else { 0 })
+            .map(|s| {
+                if let Slot::Ready { bytes, .. } = s {
+                    *bytes
+                } else {
+                    0
+                }
+            })
             .sum();
         if total <= BUDGET_BYTES {
             return;
@@ -449,7 +498,11 @@ impl TextureBank {
         }
         for t in ALL_TEX {
             let i = t.index();
-            self.status.fade[i] = if matches!(self.slots[i], Slot::Ready { .. }) { 1.0 } else { 0.0 };
+            self.status.fade[i] = if matches!(self.slots[i], Slot::Ready { .. }) {
+                1.0
+            } else {
+                0.0
+            };
         }
     }
 
@@ -480,7 +533,12 @@ impl TextureBank {
         let mut row = vec![0u8; W as usize * 4];
         for x in 0..W as usize {
             let km = inner + (outer - inner) * (x as f64 + 0.5) / W as f64;
-            let dens = def.zones.iter().find(|z| km >= z.0 && km <= z.1).map(|z| z.2).unwrap_or(0.0);
+            let dens = def
+                .zones
+                .iter()
+                .find(|z| km >= z.0 && km <= z.1)
+                .map(|z| z.2)
+                .unwrap_or(0.0);
             // a little radial texture so wide zones don't read as flat bands
             let grain = 0.82 + 0.18 * (km * 0.0007).sin() as f32 * (km * 0.0031).cos() as f32;
             let a = (dens * grain * 255.0) as u8;
@@ -492,7 +550,11 @@ impl TextureBank {
         let mips = mip_chain(W, 1, row);
         let tex = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("ring-zones"),
-            size: wgpu::Extent3d { width: W, height: 1, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: W,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: mips.len() as u32,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -515,7 +577,11 @@ impl TextureBank {
                     bytes_per_row: Some(w * 4),
                     rows_per_image: Some(1),
                 },
-                wgpu::Extent3d { width: w, height: 1, depth_or_array_layers: 1 },
+                wgpu::Extent3d {
+                    width: w,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
             );
         }
         let view = tex.create_view(&Default::default());
@@ -523,7 +589,10 @@ impl TextureBank {
             label: Some("ring-zones-bg"),
             layout: &self.bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(&self.fallback_view),
@@ -532,7 +601,10 @@ impl TextureBank {
                     binding: 2,
                     resource: wgpu::BindingResource::TextureView(&self.fallback_view),
                 },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
             ],
         });
         self.zone_rings[ring] = Some(group.clone());

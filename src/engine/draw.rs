@@ -29,11 +29,11 @@ pub struct PointInst {
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct DiscInst {
     pub center: [f32; 2],
-    pub pr: [f32; 4],    // radius_px, flatten, kind, seed
-    pub sun: [f32; 4],   // sun dir view-space, ambient
-    pub axis: [f32; 4],  // body pole view-space, spin phase
-    pub bx: [f32; 4],    // body x view-space, imagery fade 0..1
-    pub by: [f32; 4],    // body y view-space, cloud longitude offset
+    pub pr: [f32; 4],   // radius_px, flatten, kind, seed
+    pub sun: [f32; 4],  // sun dir view-space, ambient
+    pub axis: [f32; 4], // body pole view-space, spin phase
+    pub bx: [f32; 4],   // body x view-space, imagery fade 0..1
+    pub by: [f32; 4],   // body y view-space, cloud longitude offset
     pub ca: [f32; 4],
     pub cb: [f32; 4],
     pub rim: [f32; 4],   // atmosphere rgb, strength
@@ -152,7 +152,13 @@ pub struct StrokeStyle {
 
 impl StrokeStyle {
     pub fn new(color: [f32; 4], width: f32) -> Self {
-        Self { color, width, glow: 0.0, dash: 0.0, duty: 0.6 }
+        Self {
+            color,
+            width,
+            glow: 0.0,
+            dash: 0.0,
+            duty: 0.6,
+        }
     }
     pub fn glow(mut self, g: f32) -> Self {
         self.glow = g;
@@ -235,7 +241,13 @@ impl DrawList {
     }
 
     /// Polyline with per-point alpha multipliers (orbit motion grading).
-    pub fn polyline_alpha(&mut self, pts: &[[f32; 2]], closed: bool, st: StrokeStyle, alphas: &[f32]) {
+    pub fn polyline_alpha(
+        &mut self,
+        pts: &[[f32; 2]],
+        closed: bool,
+        st: StrokeStyle,
+        alphas: &[f32],
+    ) {
         self.polyline_impl(pts, closed, st, Some(alphas));
     }
 
@@ -325,7 +337,7 @@ impl DrawList {
 
     pub fn circle(&mut self, c: [f32; 2], r: f32, st: StrokeStyle) {
         // ≤ ~4 px chords up to very large radii (AUDIT REND-006, partial)
-        let n = ((r * 6.28 / 4.0) as usize).clamp(24, 1024);
+        let n = ((r * std::f32::consts::TAU / 4.0) as usize).clamp(24, 1024);
         let pts: Vec<[f32; 2]> = (0..n)
             .map(|i| {
                 let a = i as f32 / n as f32 * std::f32::consts::TAU;
@@ -335,7 +347,14 @@ impl DrawList {
         self.polyline(&pts, true, st);
     }
 
-    pub fn point(&mut self, center: [f32; 2], core_r: f32, glow_r: f32, spike: f32, color: [f32; 4]) {
+    pub fn point(
+        &mut self,
+        center: [f32; 2],
+        core_r: f32,
+        glow_r: f32,
+        spike: f32,
+        color: [f32; 4],
+    ) {
         self.point_z(center, core_r, glow_r, spike, color, 0.9995);
     }
 
@@ -349,8 +368,13 @@ impl DrawList {
         color: [f32; 4],
         depth: f32,
     ) {
-        let quad = (core_r * 2.6).max(glow_r * 4.2).max(2.0).min(420.0);
-        self.points.push(PointInst { center, shape: [core_r, glow_r, spike, quad], color, depth });
+        let quad = (core_r * 2.6).max(glow_r * 4.2).clamp(2.0, 420.0);
+        self.points.push(PointInst {
+            center,
+            shape: [core_r, glow_r, spike, quad],
+            color,
+            depth,
+        });
     }
 }
 
@@ -370,7 +394,12 @@ impl GrowBuffer {
             usage: usage | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        Self { buf, cap, usage, label }
+        Self {
+            buf,
+            cap,
+            usage,
+            label,
+        }
     }
     fn upload(&mut self, gpu: &GpuContext, data: &[u8]) {
         let need = data.len() as u64;
@@ -469,7 +498,10 @@ impl Pipelines {
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("canvas-bg"),
             layout: &view_bgl,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: ubuf.as_entire_binding() }],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: ubuf.as_entire_binding(),
+            }],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("canvas-pl"),
@@ -497,7 +529,10 @@ impl Pipelines {
             write_mask: wgpu::ColorWrites::ALL,
         })];
         let prim = wgpu::PrimitiveState::default();
-        let msaa = wgpu::MultisampleState { count: SAMPLES, ..Default::default() };
+        let msaa = wgpu::MultisampleState {
+            count: SAMPLES,
+            ..Default::default()
+        };
 
         // one canvas pass, per-pipeline depth policy: discs write real depth,
         // points and near rings test against it, background and engraving
@@ -643,9 +678,30 @@ impl Pipelines {
             source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/bloom.wgsl").into()),
         });
         let tonemap = post("tonemap", &tm_layout, &sm_tm, "fs", FORMAT, None);
-        let bloom_pre = post("bloom-pre", &bloom_layout, &sm_bloom, "fs_prefilter", FORMAT_HDR, None);
-        let bloom_down = post("bloom-down", &bloom_layout, &sm_bloom, "fs_down", FORMAT_HDR, None);
-        let bloom_up = post("bloom-up", &bloom_layout, &sm_bloom, "fs_up", FORMAT_HDR, Some(blend_add()));
+        let bloom_pre = post(
+            "bloom-pre",
+            &bloom_layout,
+            &sm_bloom,
+            "fs_prefilter",
+            FORMAT_HDR,
+            None,
+        );
+        let bloom_down = post(
+            "bloom-down",
+            &bloom_layout,
+            &sm_bloom,
+            "fs_down",
+            FORMAT_HDR,
+            None,
+        );
+        let bloom_up = post(
+            "bloom-up",
+            &bloom_layout,
+            &sm_bloom,
+            "fs_up",
+            FORMAT_HDR,
+            Some(blend_add()),
+        );
         let tm_sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("tonemap-sampler"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -658,9 +714,30 @@ impl Pipelines {
             strokes: pipeline(&sm_strokes, &[stroke_layout], "strokes", "fs", false, false),
             discs: pipeline(&sm_discs, &[disc_layout], "discs", "fs", true, true),
             points: pipeline(&sm_points, &[point_layout], "points", "fs", false, true),
-            rings_far: pipeline(&sm_rings, std::slice::from_ref(&ring_layout), "rings-far", "fs", false, false),
-            rings_near: pipeline(&sm_rings, std::slice::from_ref(&ring_layout), "rings-near", "fs", false, true),
-            galaxies: pipeline(&sm_galaxies, &[galaxy_layout], "galaxies", "fs", false, false),
+            rings_far: pipeline(
+                &sm_rings,
+                std::slice::from_ref(&ring_layout),
+                "rings-far",
+                "fs",
+                false,
+                false,
+            ),
+            rings_near: pipeline(
+                &sm_rings,
+                std::slice::from_ref(&ring_layout),
+                "rings-near",
+                "fs",
+                false,
+                true,
+            ),
+            galaxies: pipeline(
+                &sm_galaxies,
+                &[galaxy_layout],
+                "galaxies",
+                "fs",
+                false,
+                false,
+            ),
             tonemap,
             bloom_pre,
             bloom_down,
@@ -692,21 +769,29 @@ impl Pipelines {
         uni: &CanvasUniforms,
         bank: &mut TextureBank,
     ) {
-        gpu.queue.write_buffer(&self.ubuf, 0, bytemuck::bytes_of(uni));
-        self.vb_strokes.upload(gpu, bytemuck::cast_slice(&dl.stroke_verts));
-        self.ib_strokes.upload(gpu, bytemuck::cast_slice(&dl.stroke_idx));
-        self.vb_over.upload(gpu, bytemuck::cast_slice(&dl.over_verts));
+        gpu.queue
+            .write_buffer(&self.ubuf, 0, bytemuck::bytes_of(uni));
+        self.vb_strokes
+            .upload(gpu, bytemuck::cast_slice(&dl.stroke_verts));
+        self.ib_strokes
+            .upload(gpu, bytemuck::cast_slice(&dl.stroke_idx));
+        self.vb_over
+            .upload(gpu, bytemuck::cast_slice(&dl.over_verts));
         self.ib_over.upload(gpu, bytemuck::cast_slice(&dl.over_idx));
         self.vb_points.upload(gpu, bytemuck::cast_slice(&dl.points));
         self.vb_discs.upload(gpu, bytemuck::cast_slice(&dl.discs));
-        self.vb_rings_far.upload(gpu, bytemuck::cast_slice(&dl.rings_far));
-        self.vb_rings_near.upload(gpu, bytemuck::cast_slice(&dl.rings_near));
-        self.vb_galaxies.upload(gpu, bytemuck::cast_slice(&dl.galaxies));
+        self.vb_rings_far
+            .upload(gpu, bytemuck::cast_slice(&dl.rings_far));
+        self.vb_rings_near
+            .upload(gpu, bytemuck::cast_slice(&dl.rings_near));
+        self.vb_galaxies
+            .upload(gpu, bytemuck::cast_slice(&dl.galaxies));
 
         // resolve bind groups up front: the pass borrows them
         let sky_bg = bank.group(gpu, [Some(TexId::Sky), None, None]);
         let none_bg = bank.group(gpu, [None, None, None]);
-        let disc_bgs: Vec<wgpu::BindGroup> = dl.disc_tex.iter().map(|t| bank.group(gpu, *t)).collect();
+        let disc_bgs: Vec<wgpu::BindGroup> =
+            dl.disc_tex.iter().map(|t| bank.group(gpu, *t)).collect();
         let ring_bgs: Vec<wgpu::BindGroup> = dl
             .ring_tex
             .iter()
@@ -800,7 +885,10 @@ impl Pipelines {
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view,
                         resolve_target: None,
-                        ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+                        ops: wgpu::Operations {
+                            load,
+                            store: wgpu::StoreOp::Store,
+                        },
                     })],
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
@@ -812,9 +900,21 @@ impl Pipelines {
             };
             let clear = wgpu::LoadOp::Clear(wgpu::Color::BLACK);
             let mips = &target.bloom_mips;
-            fullscreen(&mut encoder, &mips[0], &self.bloom_pre, &bloom_bg(hdr_view), clear);
+            fullscreen(
+                &mut encoder,
+                &mips[0],
+                &self.bloom_pre,
+                &bloom_bg(hdr_view),
+                clear,
+            );
             for m in 1..mips.len() {
-                fullscreen(&mut encoder, &mips[m], &self.bloom_down, &bloom_bg(&mips[m - 1]), clear);
+                fullscreen(
+                    &mut encoder,
+                    &mips[m],
+                    &self.bloom_down,
+                    &bloom_bg(&mips[m - 1]),
+                    clear,
+                );
             }
             for m in (1..mips.len()).rev() {
                 fullscreen(
@@ -843,7 +943,13 @@ impl Pipelines {
                     },
                 ],
             });
-            fullscreen(&mut encoder, &target.resolve_view, &self.tonemap, &bg_tm, clear);
+            fullscreen(
+                &mut encoder,
+                &target.resolve_view,
+                &self.tonemap,
+                &bg_tm,
+                clear,
+            );
         }
         gpu.queue.submit([encoder.finish()]);
     }

@@ -37,7 +37,9 @@ const RIGHT_W: f32 = 244.0;
 
 pub fn layout(w: f32, h: f32) -> Layout {
     let m = if w < 700.0 { 10.0 } else { 14.0 };
-    let r = |x0: f32, y0: f32, x1: f32, y1: f32| Rect::from_min_max(egui::pos2(x0, y0), egui::pos2(x1, y1));
+    let r = |x0: f32, y0: f32, x1: f32, y1: f32| {
+        Rect::from_min_max(egui::pos2(x0, y0), egui::pos2(x1, y1))
+    };
 
     // toolbar, top right: search + back, home, view, help
     let search_w = if w >= 1040.0 {
@@ -87,7 +89,12 @@ pub fn layout(w: f32, h: f32) -> Layout {
         left_col.max.y = bar.top() - 8.0;
     }
     let right_w = RIGHT_W.min(content_right - m);
-    let mut right_col = r(content_right - right_w, toolbar.bottom() + 10.0, content_right, bar.top() - 8.0);
+    let mut right_col = r(
+        content_right - right_w,
+        toolbar.bottom() + 10.0,
+        content_right,
+        bar.top() - 8.0,
+    );
     if right_col.left() < title.right() + 8.0 {
         right_col.min.y = title.bottom() + 8.0;
     }
@@ -171,15 +178,17 @@ fn sig2(v: f64) -> f64 {
     (v / mag).round() * mag
 }
 
+/// Two significant figures, without trailing zeros.
 fn trim_num(v: f64) -> String {
-    if v >= 100.0 {
-        format!("{v:.0}")
-    } else if v >= 10.0 {
-        let s = format!("{v:.1}");
-        s.trim_end_matches(".0").to_string()
-    } else {
-        let s = format!("{v:.2}");
+    if v <= 0.0 {
+        return "0".into();
+    }
+    let decimals = (1.0 - v.log10().floor()).clamp(0.0, 6.0) as usize;
+    let s = format!("{v:.decimals$}");
+    if s.contains('.') {
         s.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        s
     }
 }
 
@@ -246,7 +255,11 @@ pub fn scale_bar(mpp: f64, max_px: f64) -> (f64, f64) {
     };
     let v = max_m / unit;
     let base = 10f64.powf(v.log10().floor());
-    let nice = [5.0, 2.0, 1.0].iter().map(|k| k * base).find(|x| *x <= v).unwrap_or(base);
+    let nice = [5.0, 2.0, 1.0]
+        .iter()
+        .map(|k| k * base)
+        .find(|x| *x <= v)
+        .unwrap_or(base);
     let len = nice * unit;
     (len, len / mpp)
 }
@@ -281,7 +294,14 @@ pub fn halo_text(
     alpha: f32,
 ) {
     let halo = Color32::from_black_alpha((190.0 * alpha.clamp(0.0, 1.0)) as u8);
-    for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (0.8, 0.8), (-0.8, 0.8)] {
+    for (dx, dy) in [
+        (-1.0, 0.0),
+        (1.0, 0.0),
+        (0.0, -1.0),
+        (0.0, 1.0),
+        (0.8, 0.8),
+        (-0.8, 0.8),
+    ] {
         p.text(pos + egui::vec2(dx, dy), align, text, font.clone(), halo);
     }
     p.text(pos, align, text, font, col);
@@ -299,7 +319,6 @@ enum Icon {
     Close,
     Minus,
     Plus,
-    Level,
 }
 
 fn paint_icon(p: &egui::Painter, c: egui::Pos2, icon: Icon, col: Color32, s: f32) {
@@ -316,18 +335,31 @@ fn paint_icon(p: &egui::Painter, c: egui::Pos2, icon: Icon, col: Color32, s: f32
                 st,
             ));
             p.add(egui::Shape::line(
-                vec![pt(-0.42, -0.12), pt(-0.42, 0.56), pt(0.42, 0.56), pt(0.42, -0.12)],
+                vec![
+                    pt(-0.42, -0.12),
+                    pt(-0.42, 0.56),
+                    pt(0.42, 0.56),
+                    pt(0.42, -0.12),
+                ],
                 st,
             ));
         }
         Icon::Back => {
             p.line_segment([pt(-0.6, 0.0), pt(0.6, 0.0)], st);
-            p.add(egui::Shape::line(vec![pt(-0.1, -0.5), pt(-0.6, 0.0), pt(-0.1, 0.5)], st));
+            p.add(egui::Shape::line(
+                vec![pt(-0.1, -0.5), pt(-0.6, 0.0), pt(-0.1, 0.5)],
+                st,
+            ));
         }
         Icon::Layers => {
             for dy in [-0.3f32, 0.0, 0.3] {
                 p.add(egui::Shape::closed_line(
-                    vec![pt(0.0, dy - 0.22), pt(0.6, dy), pt(0.0, dy + 0.22), pt(-0.6, dy)],
+                    vec![
+                        pt(0.0, dy - 0.22),
+                        pt(0.6, dy),
+                        pt(0.0, dy + 0.22),
+                        pt(-0.6, dy),
+                    ],
                     st,
                 ));
             }
@@ -363,22 +395,34 @@ fn paint_icon(p: &egui::Painter, c: egui::Pos2, icon: Icon, col: Color32, s: f32
             p.line_segment([pt(-0.5, 0.0), pt(0.5, 0.0)], st);
             p.line_segment([pt(0.0, -0.5), pt(0.0, 0.5)], st);
         }
-        Icon::Level => {
-            p.circle_stroke(c, 0.56 * s, st);
-            p.line_segment([pt(-0.56, 0.0), pt(0.56, 0.0)], st);
-        }
     }
 }
 
-fn icon_button(ui: &mut egui::Ui, icon: Icon, size: f32, enabled: bool, active: bool, tip: &str) -> egui::Response {
-    let sense = if enabled { Sense::click() } else { Sense::hover() };
+fn icon_button(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    size: f32,
+    enabled: bool,
+    active: bool,
+    tip: &str,
+) -> egui::Response {
+    let sense = if enabled {
+        Sense::click()
+    } else {
+        Sense::hover()
+    };
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(size, size), sense);
     let hovered = enabled && resp.hovered();
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     if resp.has_focus() {
-        ui.painter().rect_stroke(rect.expand(1.0), 5.0, Stroke::new(1.5, theme::BRASS), egui::StrokeKind::Outside);
+        ui.painter().rect_stroke(
+            rect.expand(1.0),
+            5.0,
+            Stroke::new(1.5, theme::BRASS),
+            egui::StrokeKind::Outside,
+        );
     }
     let fill = if active {
         Color32::from_rgba_premultiplied(70, 58, 34, 240)
@@ -388,7 +432,12 @@ fn icon_button(ui: &mut egui::Ui, icon: Icon, size: f32, enabled: bool, active: 
         theme::PANEL
     };
     ui.painter().rect_filled(rect, 5.0, fill);
-    ui.painter().rect_stroke(rect, 5.0, Stroke::new(1.0, theme::PANEL_LINE), egui::StrokeKind::Inside);
+    ui.painter().rect_stroke(
+        rect,
+        5.0,
+        Stroke::new(1.0, theme::PANEL_LINE),
+        egui::StrokeKind::Inside,
+    );
     let col = if !enabled {
         Color32::from_gray(90)
     } else if active || hovered {
@@ -408,7 +457,11 @@ impl Pantheon {
     /// What to call the place the camera is, right now.
     fn place_title(&self) -> (String, f64) {
         let lw = self.cam.log_width(self.view_w);
-        let band = self.fo.as_ref().map(|f| f.band_name.clone()).unwrap_or_default();
+        let band = self
+            .fo
+            .as_ref()
+            .map(|f| f.band_name.clone())
+            .unwrap_or_default();
         if self.scene_exo.is_some() {
             return (band, lw);
         }
@@ -420,9 +473,13 @@ impl Pantheon {
         // anything selected that the view is plainly about
         if let Some(obj) = self.focus {
             let view = self.cam.mpp * self.view_w;
-            let d = (obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref()) - self.cam.center_root()).length();
-            if !matches!(obj, ObjectRef::Sun | ObjectRef::Planet(_) | ObjectRef::Moon(_))
-                && d < 0.25 * view
+            let d = (obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref())
+                - self.cam.center_root())
+            .length();
+            if !matches!(
+                obj,
+                ObjectRef::Sun | ObjectRef::Planet(_) | ObjectRef::Moon(_)
+            ) && d < 0.25 * view
                 && view < 40.0 * atlas::obj_half_extent(&self.u, obj)
             {
                 return (obj_name(&self.u, obj), lw);
@@ -438,8 +495,10 @@ impl Pantheon {
         let jd = self.clock.jd;
         let isl = self.island.as_ref();
         if let Some(obj) = self.focus {
-            if matches!(obj, ObjectRef::Sun | ObjectRef::Planet(_) | ObjectRef::Moon(_))
-                && (obj_pos(&self.u, obj, jd, isl) - c).length() < view
+            if matches!(
+                obj,
+                ObjectRef::Sun | ObjectRef::Planet(_) | ObjectRef::Moon(_)
+            ) && (obj_pos(&self.u, obj, jd, isl) - c).length() < view
             {
                 return Some(obj);
             }
@@ -464,7 +523,10 @@ impl Pantheon {
         let l = layout(rect.width(), rect.height());
         self.panel_rects.clear();
         self.panel_rects.push(l.toolbar);
-        self.panel_rects.push(Rect::from_min_size(l.title.min, egui::vec2(l.title.width().min(430.0), l.title.height())));
+        self.panel_rects.push(Rect::from_min_size(
+            l.title.min,
+            egui::vec2(l.title.width().min(430.0), l.title.height()),
+        ));
         self.panel_rects.push(l.bar);
         if let (Some(r), true) = (l.rail, self.modes.ladder) {
             if l.rail_labels {
@@ -528,11 +590,22 @@ impl Pantheon {
             None
         };
         let r = l.title;
-        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Background, egui::Id::new("title")));
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Background,
+            egui::Id::new("title"),
+        ));
         let x = r.left();
         let mut y = r.top();
         let title_size = if r.width() < 260.0 { 22.0 } else { 34.0 };
-        halo_text(&painter, egui::pos2(x, y - 3.0), Align2::LEFT_TOP, &title, theme::heading(title_size), theme::VELLUM, 1.0);
+        halo_text(
+            &painter,
+            egui::pos2(x, y - 3.0),
+            Align2::LEFT_TOP,
+            &title,
+            theme::heading(title_size),
+            theme::VELLUM,
+            1.0,
+        );
         y += title_size + 3.0;
         // how big is this view, in words and in light
         let width_line = format!(
@@ -540,7 +613,15 @@ impl Pantheon {
             fmt_words(view_m),
             fmt_light_time(view_m)
         );
-        halo_text(&painter, egui::pos2(x, y), Align2::LEFT_TOP, &width_line, theme::ui(13.0), theme::TEXT, 1.0);
+        halo_text(
+            &painter,
+            egui::pos2(x, y),
+            Align2::LEFT_TOP,
+            &width_line,
+            theme::ui(13.0),
+            theme::TEXT,
+            1.0,
+        );
         y += 19.0;
         // a true scale bar
         let (len, px) = scale_bar(self.cam.mpp, (r.width() as f64 * 0.42).clamp(70.0, 180.0));
@@ -550,41 +631,92 @@ impl Pantheon {
             let st = Stroke::new(if o > 0.0 { 3.2 } else { 1.2 }, c);
             painter.line_segment([egui::pos2(x, bar_y), egui::pos2(x + px, bar_y)], st);
             painter.line_segment([egui::pos2(x, bar_y - 4.0), egui::pos2(x, bar_y + 4.0)], st);
-            painter.line_segment([egui::pos2(x + px, bar_y - 4.0), egui::pos2(x + px, bar_y + 4.0)], st);
+            painter.line_segment(
+                [
+                    egui::pos2(x + px, bar_y - 4.0),
+                    egui::pos2(x + px, bar_y + 4.0),
+                ],
+                st,
+            );
         }
-        halo_text(&painter, egui::pos2(x + px + 9.0, bar_y), Align2::LEFT_CENTER, &fmt_bar(len), theme::ui(12.0), theme::TEXT, 1.0);
+        halo_text(
+            &painter,
+            egui::pos2(x + px + 9.0, bar_y),
+            Align2::LEFT_CENTER,
+            &fmt_bar(len),
+            theme::ui(12.0),
+            theme::TEXT,
+            1.0,
+        );
         y += 21.0;
         if l.show_caption {
             // say what this view is made of: the project's labels, in plain words
             let (text, prov) = caption;
             let wrap = (r.width() - 14.0).max(120.0);
             let galley = ctx.fonts(|f| {
-                f.layout(text.to_string(), theme::ui(11.5), theme::TEXT_DIM, wrap.min(420.0))
+                f.layout(
+                    text.to_string(),
+                    theme::ui(11.5),
+                    theme::TEXT_DIM,
+                    wrap.min(420.0),
+                )
             });
-            painter.circle_filled(egui::pos2(x + 3.5, y + 7.0), 3.5, theme::col32(prov.rgb(), 1.0));
+            painter.circle_filled(
+                egui::pos2(x + 3.5, y + 7.0),
+                3.5,
+                theme::col32(prov.rgb(), 1.0),
+            );
             for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
                 let halo = ctx.fonts(|f| {
-                    f.layout(text.to_string(), theme::ui(11.5), Color32::from_black_alpha(190), wrap.min(420.0))
+                    f.layout(
+                        text.to_string(),
+                        theme::ui(11.5),
+                        Color32::from_black_alpha(190),
+                        wrap.min(420.0),
+                    )
                 });
-                painter.galley(egui::pos2(x + 13.0 + dx, y + dy), halo, Color32::from_black_alpha(190));
+                painter.galley(
+                    egui::pos2(x + 13.0 + dx, y + dy),
+                    halo,
+                    Color32::from_black_alpha(190),
+                );
             }
             let h = galley.size().y;
             painter.galley(egui::pos2(x + 13.0, y), galley, theme::TEXT_DIM);
             y += h + 3.0;
             if let Some(t) = turning {
-                halo_text(&painter, egui::pos2(x + 13.0, y), Align2::LEFT_TOP, t, theme::ui(11.5), theme::BRASS, 1.0);
+                halo_text(
+                    &painter,
+                    egui::pos2(x + 13.0, y),
+                    Align2::LEFT_TOP,
+                    t,
+                    theme::ui(11.5),
+                    theme::BRASS,
+                    1.0,
+                );
                 y += 16.0;
             }
             // the image credits their licenses require, shown while they're on screen
             let on = |e: crate::evidence::Ev| fo.evidence.iter().any(|(a, _)| *a == e);
-            let credit = match (on(crate::evidence::Ev::SkyPanorama), on(crate::evidence::Ev::SurfaceImagery)) {
+            let credit = match (
+                on(crate::evidence::Ev::SkyPanorama),
+                on(crate::evidence::Ev::SurfaceImagery),
+            ) {
                 (true, true) => Some("Sky: ESO/S. Brunier. Maps: Solar System Scope."),
                 (true, false) => Some("Sky: ESO/S. Brunier."),
                 (false, true) => Some("Maps: Solar System Scope."),
                 _ => None,
             };
             if let Some(c) = credit {
-                halo_text(&painter, egui::pos2(x + 13.0, y), Align2::LEFT_TOP, c, theme::ui(10.5), theme::TEXT_DIM, 0.9);
+                halo_text(
+                    &painter,
+                    egui::pos2(x + 13.0, y),
+                    Align2::LEFT_TOP,
+                    c,
+                    theme::ui(10.5),
+                    theme::TEXT_DIM,
+                    0.9,
+                );
             }
         }
     }
@@ -600,11 +732,18 @@ impl Pantheon {
         if self.scene_exo.is_none() && lw > 9.8 && lw < 23.8 && self.focus != Some(ObjectRef::Sun) {
             targets.push(("Sun".into(), DVec3::ZERO, None));
         }
-        let proj = crate::frames::Proj::new(&self.cam, rect.width() as f64, rect.height() as f64, &self.u.gal);
+        let proj = crate::frames::Proj::new(
+            &self.cam,
+            rect.width() as f64,
+            rect.height() as f64,
+            &self.u.gal,
+        );
         let inset = Rect::from_min_max(
             egui::pos2(l.left_col.left() + 6.0, l.toolbar.bottom() + 12.0),
             egui::pos2(
-                l.rail.map(|r| r.left() - 16.0).unwrap_or(rect.right() - 16.0),
+                l.rail
+                    .map(|r| r.left() - 16.0)
+                    .unwrap_or(rect.right() - 16.0),
                 l.bar.top() - 14.0,
             ),
         );
@@ -642,7 +781,11 @@ impl Pantheon {
             let t = tx.min(ty);
             let mut tip = egui::pos2((cx + ux * t) as f32, (cy + uy * t) as f32);
             // never on top of the card: slide along the edge of it
-            if let Some(card) = self.panel_rects.iter().find(|r| r.left() <= l.left_col.left() + 1.0 && r.top() > l.title.bottom()) {
+            if let Some(card) = self
+                .panel_rects
+                .iter()
+                .find(|r| r.left() <= l.left_col.left() + 1.0 && r.top() > l.title.bottom())
+            {
                 if card.expand(16.0).contains(tip) {
                     tip.x = card.right() + 22.0;
                 }
@@ -651,7 +794,11 @@ impl Pantheon {
             let text = format!("{name}, {}", fmt_len(dist));
             let d = egui::vec2(ux as f32, uy as f32);
             let n = egui::vec2(-d.y, d.x);
-            let col = if obj.is_some() { theme::BRASS } else { theme::VELLUM };
+            let col = if obj.is_some() {
+                theme::BRASS
+            } else {
+                theme::VELLUM
+            };
             let id = egui::Id::new(("edge", i));
             // label sits inward of the arrowhead
             let label_anchor = if ux > 0.3 {
@@ -665,7 +812,9 @@ impl Pantheon {
             };
             let label_pos = tip - d * 16.0;
             let galley_w = text.chars().count() as f32 * 6.4 + 14.0;
-            let hit = label_anchor.anchor_size(label_pos, egui::vec2(galley_w, 20.0)).union(Rect::from_center_size(tip, egui::vec2(18.0, 18.0)));
+            let hit = label_anchor
+                .anchor_size(label_pos, egui::vec2(galley_w, 20.0))
+                .union(Rect::from_center_size(tip, egui::vec2(18.0, 18.0)));
             let resp = egui::Area::new(id)
                 .order(egui::Order::Middle)
                 .fixed_pos(hit.min)
@@ -678,11 +827,23 @@ impl Pantheon {
             let paint = ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, id));
             let shade = if hovered { theme::VELLUM } else { col };
             paint.add(egui::Shape::convex_polygon(
-                vec![tip + d * 7.0, tip - d * 4.0 + n * 5.5, tip - d * 4.0 - n * 5.5],
+                vec![
+                    tip + d * 7.0,
+                    tip - d * 4.0 + n * 5.5,
+                    tip - d * 4.0 - n * 5.5,
+                ],
                 shade,
                 Stroke::new(1.0, Color32::from_black_alpha(170)),
             ));
-            halo_text(&paint, label_pos, label_anchor, &text, theme::ui(12.0), shade, 1.0);
+            halo_text(
+                &paint,
+                label_pos,
+                label_anchor,
+                &text,
+                theme::ui(12.0),
+                shade,
+                1.0,
+            );
             if resp.on_hover_text("Go there").clicked() {
                 go = Some((*obj, *p));
             }
@@ -707,7 +868,8 @@ impl Pantheon {
                 .fixed_pos(l.search.min)
                 .show(ctx, |ui| {
                     if compact_search {
-                        if icon_button(ui, Icon::Search, TOOL, true, false, "Search (/)").clicked() {
+                        if icon_button(ui, Icon::Search, TOOL, true, false, "Search (/)").clicked()
+                        {
                             self.search.open_palette();
                         }
                     } else {
@@ -721,10 +883,23 @@ impl Pantheon {
                         ui.painter().rect_stroke(
                             r,
                             round,
-                            Stroke::new(1.0, if hov { theme::BRASS_DIM } else { theme::PANEL_LINE }),
+                            Stroke::new(
+                                1.0,
+                                if hov {
+                                    theme::BRASS_DIM
+                                } else {
+                                    theme::PANEL_LINE
+                                },
+                            ),
                             egui::StrokeKind::Inside,
                         );
-                        paint_icon(ui.painter(), r.left_center() + egui::vec2(17.0, 0.0), Icon::Search, theme::TEXT_DIM, 10.0);
+                        paint_icon(
+                            ui.painter(),
+                            r.left_center() + egui::vec2(17.0, 0.0),
+                            Icon::Search,
+                            theme::TEXT_DIM,
+                            10.0,
+                        );
                         ui.painter().text(
                             r.left_center() + egui::vec2(31.0, 0.0),
                             Align2::LEFT_CENTER,
@@ -753,12 +928,39 @@ impl Pantheon {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = TOOL_GAP;
                     let can = self.can_go_back();
-                    back = icon_button(ui, Icon::Back, TOOL, can, false, "Back to the previous view (Backspace)").clicked();
-                    home = icon_button(ui, Icon::Home, TOOL, true, false, "Fly home to Earth (H)").clicked();
-                    if icon_button(ui, Icon::Layers, TOOL, true, self.show_layers, "View options").clicked() {
+                    back = icon_button(
+                        ui,
+                        Icon::Back,
+                        TOOL,
+                        can,
+                        false,
+                        "Back to the previous view (Backspace)",
+                    )
+                    .clicked();
+                    home = icon_button(ui, Icon::Home, TOOL, true, false, "Fly home to Earth (H)")
+                        .clicked();
+                    if icon_button(
+                        ui,
+                        Icon::Layers,
+                        TOOL,
+                        true,
+                        self.show_layers,
+                        "View options",
+                    )
+                    .clicked()
+                    {
                         self.show_layers = !self.show_layers;
                     }
-                    if icon_button(ui, Icon::Help, TOOL, true, self.show_help, "How to move (?)").clicked() {
+                    if icon_button(
+                        ui,
+                        Icon::Help,
+                        TOOL,
+                        true,
+                        self.show_help,
+                        "How to move (?)",
+                    )
+                    .clicked()
+                    {
                         self.show_help = !self.show_help;
                     }
                 });
@@ -785,7 +987,9 @@ impl Pantheon {
             return;
         }
         let width = 380.0f32.min(ctx.screen_rect().width() - 20.0);
-        let x = (l.search.left()).min(ctx.screen_rect().right() - width - 10.0).max(10.0);
+        let x = (l.search.left())
+            .min(ctx.screen_rect().right() - width - 10.0)
+            .max(10.0);
         let mut picked: Option<super::Dest> = None;
         let mut close = false;
         let n = self.search.results().len();
@@ -827,35 +1031,54 @@ impl Pantheon {
                                 .desired_width(ui.available_width() - 30.0),
                         );
                         te.request_focus();
-                        if icon_button(ui, Icon::Close, 22.0, true, false, "Close (Esc)").clicked() {
+                        if icon_button(ui, Icon::Close, 22.0, true, false, "Close (Esc)").clicked()
+                        {
                             close = true;
                         }
                     });
                     ui.add_space(2.0);
                     if results.is_empty() {
                         ui.label(
-                            RichText::new(format!("Nothing named \"{}\" in this atlas", query.trim()))
-                                .color(theme::TEXT_DIM)
-                                .size(12.5),
+                            RichText::new(format!(
+                                "Nothing named \"{}\" in this atlas",
+                                query.trim()
+                            ))
+                            .color(theme::TEXT_DIM)
+                            .size(12.5),
                         );
                     } else if query.trim().is_empty() {
-                        ui.label(RichText::new("Try one of these").color(theme::TEXT_DIM).size(11.5));
+                        ui.label(
+                            RichText::new("Try one of these")
+                                .color(theme::TEXT_DIM)
+                                .size(11.5),
+                        );
                     }
                     for (i, (name, detail, dest)) in results.iter().enumerate() {
-                        let (r, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 27.0), Sense::click());
+                        let (r, resp) = ui.allocate_exact_size(
+                            egui::vec2(ui.available_width(), 27.0),
+                            Sense::click(),
+                        );
                         if resp.hovered() {
                             selected = i;
                             ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
                         if i == selected {
-                            ui.painter().rect_filled(r, 4.0, Color32::from_rgba_premultiplied(66, 56, 34, 225));
+                            ui.painter().rect_filled(
+                                r,
+                                4.0,
+                                Color32::from_rgba_premultiplied(66, 56, 34, 225),
+                            );
                         }
                         ui.painter().text(
                             r.left_center() + egui::vec2(7.0, 0.0),
                             Align2::LEFT_CENTER,
                             name,
                             theme::ui(13.5),
-                            if i == selected { theme::VELLUM } else { theme::TEXT },
+                            if i == selected {
+                                theme::VELLUM
+                            } else {
+                                theme::TEXT
+                            },
                         );
                         ui.painter().text(
                             r.right_center() - egui::vec2(7.0, 0.0),
@@ -906,7 +1129,11 @@ impl Pantheon {
             self.fly_to_place(p, 10f64.powf(lw), "");
             return;
         }
-        let center = if (20.0..22.4).contains(&lw) { self.u.gal.center } else { DVec3::ZERO };
+        let center = if (20.0..22.4).contains(&lw) {
+            self.u.gal.center
+        } else {
+            DVec3::ZERO
+        };
         self.fly_to_place(center, 10f64.powf(lw), "");
     }
 
@@ -921,14 +1148,22 @@ impl Pantheon {
                 let r = resp.rect;
                 let rule_x = r.right() - 5.0;
                 let (top, bot) = (r.top() + 8.0, r.bottom() - 8.0);
-                let y_of = |v: f64| bot - ((v - RAIL_LO) / (RAIL_HI - RAIL_LO)) as f32 * (bot - top);
-                let v_of = |y: f32| RAIL_LO + ((bot - y) / (bot - top)) as f64 * (RAIL_HI - RAIL_LO);
+                let y_of =
+                    |v: f64| bot - ((v - RAIL_LO) / (RAIL_HI - RAIL_LO)) as f32 * (bot - top);
+                let v_of =
+                    |y: f32| RAIL_LO + ((bot - y) / (bot - top)) as f64 * (RAIL_HI - RAIL_LO);
                 // the rule, with a tick per decade: this is a logarithmic instrument
-                p.line_segment([egui::pos2(rule_x, top), egui::pos2(rule_x, bot)], Stroke::new(1.0, theme::BRASS_DIM));
+                p.line_segment(
+                    [egui::pos2(rule_x, top), egui::pos2(rule_x, bot)],
+                    Stroke::new(1.0, theme::BRASS_DIM),
+                );
                 let mut d = RAIL_LO.ceil();
                 while d <= RAIL_HI {
                     let y = y_of(d);
-                    p.line_segment([egui::pos2(rule_x - 4.0, y), egui::pos2(rule_x, y)], Stroke::new(1.0, Color32::from_rgba_unmultiplied(170, 145, 95, 110)));
+                    p.line_segment(
+                        [egui::pos2(rule_x - 4.0, y), egui::pos2(rule_x, y)],
+                        Stroke::new(1.0, Color32::from_rgba_unmultiplied(170, 145, 95, 110)),
+                    );
                     d += 1.0;
                 }
                 let hover_y = resp.hover_pos().map(|h| h.y);
@@ -937,7 +1172,12 @@ impl Pantheon {
                 let mut last_y = f32::MAX;
                 let nearest = RUNGS
                     .iter()
-                    .min_by(|a, b| (a.0 - lw_now).abs().partial_cmp(&(b.0 - lw_now).abs()).unwrap())
+                    .min_by(|a, b| {
+                        (a.0 - lw_now)
+                            .abs()
+                            .partial_cmp(&(b.0 - lw_now).abs())
+                            .unwrap()
+                    })
                     .map(|x| x.1);
                 for (v, name) in RUNGS {
                     let y = y_of(v);
@@ -954,21 +1194,40 @@ impl Pantheon {
                     } else {
                         theme::TEXT
                     };
-                    p.line_segment([egui::pos2(rule_x - 9.0, y), egui::pos2(rule_x, y)], Stroke::new(1.2, if here { theme::BRASS } else { theme::BRASS_DIM }));
+                    p.line_segment(
+                        [egui::pos2(rule_x - 9.0, y), egui::pos2(rule_x, y)],
+                        Stroke::new(1.2, if here { theme::BRASS } else { theme::BRASS_DIM }),
+                    );
                     if labels {
-                        halo_text(&p, egui::pos2(rule_x - 15.0, y), Align2::RIGHT_CENTER, name, theme::ui(if here { 13.0 } else { 12.0 }), col, 1.0);
+                        halo_text(
+                            &p,
+                            egui::pos2(rule_x - 15.0, y),
+                            Align2::RIGHT_CENTER,
+                            name,
+                            theme::ui(if here { 13.0 } else { 12.0 }),
+                            col,
+                            1.0,
+                        );
                     }
                 }
                 // the needle: where the camera is on the ladder of scales
                 let ny = y_of(lw_now.clamp(RAIL_LO, RAIL_HI));
                 let tip = egui::pos2(rule_x - 1.0, ny);
                 p.add(egui::Shape::convex_polygon(
-                    vec![tip, tip + egui::vec2(-10.0, -5.5), tip + egui::vec2(-10.0, 5.5)],
+                    vec![
+                        tip,
+                        tip + egui::vec2(-10.0, -5.5),
+                        tip + egui::vec2(-10.0, 5.5),
+                    ],
                     theme::BRASS,
                     Stroke::new(1.0, Color32::from_black_alpha(190)),
                 ));
                 if resp.hovered() || dragging {
-                    ctx.set_cursor_icon(if dragging { egui::CursorIcon::Grabbing } else { egui::CursorIcon::PointingHand });
+                    ctx.set_cursor_icon(if dragging {
+                        egui::CursorIcon::Grabbing
+                    } else {
+                        egui::CursorIcon::PointingHand
+                    });
                 }
                 if dragging {
                     if let Some(pos) = resp.interact_pointer_pos() {
@@ -978,7 +1237,10 @@ impl Pantheon {
                     if let Some(pos) = resp.interact_pointer_pos() {
                         let click = v_of(pos.y);
                         // a click near a rung means that rung; between them, that scale
-                        let rung = RUNGS.iter().find(|(v, _)| (y_of(*v) - pos.y).abs() < 9.0).map(|x| x.0);
+                        let rung = RUNGS
+                            .iter()
+                            .find(|(v, _)| (y_of(*v) - pos.y).abs() < 9.0)
+                            .map(|x| x.0);
                         go = Some(rung.unwrap_or(click));
                     }
                 }
@@ -1032,11 +1294,17 @@ impl Pantheon {
                         }
                         // the date, the thing you're controlling
                         let date = fmt_jd(self.clock.jd);
-                        let date_short = if l.bar_level == 0 { date[..11].to_string() } else { date };
+                        let date_short = if l.bar_level == 0 {
+                            date[..11].to_string()
+                        } else {
+                            date
+                        };
                         ui.label(RichText::new(date_short).size(13.0).color(theme::VELLUM));
                         if l.bar_level >= 1 {
                             ui.separator();
-                            if icon_button(ui, Icon::Minus, 22.0, true, false, "Slower ([)").clicked() {
+                            if icon_button(ui, Icon::Minus, 22.0, true, false, "Slower ([)")
+                                .clicked()
+                            {
                                 self.step_rate(-1);
                             }
                             let rate = self.clock.rate;
@@ -1047,9 +1315,12 @@ impl Pantheon {
                                 .unwrap_or("1 day / s");
                             ui.add_sized(
                                 [if l.bar_level == 2 { 110.0 } else { 88.0 }, 22.0],
-                                egui::Label::new(RichText::new(name).size(12.0).color(theme::TEXT)).truncate(),
+                                egui::Label::new(RichText::new(name).size(12.0).color(theme::TEXT))
+                                    .truncate(),
                             );
-                            if icon_button(ui, Icon::Plus, 22.0, true, false, "Faster (])").clicked() {
+                            if icon_button(ui, Icon::Plus, 22.0, true, false, "Faster (])")
+                                .clicked()
+                            {
                                 self.step_rate(1);
                             }
                         }
@@ -1063,14 +1334,20 @@ impl Pantheon {
                                     .show_value(false)
                                     .trailing_fill(true),
                             );
-                            if resp.changed() && (resp.dragged() || resp.clicked() || resp.has_focus()) {
+                            if resp.changed()
+                                && (resp.dragged() || resp.clicked() || resp.has_focus())
+                            {
                                 self.clock.jd = J2000 + (yr - 2000.0) * 365.25;
                             }
                             resp.on_hover_text(format!("{yr:.1}: drag to travel through time"));
                         }
                         let now_gap = (self.clock.jd - jd_now()).abs() > 1.0 / 24.0;
                         ui.add_enabled_ui(now_gap || l.bar_level >= 1, |ui| {
-                            if ui.small_button("Now").on_hover_text("Return to the present (N)").clicked() {
+                            if ui
+                                .small_button("Now")
+                                .on_hover_text("Return to the present (N)")
+                                .clicked()
+                            {
                                 self.clock.jd = jd_now();
                             }
                         });
@@ -1243,11 +1520,18 @@ impl Pantheon {
     fn truth_legend(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         panel_frame(ctx).show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(RichText::new("Ink by evidence").font(theme::heading(19.0)).color(theme::VELLUM));
+            ui.label(
+                RichText::new("Ink by evidence")
+                    .font(theme::heading(19.0))
+                    .color(theme::VELLUM),
+            );
             // TRUTH-001: generated from what this frame actually drew; absent
             // classes never appear. Hover an entry for its record.
-            let drawn: Vec<(crate::evidence::Ev, &'static str)> =
-                self.fo.as_ref().map(|f| f.evidence.clone()).unwrap_or_default();
+            let drawn: Vec<(crate::evidence::Ev, &'static str)> = self
+                .fo
+                .as_ref()
+                .map(|f| f.evidence.clone())
+                .unwrap_or_default();
             for p in [
                 Prov::Measured,
                 Prov::Modeled,
@@ -1256,35 +1540,52 @@ impl Pantheon {
                 Prov::Illustrative,
                 Prov::Unknown,
             ] {
-                let here: Vec<_> = drawn.iter().filter(|(e, _)| crate::evidence::rec(*e).class == p).collect();
+                let here: Vec<_> = drawn
+                    .iter()
+                    .filter(|(e, _)| crate::evidence::rec(*e).class == p)
+                    .collect();
                 if here.is_empty() {
                     continue;
                 }
                 ui.horizontal(|ui| {
                     let (rc, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), Sense::hover());
-                    ui.painter().circle_filled(rc.center(), 4.0, theme::col32(p.rgb(), 1.0));
+                    ui.painter()
+                        .circle_filled(rc.center(), 4.0, theme::col32(p.rgb(), 1.0));
                     ui.label(RichText::new(p.label()).size(12.0));
                 });
                 for (e, what) in here {
                     let r = crate::evidence::rec(*e);
                     ui.horizontal(|ui| {
                         ui.add_space(16.0);
-                        ui.label(RichText::new(*what).size(11.0).color(theme::TEXT_DIM)).on_hover_text(format!(
-                            "{}\n{}\nframe: {}\n{}",
-                            r.source, r.citation, r.frame, r.note
-                        ));
+                        ui.label(RichText::new(*what).size(11.0).color(theme::TEXT_DIM))
+                            .on_hover_text(format!(
+                                "{}\n{}\nframe: {}\n{}",
+                                r.source, r.citation, r.frame, r.note
+                            ));
                     });
                 }
             }
-            ui.label(RichText::new(format!("Data retrieved {}", self.u.retrieved)).size(11.0).color(theme::TEXT_DIM));
+            ui.label(
+                RichText::new(format!("Data retrieved {}", self.u.retrieved))
+                    .size(11.0)
+                    .color(theme::TEXT_DIM),
+            );
         });
     }
 
     fn capture_panel(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         panel_frame(ctx).show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(RichText::new("Record a flight").font(theme::heading(19.0)).color(theme::VELLUM));
-            ui.label(RichText::new(format!("{} keyframes", self.capture.len())).size(11.5).color(theme::TEXT_DIM));
+            ui.label(
+                RichText::new("Record a flight")
+                    .font(theme::heading(19.0))
+                    .color(theme::VELLUM),
+            );
+            ui.label(
+                RichText::new(format!("{} keyframes", self.capture.len()))
+                    .size(11.5)
+                    .color(theme::TEXT_DIM),
+            );
             ui.horizontal(|ui| {
                 if ui.button("Add view").clicked() {
                     let host = match self.focus {
@@ -1357,7 +1658,9 @@ impl Pantheon {
                         ui.label(RichText::new("On the map").size(11.5).color(theme::TEXT_DIM));
                         ui.checkbox(&mut self.modes.labels, "Names");
                         ui.checkbox(&mut self.modes.orbits, "Orbits");
-                        ui.checkbox(&mut self.modes.trails, "Spacecraft paths");
+                        if !self.u.craft.is_empty() {
+                            ui.checkbox(&mut self.modes.trails, "Spacecraft paths");
+                        }
                         ui.checkbox(&mut self.modes.ladder, "Scale rail");
                         ui.add_space(4.0);
                         ui.label(RichText::new("Modes").size(11.5).color(theme::TEXT_DIM));
@@ -1442,9 +1745,14 @@ impl Pantheon {
                 panel_frame(ctx).show(ui, |ui| {
                     ui.set_width(w - 24.0);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("How to move").font(theme::heading(26.0)).color(theme::VELLUM));
+                        ui.label(
+                            RichText::new("How to move")
+                                .font(theme::heading(26.0))
+                                .color(theme::VELLUM),
+                        );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            close = icon_button(ui, Icon::Close, 24.0, true, false, "Close (Esc)").clicked();
+                            close = icon_button(ui, Icon::Close, 24.0, true, false, "Close (Esc)")
+                                .clicked();
                         });
                     });
                     let rows = [
@@ -1467,15 +1775,21 @@ impl Pantheon {
                         ("Esc", "close, or clear the selection"),
                     ];
                     let avail = rect.height() - 110.0;
-                    egui::ScrollArea::vertical().max_height(avail).auto_shrink([false, true]).show(ui, |ui| {
-                        egui::Grid::new("help-grid").num_columns(2).spacing([16.0, 5.0]).show(ui, |ui| {
-                            for (k, v) in rows {
-                                ui.label(RichText::new(k).size(12.5).color(theme::BRASS));
-                                ui.label(RichText::new(v).size(12.5).color(theme::TEXT));
-                                ui.end_row();
-                            }
+                    egui::ScrollArea::vertical()
+                        .max_height(avail)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            egui::Grid::new("help-grid")
+                                .num_columns(2)
+                                .spacing([16.0, 5.0])
+                                .show(ui, |ui| {
+                                    for (k, v) in rows {
+                                        ui.label(RichText::new(k).size(12.5).color(theme::BRASS));
+                                        ui.label(RichText::new(v).size(12.5).color(theme::TEXT));
+                                        ui.end_row();
+                                    }
+                                });
                         });
-                    });
                 });
             });
         if close {
@@ -1526,7 +1840,9 @@ impl Pantheon {
 
     fn hover_tip(&self, ctx: &egui::Context) {
         let Some(obj) = self.hover else { return };
-        let Some(p) = ctx.input(|i| i.pointer.hover_pos()) else { return };
+        let Some(p) = ctx.input(|i| i.pointer.hover_pos()) else {
+            return;
+        };
         // don't obscure the thing being pointed at when it already has a big card
         if self.focus == Some(obj) {
             return;
@@ -1537,12 +1853,18 @@ impl Pantheon {
             .interactable(false)
             .fixed_pos(p + egui::vec2(14.0, 14.0))
             .show(ctx, |ui| {
-                panel_frame(ctx).inner_margin(egui::Margin::symmetric(8, 4)).show(ui, |ui| {
-                    ui.label(RichText::new(name).size(13.0).color(theme::VELLUM));
-                    if !self.learned_click {
-                        ui.label(RichText::new("Click to select, double-click to fly").size(11.0).color(theme::TEXT_DIM));
-                    }
-                });
+                panel_frame(ctx)
+                    .inner_margin(egui::Margin::symmetric(8, 4))
+                    .show(ui, |ui| {
+                        ui.label(RichText::new(name).size(13.0).color(theme::VELLUM));
+                        if !self.learned_click {
+                            ui.label(
+                                RichText::new("Click to select, double-click to fly")
+                                    .size(11.0)
+                                    .color(theme::TEXT_DIM),
+                            );
+                        }
+                    });
             });
     }
 }
@@ -1584,7 +1906,10 @@ mod tests {
             let rects = all_rects(&l);
             for (i, (na, a)) in rects.iter().enumerate() {
                 assert!(win.contains_rect(*a), "{na} leaves a {w}x{h} window: {a:?}");
-                assert!(a.width() > 0.0 && a.height() > 0.0, "{na} is empty at {w}x{h}: {a:?}");
+                assert!(
+                    a.width() > 0.0 && a.height() > 0.0,
+                    "{na} is empty at {w}x{h}: {a:?}"
+                );
                 for (nb, b) in &rects[i + 1..] {
                     // the left and right columns only share space when told to
                     assert!(
@@ -1598,7 +1923,9 @@ mod tests {
 
     #[test]
     fn scale_bar_is_round_and_fits() {
-        for mpp in [1.0e3, 2.0e4, 1.0e6, 3.3e7, 1.0e10, 1.0e13, 1.0e16, 1.0e19, 5.0e21] {
+        for mpp in [
+            1.0e3, 2.0e4, 1.0e6, 3.3e7, 1.0e10, 1.0e13, 1.0e16, 1.0e19, 5.0e21,
+        ] {
             let (len, px) = scale_bar(mpp, 180.0);
             assert!(px <= 180.0 + 1e-6, "bar is {px} px at mpp {mpp}");
             assert!(px >= 180.0 / 5.1, "bar is only {px} px at mpp {mpp}");

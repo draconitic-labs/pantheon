@@ -199,7 +199,9 @@ fn fs(in: VsOut) -> FsOut {
             let pr = in.ca.rgb * (0.7 + 0.5 * cell) * grain;
             surf = mix(pr, img, img_fade);
         } else {
-            surf = in.ca.rgb * (0.72 + 0.56 * cell) * grain;
+            // no map: the star's own colour, cooler in the darker granules
+            let t = 0.35 + 0.6 * cell;
+            surf = mix(in.ca.rgb * vec3<f32>(1.0, 0.56, 0.32), in.ca.rgb, smoothstep(0.2, 0.75, t)) * (0.62 + 0.86 * t) * grain;
         }
         var col = surf * limb * emission;
 
@@ -288,6 +290,9 @@ fn fs(in: VsOut) -> FsOut {
         var cloud = 0.0;
         if (in.flags.y > 0.5) {
             cloud = smoothstep(0.015, 0.62, cl_tex) * img_fade;
+        } else if (img_fade < 0.5) {
+            // no cloud map on disk: stylized clouds so the fallback isn't bare
+            cloud = smoothstep(0.52, 0.76, fbm3(q * 2.9 + vec3<f32>(time * 0.004, 0.0, 0.0))) * 0.55;
         }
         // deep oceans read as a colour, not as black
         let water = smoothstep(0.015, 0.09, surf.b - surf.r * 1.05) * smoothstep(0.32, 0.12, surf.g) * img_fade;
