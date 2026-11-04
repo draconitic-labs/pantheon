@@ -406,19 +406,50 @@ fn perifocal_to_ecl(node: f64, inc: f64, argp: f64) -> DMat3 {
     DMat3::from_rotation_z(node) * DMat3::from_rotation_x(inc) * DMat3::from_rotation_z(argp)
 }
 
+/// The span Standish's linear rates are fitted to, in Julian centuries from J2000:
+/// 1800 to 2050. Mars's eccentricity would pass 1 near the year 1.15 million.
+pub const ELEMENTS_VALID_CENTURIES: (f64, f64) = (-2.0, 0.5);
+
+/// A planet's orbit at `jd`: semi-major axis (m), eccentricity, and inclination, longitude
+/// of perihelion and node (rad). Outside the table's span these hold at the nearest limit,
+/// so an orbit stays a real ellipse at any date. Only the mean longitude keeps running.
+struct OrbitShape {
+    a: f64,
+    e: f64,
+    inc: f64,
+    lp: f64,
+    node: f64,
+}
+
+fn orbit_shape(p: &PlanetDef, jd: f64) -> OrbitShape {
+    let t = ((jd - J2000) / 36_525.0).clamp(ELEMENTS_VALID_CENTURIES.0, ELEMENTS_VALID_CENTURIES.1);
+    OrbitShape {
+        a: (p.el[0] + p.rate[0] * t) * AU,
+        e: p.el[1] + p.rate[1] * t,
+        inc: (p.el[2] + p.rate[2] * t).to_radians(),
+        lp: (p.el[4] + p.rate[4] * t).to_radians(),
+        node: (p.el[5] + p.rate[5] * t).to_radians(),
+    }
+}
+
+/// Mean anomaly at `jd` given the orbit's longitude of perihelion (rad).
+fn mean_anomaly(p: &PlanetDef, jd: f64, lp: f64) -> f64 {
+    let t = (jd - J2000) / 36_525.0;
+    ((p.el[3] + p.rate[3] * t).to_radians() - lp) % std::f64::consts::TAU
+}
+
 /// Heliocentric position (m) of planet `i` at Julian date `jd`.
 pub fn planet_pos(i: usize, jd: f64) -> DVec3 {
     let p = &PLANETS[i];
-    let t = (jd - J2000) / 36_525.0;
-    let a = (p.el[0] + p.rate[0] * t) * AU;
-    let e = (p.el[1] + p.rate[1] * t).max(0.0);
-    let inc = (p.el[2] + p.rate[2] * t).to_radians();
-    let l = (p.el[3] + p.rate[3] * t).to_radians();
-    let lp = (p.el[4] + p.rate[4] * t).to_radians();
-    let node = (p.el[5] + p.rate[5] * t).to_radians();
+    let OrbitShape {
+        a,
+        e,
+        inc,
+        lp,
+        node,
+    } = orbit_shape(p, jd);
     let argp = lp - node;
-    let m = (l - lp) % std::f64::consts::TAU;
-    let ea = kepler_solve(m, e);
+    let ea = kepler_solve(mean_anomaly(p, jd, lp), e);
     let x = a * (ea.cos() - e);
     let y = a * (1.0 - e * e).sqrt() * ea.sin();
     perifocal_to_ecl(node, inc, argp) * DVec3::new(x, y, 0.0)
@@ -486,13 +517,13 @@ pub fn moon_is_spice(mi: usize, jd: f64) -> bool {
 
 /// Sampled full orbit ellipse (root frame) for engraving, at the osculating epoch.
 pub fn planet_orbit(i: usize, jd: f64, n: usize) -> Vec<DVec3> {
-    let p = &PLANETS[i];
-    let t = (jd - J2000) / 36_525.0;
-    let a = (p.el[0] + p.rate[0] * t) * AU;
-    let e = (p.el[1] + p.rate[1] * t).max(0.0);
-    let inc = (p.el[2] + p.rate[2] * t).to_radians();
-    let lp = (p.el[4] + p.rate[4] * t).to_radians();
-    let node = (p.el[5] + p.rate[5] * t).to_radians();
+    let OrbitShape {
+        a,
+        e,
+        inc,
+        lp,
+        node,
+    } = orbit_shape(&PLANETS[i], jd);
     let rot = perifocal_to_ecl(node, inc, lp - node);
     (0..n)
         .map(|k| {
@@ -504,13 +535,13 @@ pub fn planet_orbit(i: usize, jd: f64, n: usize) -> Vec<DVec3> {
 
 /// One point of the osculating orbit ellipse at eccentric anomaly `ea`.
 pub fn planet_orbit_point(i: usize, jd: f64, ea: f64) -> DVec3 {
-    let p = &PLANETS[i];
-    let t = (jd - J2000) / 36_525.0;
-    let a = (p.el[0] + p.rate[0] * t) * AU;
-    let e = (p.el[1] + p.rate[1] * t).max(0.0);
-    let inc = (p.el[2] + p.rate[2] * t).to_radians();
-    let lp = (p.el[4] + p.rate[4] * t).to_radians();
-    let node = (p.el[5] + p.rate[5] * t).to_radians();
+    let OrbitShape {
+        a,
+        e,
+        inc,
+        lp,
+        node,
+    } = orbit_shape(&PLANETS[i], jd);
     perifocal_to_ecl(node, inc, lp - node)
         * DVec3::new(a * (ea.cos() - e), a * (1.0 - e * e).sqrt() * ea.sin(), 0.0)
 }
@@ -518,11 +549,8 @@ pub fn planet_orbit_point(i: usize, jd: f64, ea: f64) -> DVec3 {
 /// Eccentric anomaly of the planet on its osculating orbit at `jd`.
 pub fn planet_eccentric_anomaly(i: usize, jd: f64) -> f64 {
     let p = &PLANETS[i];
-    let t = (jd - J2000) / 36_525.0;
-    let e = (p.el[1] + p.rate[1] * t).max(0.0);
-    let l = (p.el[3] + p.rate[3] * t).to_radians();
-    let lp = (p.el[4] + p.rate[4] * t).to_radians();
-    kepler_solve((l - lp) % std::f64::consts::TAU, e)
+    let shape = orbit_shape(p, jd);
+    kepler_solve(mean_anomaly(p, jd, shape.lp), shape.e)
 }
 
 // ------------------------------------------------------------- moons
@@ -1366,5 +1394,100 @@ mod luna_tests {
         ] {
             assert!(js.contains(line), "eph.js has drifted: {line}");
         }
+    }
+}
+
+#[cfg(test)]
+mod far_date_tests {
+    use super::*;
+
+    /// Julian dates far beyond anything the elements were fitted to, both ways. The first
+    /// failure this guards against was Mars's eccentricity passing 1 near the year 1.15 million.
+    fn far_dates() -> Vec<f64> {
+        let mut out = vec![J2000];
+        for years in [
+            1e3, 1e4, 1e5, 1e6, 1.15e6, 1.2e6, 1e7, 1e8, 1e9, 1e10, 2.2e12,
+        ] {
+            out.push(J2000 + years * 365.25);
+            out.push(J2000 - years * 365.25);
+        }
+        out
+    }
+
+    #[test]
+    fn orbits_stay_real_ellipses_at_any_date() {
+        for jd in far_dates() {
+            for p in &PLANETS {
+                let s = orbit_shape(p, jd);
+                assert!(s.a > 0.0 && (0.0..1.0).contains(&s.e), "{} at {jd}", p.name);
+                assert!(s.inc.is_finite() && s.lp.is_finite() && s.node.is_finite());
+            }
+        }
+    }
+
+    #[test]
+    fn every_position_is_finite_at_any_date() {
+        for jd in far_dates() {
+            for i in 0..PLANETS.len() {
+                assert!(planet_pos(i, jd).is_finite(), "{} at {jd}", PLANETS[i].name);
+                assert!(body_pos(i, jd).is_finite(), "{} at {jd}", PLANETS[i].name);
+                assert!(planet_vel(i, jd).is_finite(), "{} at {jd}", PLANETS[i].name);
+                assert!(planet_orbit_point(i, jd, 1.0).is_finite());
+                assert!(planet_eccentric_anomaly(i, jd).is_finite());
+                assert!(planet_orbit(i, jd, 8).iter().all(|p| p.is_finite()));
+            }
+            for mi in 0..MOONS.len() {
+                assert!(moon_rel(mi, jd).is_finite(), "{} at {jd}", MOONS[mi].name);
+            }
+        }
+    }
+
+    /// Inside the span the table is fitted to, holding the elements changes nothing.
+    #[test]
+    fn the_limits_do_not_touch_the_valid_span() {
+        for year in [1800.0, 1900.0, 2000.0, 2026.0, 2050.0] {
+            let jd = J2000 + (year - 2000.0) * 365.25;
+            let t: f64 = (jd - J2000) / 36_525.0;
+            for p in &PLANETS {
+                let s = orbit_shape(p, jd);
+                assert!(
+                    (s.e - (p.el[1] + p.rate[1] * t)).abs() < 1e-12,
+                    "{}",
+                    p.name
+                );
+                assert!(
+                    (s.a - (p.el[0] + p.rate[0] * t) * AU).abs() < 1.0,
+                    "{}",
+                    p.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_held_planet_keeps_orbiting() {
+        let jd = J2000 + 1e6 * 365.25;
+        let (a, b) = (planet_pos(3, jd), planet_pos(3, jd + 300.0));
+        assert!((a - b).length() > 1e10, "Mars should have moved");
+    }
+
+    #[test]
+    fn dates_format_at_any_date() {
+        for jd in far_dates() {
+            assert!(!fmt_jd(jd).is_empty());
+        }
+    }
+
+    /// The browser copy of the elements must hold at the same limits.
+    #[test]
+    fn the_browser_copy_holds_the_elements_too() {
+        let js = include_str!("../pantheon-web/js/eph.js");
+        let (lo, hi) = ELEMENTS_VALID_CENTURIES;
+        assert!(
+            js.contains(&format!(
+                "Math.min(Math.max((jd - J2000_JD) / 36525.0, {lo:.1}), {hi:.1})"
+            )),
+            "eph.js has drifted from ELEMENTS_VALID_CENTURIES"
+        );
     }
 }

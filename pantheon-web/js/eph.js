@@ -156,17 +156,27 @@ function perifocalToEcl(node, inc, argp, x, y) {
   return new THREE.Vector3(cn * px - sn * qy, sn * px + cn * qy, qz);
 }
 
+// An orbit at jd. The linear rates are fitted to 1800-2050 (T -2 to 0.5); outside that
+// they hold at the nearest limit, so an orbit stays a real ellipse at any date. Only the
+// mean longitude keeps running. Kept identical to orbit_shape in src/sim.rs.
+function orbitShape(p, jd) {
+  const t = Math.min(Math.max((jd - J2000_JD) / 36525.0, -2.0), 0.5);
+  return {
+    a: (p.el[0] + p.rate[0] * t) * AU,
+    e: p.el[1] + p.rate[1] * t,
+    inc: (p.el[2] + p.rate[2] * t) * DEG,
+    lp: (p.el[4] + p.rate[4] * t) * DEG,
+    node: (p.el[5] + p.rate[5] * t) * DEG,
+  };
+}
+
 // Heliocentric position (m) of PLANETS[i] from the mean elements at jd.
 // For Earth this is the EMB; use earthCenter/planetState for the true center.
 export function planetPos(i, jd) {
   const p = PLANETS[i];
   const t = (jd - J2000_JD) / 36525.0;
-  const a = (p.el[0] + p.rate[0] * t) * AU;
-  const e = Math.max(p.el[1] + p.rate[1] * t, 0.0);
-  const inc = (p.el[2] + p.rate[2] * t) * DEG;
+  const { a, e, inc, lp, node } = orbitShape(p, jd);
   const l = (p.el[3] + p.rate[3] * t) * DEG;
-  const lp = (p.el[4] + p.rate[4] * t) * DEG;
-  const node = (p.el[5] + p.rate[5] * t) * DEG;
   const m = (l - lp) % TAU;
   const ea = keplerE(m, e);
   return perifocalToEcl(node, inc, lp - node,
@@ -200,11 +210,7 @@ export function sunState() {
 export function planetOrbit(i, jd, n = 256) {
   const p = PLANETS[i];
   const t = (jd - J2000_JD) / 36525.0;
-  const a = (p.el[0] + p.rate[0] * t) * AU;
-  const e = Math.max(p.el[1] + p.rate[1] * t, 0.0);
-  const inc = (p.el[2] + p.rate[2] * t) * DEG;
-  const lp = (p.el[4] + p.rate[4] * t) * DEG;
-  const node = (p.el[5] + p.rate[5] * t) * DEG;
+  const { a, e, inc, lp, node } = orbitShape(p, jd);
   const out = [];
   for (let k = 0; k < n; k++) {
     const ea = (k / n) * TAU;

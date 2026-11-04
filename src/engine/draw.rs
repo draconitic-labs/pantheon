@@ -171,6 +171,20 @@ impl StrokeStyle {
     }
 }
 
+/// wgpu's default limit on one buffer, which is what this app asks for. A frame must
+/// never need more: a vertex buffer past this panics inside wgpu.
+const MAX_BUFFER_BYTES: u64 = 256 << 20;
+const MAX_STROKE_VERTS: usize = MAX_BUFFER_BYTES as usize / std::mem::size_of::<StrokeVertex>();
+
+/// Say once per run that geometry was dropped: it happens only if something upstream
+/// is badly wrong, and then it would otherwise repeat every frame.
+fn warn_dropped(what: &str) {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        log::warn!("draw list: dropped {what} to stay inside the GPU's buffer limit");
+    }
+}
+
 #[derive(Default)]
 pub struct DrawList {
     pub stroke_verts: Vec<StrokeVertex>,
@@ -279,7 +293,8 @@ impl DrawList {
             let dx = b[0] - a[0];
             let dy = b[1] - a[1];
             let len = (dx * dx + dy * dy).sqrt();
-            if len < 1e-4 {
+            // a non-finite point is no geometry at all
+            if len < 1e-4 || !len.is_finite() {
                 continue;
             }
             // cull segments fully outside a generous screen margin
@@ -305,6 +320,10 @@ impl DrawList {
             // extend caps by half-width so joins overlap seamlessly
             let ex = ux * hw.min(len * 0.5);
             let ey = uy * hw.min(len * 0.5);
+            if verts.len() + 4 > MAX_STROKE_VERTS {
+                warn_dropped("strokes");
+                return;
+            }
             let base = verts.len() as u32;
             verts.push(StrokeVertex {
                 pos: [a[0] - ex + px, a[1] - ey + py],
@@ -401,10 +420,17 @@ impl GrowBuffer {
             label,
         }
     }
-    fn upload(&mut self, gpu: &GpuContext, data: &[u8]) {
+    /// False if the data can't fit in any buffer: the caller then skips drawing it,
+    /// because creating such a buffer panics.
+    fn upload(&mut self, gpu: &GpuContext, data: &[u8]) -> bool {
         let need = data.len() as u64;
+        let max = MAX_BUFFER_BYTES.min(gpu.device.limits().max_buffer_size);
+        if need > max {
+            warn_dropped(self.label);
+            return false;
+        }
         if need > self.cap {
-            self.cap = need.next_power_of_two();
+            self.cap = need.next_power_of_two().min(max);
             self.buf = gpu.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(self.label),
                 size: self.cap,
@@ -415,6 +441,7 @@ impl GrowBuffer {
         if !data.is_empty() {
             gpu.queue.write_buffer(&self.buf, 0, data);
         }
+        true
     }
 }
 
@@ -771,20 +798,27 @@ impl Pipelines {
     ) {
         gpu.queue
             .write_buffer(&self.ubuf, 0, bytemuck::bytes_of(uni));
-        self.vb_strokes
-            .upload(gpu, bytemuck::cast_slice(&dl.stroke_verts));
-        self.ib_strokes
-            .upload(gpu, bytemuck::cast_slice(&dl.stroke_idx));
-        self.vb_over
-            .upload(gpu, bytemuck::cast_slice(&dl.over_verts));
-        self.ib_over.upload(gpu, bytemuck::cast_slice(&dl.over_idx));
-        self.vb_points.upload(gpu, bytemuck::cast_slice(&dl.points));
-        self.vb_discs.upload(gpu, bytemuck::cast_slice(&dl.discs));
-        self.vb_rings_far
+        // each layer draws only if all of it fit in its buffers
+        let strokes_ok = self
+            .vb_strokes
+            .upload(gpu, bytemuck::cast_slice(&dl.stroke_verts))
+            & self
+                .ib_strokes
+                .upload(gpu, bytemuck::cast_slice(&dl.stroke_idx));
+        let over_ok = self
+            .vb_over
+            .upload(gpu, bytemuck::cast_slice(&dl.over_verts))
+            & self.ib_over.upload(gpu, bytemuck::cast_slice(&dl.over_idx));
+        let points_ok = self.vb_points.upload(gpu, bytemuck::cast_slice(&dl.points));
+        let discs_ok = self.vb_discs.upload(gpu, bytemuck::cast_slice(&dl.discs));
+        let rings_far_ok = self
+            .vb_rings_far
             .upload(gpu, bytemuck::cast_slice(&dl.rings_far));
-        self.vb_rings_near
+        let rings_near_ok = self
+            .vb_rings_near
             .upload(gpu, bytemuck::cast_slice(&dl.rings_near));
-        self.vb_galaxies
+        let galaxies_ok = self
+            .vb_galaxies
             .upload(gpu, bytemuck::cast_slice(&dl.galaxies));
 
         // resolve bind groups up front: the pass borrows them
@@ -809,18 +843,18 @@ impl Pipelines {
             pass.set_pipeline(&self.band);
             pass.draw(0..3, 0..1);
             pass.set_bind_group(1, &none_bg, &[]);
-            if !dl.galaxies.is_empty() {
+            if galaxies_ok && !dl.galaxies.is_empty() {
                 pass.set_pipeline(&self.galaxies);
                 pass.set_vertex_buffer(0, self.vb_galaxies.buf.slice(..));
                 pass.draw(0..6, 0..dl.galaxies.len() as u32);
             }
-            if !dl.stroke_idx.is_empty() {
+            if strokes_ok && !dl.stroke_idx.is_empty() {
                 pass.set_pipeline(&self.strokes);
                 pass.set_vertex_buffer(0, self.vb_strokes.buf.slice(..));
                 pass.set_index_buffer(self.ib_strokes.buf.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..dl.stroke_idx.len() as u32, 0, 0..1);
             }
-            if !dl.rings_far.is_empty() {
+            if rings_far_ok && !dl.rings_far.is_empty() {
                 pass.set_pipeline(&self.rings_far);
                 pass.set_vertex_buffer(0, self.vb_rings_far.buf.slice(..));
                 for (i, bg) in ring_bgs.iter().enumerate() {
@@ -828,7 +862,7 @@ impl Pipelines {
                     pass.draw(0..6, i as u32..i as u32 + 1);
                 }
             }
-            if !dl.discs.is_empty() {
+            if discs_ok && !dl.discs.is_empty() {
                 pass.set_pipeline(&self.discs);
                 pass.set_vertex_buffer(0, self.vb_discs.buf.slice(..));
                 for (i, bg) in disc_bgs.iter().enumerate() {
@@ -836,7 +870,7 @@ impl Pipelines {
                     pass.draw(0..6, i as u32..i as u32 + 1);
                 }
             }
-            if !dl.rings_near.is_empty() {
+            if rings_near_ok && !dl.rings_near.is_empty() {
                 pass.set_pipeline(&self.rings_near);
                 pass.set_vertex_buffer(0, self.vb_rings_near.buf.slice(..));
                 for (i, bg) in ring_bgs.iter().enumerate() {
@@ -845,13 +879,13 @@ impl Pipelines {
                 }
             }
             pass.set_bind_group(1, &none_bg, &[]);
-            if !dl.over_idx.is_empty() {
+            if over_ok && !dl.over_idx.is_empty() {
                 pass.set_pipeline(&self.strokes);
                 pass.set_vertex_buffer(0, self.vb_over.buf.slice(..));
                 pass.set_index_buffer(self.ib_over.buf.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..dl.over_idx.len() as u32, 0, 0..1);
             }
-            if !dl.points.is_empty() {
+            if points_ok && !dl.points.is_empty() {
                 pass.set_pipeline(&self.points);
                 pass.set_vertex_buffer(0, self.vb_points.buf.slice(..));
                 pass.draw(0..6, 0..dl.points.len() as u32);
@@ -952,5 +986,68 @@ impl Pipelines {
             );
         }
         gpu.queue.submit([encoder.finish()]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn style() -> StrokeStyle {
+        StrokeStyle::new([1.0; 4], 1.0)
+    }
+
+    #[test]
+    fn strokes_stop_at_the_buffer_limit_and_stay_consistent() {
+        let mut dl = DrawList {
+            screen_w: 1600.0,
+            screen_h: 900.0,
+            ..Default::default()
+        };
+        // every segment is on screen, and there are more than the buffer can hold
+        let segments = MAX_STROKE_VERTS / 4 + 1000;
+        let pts: Vec<[f32; 2]> = (0..=segments)
+            .map(|i| {
+                if i % 2 == 0 {
+                    [100.0, 100.0]
+                } else {
+                    [200.0, 200.0]
+                }
+            })
+            .collect();
+        dl.polyline(&pts, false, style());
+        let bytes = dl.stroke_verts.len() * std::mem::size_of::<StrokeVertex>();
+        assert!(bytes as u64 <= MAX_BUFFER_BYTES, "{bytes} bytes");
+        assert!(
+            dl.stroke_verts.len() >= MAX_STROKE_VERTS - 4,
+            "it should fill up first"
+        );
+        assert_eq!(dl.stroke_idx.len() / 6, dl.stroke_verts.len() / 4);
+        let last = *dl.stroke_idx.iter().max().unwrap() as usize;
+        assert!(
+            last < dl.stroke_verts.len(),
+            "an index points past the vertices"
+        );
+        // and it carries on: another stroke is simply dropped too, without a panic
+        dl.polyline(&pts[..4], false, style());
+        assert_eq!(dl.stroke_idx.len() / 6, dl.stroke_verts.len() / 4);
+    }
+
+    #[test]
+    fn non_finite_points_make_no_geometry() {
+        let mut dl = DrawList {
+            screen_w: 1600.0,
+            screen_h: 900.0,
+            ..Default::default()
+        };
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            dl.polyline(&[[bad, 0.0], [10.0, 10.0], [bad, bad]], false, style());
+            dl.circle([bad, bad], 100.0, style());
+        }
+        assert!(
+            dl.stroke_verts.is_empty(),
+            "{} vertices",
+            dl.stroke_verts.len()
+        );
     }
 }

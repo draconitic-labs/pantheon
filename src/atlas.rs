@@ -425,6 +425,15 @@ struct Curve<'a> {
     x1: f64,
     y1: f64,
     runs: Vec<Vec<(f64, f64, f64)>>,
+    /// subdivisions left for this curve, so no input can make one frame take forever
+    budget: u32,
+}
+
+/// Far more subdivisions than any real curve on any screen needs.
+const CURVE_BUDGET: u32 = 200_000;
+
+fn finite2(p: [f64; 2]) -> bool {
+    p[0].is_finite() && p[1].is_finite()
 }
 
 impl Curve<'_> {
@@ -434,8 +443,15 @@ impl Curve<'_> {
     }
 
     fn seg(&mut self, t0: f64, p0: [f64; 2], t1: f64, p1: [f64; 2], depth: u32) {
+        // NaN compares false with everything, so without this it subdivides to full depth
+        if !finite2(p0) || !finite2(p1) {
+            return;
+        }
         let tm = 0.5 * (t0 + t1);
         let pm = self.scr(tm);
+        if !finite2(pm) {
+            return;
+        }
         let dx = pm[0] - 0.5 * (p0[0] + p1[0]);
         let dy = pm[1] - 0.5 * (p0[1] + p1[1]);
         let err = (dx * dx + dy * dy).sqrt();
@@ -447,10 +463,11 @@ impl Curve<'_> {
         if xmax < self.x0 || xmin > self.x1 || ymax < self.y0 || ymin > self.y1 {
             return; // fully outside; the next visible piece starts a new run
         }
-        if depth >= 16 || err < 0.16 {
+        if depth >= 16 || err < 0.16 || self.budget == 0 {
             self.emit(t0, p0, t1, p1);
             return;
         }
+        self.budget -= 1;
         self.seg(t0, p0, tm, pm, depth + 1);
         self.seg(tm, pm, t1, p1, depth + 1);
     }
@@ -519,6 +536,7 @@ fn draw_curve(
         x1: inp.w + m,
         y1: inp.h + m,
         runs: Vec::new(),
+        budget: CURVE_BUDGET,
     };
     let mut prev_t = t0;
     let mut prev_p = c.scr(t0);
@@ -3045,8 +3063,82 @@ fn gravity_layer(inp: &BuildIn, proj: &Proj, dl: &mut DrawList, out: &mut FrameO
 mod tests {
     use super::*;
     use crate::frames::galactic_frame;
+    use std::cell::Cell;
 
     type Runs = Vec<Vec<(f64, f64, f64)>>;
+
+    /// Run the tessellator over a curve, returning the runs and how often it was evaluated.
+    fn tessellate(f: &dyn Fn(f64) -> DVec3) -> (Runs, u32) {
+        let cam = Camera::new();
+        let gal = galactic_frame();
+        let proj = Proj::new(&cam, 1600.0, 900.0, &gal);
+        let calls = Cell::new(0u32);
+        let counted = |t: f64| {
+            calls.set(calls.get() + 1);
+            f(t)
+        };
+        let mut c = Curve {
+            proj: &proj,
+            f: &counted,
+            x0: -8.0,
+            y0: -8.0,
+            x1: 1608.0,
+            y1: 908.0,
+            runs: Vec::new(),
+            budget: CURVE_BUDGET,
+        };
+        let seeds = 64;
+        let mut prev = (0.0, c.scr(0.0));
+        for k in 1..=seeds {
+            let t = k as f64 / seeds as f64;
+            let p = c.scr(t);
+            c.seg(prev.0, prev.1, t, p, 0);
+            prev = (t, p);
+        }
+        (c.runs, calls.get())
+    }
+
+    #[test]
+    fn a_curve_of_nan_costs_almost_nothing_and_draws_nothing() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let (runs, calls) = tessellate(&|_| DVec3::new(bad, bad, bad));
+            assert!(runs.is_empty(), "{bad} drew something");
+            assert!(calls < 100, "{bad} was evaluated {calls} times");
+        }
+    }
+
+    #[test]
+    fn a_curve_that_is_partly_nan_draws_its_good_part() {
+        let cam_scale = Camera::new().mpp;
+        let (runs, calls) = tessellate(&|t| {
+            if (0.4..0.6).contains(&t) {
+                DVec3::NAN
+            } else {
+                DVec3::new((t - 0.5) * 400.0 * cam_scale, 0.0, 0.0)
+            }
+        });
+        assert!(!runs.is_empty());
+        assert!(calls < 10_000, "evaluated {calls} times");
+    }
+
+    #[test]
+    fn a_wild_finite_curve_stays_within_its_budget() {
+        // every sample lands somewhere else on screen, so nothing ever looks flat enough
+        let mpp = Camera::new().mpp;
+        let (runs, calls) = tessellate(&|t| {
+            let w = (t * 1e7).sin() * 1e4;
+            DVec3::new(
+                w.fract() * 800.0 * mpp,
+                (w * 3.7).fract() * 450.0 * mpp,
+                0.0,
+            )
+        });
+        // each subdivision evaluates the curve at most twice more, and the 64 seed
+        // spans each get one evaluation and two points of their own
+        assert!(calls <= 2 * CURVE_BUDGET + 200, "evaluated {calls} times");
+        let points: usize = runs.iter().map(Vec::len).sum();
+        assert!(points <= 2 * CURVE_BUDGET as usize + 200, "{points} points");
+    }
 
     /// Tessellate a circle of `radius_px` centred off to one side of the view.
     fn circle_runs(radius_px: f64, mpp: f64) -> (Runs, f64) {
@@ -3065,6 +3157,7 @@ mod tests {
             x1: 1608.0,
             y1: 908.0,
             runs: Vec::new(),
+            budget: CURVE_BUDGET,
         };
         let tau = std::f64::consts::TAU;
         let seeds = 64;
@@ -3125,6 +3218,7 @@ mod tests {
             x1: 1608.0,
             y1: 908.0,
             runs: Vec::new(),
+            budget: CURVE_BUDGET,
         };
         let (p0, p1) = (c.scr(0.0), c.scr(3.0));
         c.seg(0.0, p0, 3.0, p1, 0);
