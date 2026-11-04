@@ -931,6 +931,25 @@ pub fn moon_rel(mi: usize, jd: f64) -> DVec3 {
             return rel;
         }
     }
+    moon_rel_elements(mi, jd)
+}
+
+/// The tilt of a moon's orbit from its planet's IAU pole, as used to place it. Uranus's IAU
+/// pole points against its spin, and its moons orbit with the spin, so their orbits are
+/// nearly 180° from that pole. `MOON_INCL` stays what a card shows: the tilt from the equator.
+pub fn moon_plane_tilt_deg(mi: usize) -> f64 {
+    if MOONS[mi].planet == URANUS {
+        180.0 - MOON_INCL[mi]
+    } else {
+        MOON_INCL[mi]
+    }
+}
+
+const URANUS: usize = 6;
+
+/// Where a moon is without any kernel: the lunar model, or mean elements.
+fn moon_rel_elements(mi: usize, jd: f64) -> DVec3 {
+    let m = &MOONS[mi];
     if m.name == "Moon" {
         return luna_rel(jd);
     }
@@ -943,7 +962,8 @@ pub fn moon_rel(mi: usize, jd: f64) -> DVec3 {
         a * (1.0 - m.e * m.e).sqrt() * ea.sin(),
         0.0,
     );
-    body_equator(m.planet, jd) * (DMat3::from_rotation_x(MOON_INCL[mi].to_radians()) * local)
+    body_equator(m.planet, jd)
+        * (DMat3::from_rotation_x(moon_plane_tilt_deg(mi).to_radians()) * local)
 }
 
 /// Sampled moon orbit relative to planet. The Moon samples the same
@@ -957,7 +977,8 @@ pub fn moon_orbit(mi: usize, jd: f64, n: usize) -> Vec<DVec3> {
             .collect();
     }
     let a = m.a_km * 1e3;
-    let rot = body_equator(m.planet, jd) * DMat3::from_rotation_x(MOON_INCL[mi].to_radians());
+    let rot =
+        body_equator(m.planet, jd) * DMat3::from_rotation_x(moon_plane_tilt_deg(mi).to_radians());
     (0..n)
         .map(|k| {
             let ea = k as f64 / n as f64 * std::f64::consts::TAU;
@@ -1504,5 +1525,183 @@ mod far_date_tests {
             )),
             "eph.js has drifted from ELEMENTS_VALID_CENTURIES"
         );
+    }
+}
+
+#[cfg(test)]
+mod moon_sense_tests {
+    use super::*;
+
+    /// Orbit normals (r × v, ecliptic J2000) from JPL Horizons for 2026-11-04: planetocentric
+    /// state vectors, read from the API and frozen so this runs with no data.
+    const HORIZONS_NORMALS: [(&str, [f64; 3]); 21] = [
+        ("Moon", [-0.0485, -0.0733, 0.9961]),
+        ("Phobos", [0.4294, -0.0527, 0.9016]),
+        ("Deimos", [0.4042, -0.0598, 0.9127]),
+        ("Io", [-0.0143, -0.0362, 0.9992]),
+        ("Europa", [-0.0201, -0.0300, 0.9993]),
+        ("Ganymede", [-0.0146, -0.0382, 0.9992]),
+        ("Callisto", [-0.0134, -0.0313, 0.9994]),
+        ("Mimas", [0.0659, 0.4801, 0.8747]),
+        ("Enceladus", [0.0854, 0.4623, 0.8826]),
+        ("Tethys", [0.0675, 0.4685, 0.8809]),
+        ("Dione", [0.0852, 0.4621, 0.8827]),
+        ("Rhea", [0.0826, 0.4665, 0.8807]),
+        ("Titan", [0.0881, 0.4565, 0.8854]),
+        ("Iapetus", [0.1920, 0.2199, 0.9564]),
+        ("Miranda", [0.2866, 0.9482, -0.1374]),
+        ("Ariel", [0.2117, 0.9681, -0.1343]),
+        ("Umbriel", [0.2107, 0.9683, -0.1342]),
+        ("Titania", [0.2120, 0.9679, -0.1351]),
+        ("Oberon", [0.2109, 0.9678, -0.1375]),
+        ("Triton", [-0.5279, 0.5684, -0.6310]),
+        ("Charon", [-0.6781, 0.6237, -0.3889]),
+    ];
+
+    fn model_normal(mi: usize, jd: f64) -> DVec3 {
+        let h = 0.01;
+        let r = moon_rel_elements(mi, jd);
+        let v = moon_rel_elements(mi, jd + h) - moon_rel_elements(mi, jd - h);
+        r.cross(v).normalize()
+    }
+
+    /// Every moon goes round the way JPL says, on its mean elements, which is all the
+    /// moons of Uranus ever have and every moon has on a fresh clone.
+    #[test]
+    fn every_moon_orbits_the_way_horizons_says() {
+        let jd = cal_to_jd(2026, 11, 4.0);
+        for (mi, (name, want)) in HORIZONS_NORMALS.iter().enumerate() {
+            assert_eq!(MOONS[mi].name, *name, "the table's order");
+            let dot = model_normal(mi, jd).dot(DVec3::from(*want));
+            println!("{name:10} model normal . Horizons normal = {dot:+.3}");
+            assert!(dot > 0.0, "{name} orbits backwards: {dot:+.3}");
+        }
+    }
+
+    /// The moons of Uranus also lie in the right plane, which is what makes their sense
+    /// more than a coin toss.
+    #[test]
+    fn the_moons_of_uranus_lie_in_their_real_plane() {
+        let jd = cal_to_jd(2026, 11, 4.0);
+        for (mi, (name, want)) in HORIZONS_NORMALS.iter().enumerate() {
+            if MOONS[mi].planet == URANUS {
+                let dot = model_normal(mi, jd).dot(DVec3::from(*want));
+                assert!(dot > 0.99, "{name}: {dot:+.3}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_browser_copy_uses_the_same_tilt() {
+        let js = include_str!("../pantheon-web/js/eph.js");
+        assert!(js.contains("m.incl = m.parent === URANUS ? 180.0 - MOON_INCL[i] : MOON_INCL[i];"));
+        assert!(js.contains("const URANUS = 6;"));
+    }
+
+    #[test]
+    fn cards_still_show_the_tilt_from_the_equator() {
+        for (mi, m) in MOONS.iter().enumerate() {
+            if m.planet == URANUS {
+                assert!(
+                    MOON_INCL[mi] < 90.0,
+                    "{} must not read as retrograde",
+                    m.name
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod energy_tests {
+    use super::*;
+
+    /// A system set up as the app sets one up: Sun, planet, then its moons.
+    fn system(pi: usize, jd: f64) -> (NBody, f64) {
+        let moons: Vec<usize> = (0..MOONS.len())
+            .filter(|m| MOONS[*m].planet == pi)
+            .collect();
+        let dt = 60.0 / DAY;
+        let at = |t: f64| -> Vec<DVec3> {
+            let planet = planet_pos(pi, t);
+            let mut out = vec![DVec3::ZERO, planet];
+            out.extend(moons.iter().map(|m| planet + moon_rel_elements(*m, t)));
+            out
+        };
+        let (before, after, pos) = (at(jd - dt), at(jd + dt), at(jd));
+        let vel = before
+            .iter()
+            .zip(&after)
+            .map(|(a, b)| (*b - *a) / (2.0 * 60.0))
+            .collect();
+        let mut gm = vec![GM_SUN, PLANETS[pi].gm];
+        gm.extend(moons.iter().map(|m| MOON_GM[*m]));
+        let mut s = NBody {
+            gm,
+            pos,
+            vel,
+            label: String::new(),
+        };
+        s.zero_momentum();
+        let shortest = moons
+            .iter()
+            .map(|m| MOONS[*m].period_d.abs())
+            .fold(f64::MAX, f64::min);
+        // the app's substep
+        (s, shortest * DAY / 600.0)
+    }
+
+    /// The largest value of the diagnostic while running `spans` shortest periods.
+    fn drift(pi: usize, step_factor: f64, spans: f64) -> f64 {
+        let jd = cal_to_jd(2026, 11, 4.5);
+        let (mut s, substep) = system(pi, jd);
+        let e0 = s.moon_orbit_energies(1);
+        let h = substep * step_factor;
+        let steps = (spans * 600.0 / step_factor) as usize;
+        let mut worst = 0.0f64;
+        for _ in 0..steps {
+            s.step(h);
+            worst = worst.max(s.moon_energy_drift(1, &e0).unwrap());
+        }
+        worst
+    }
+
+    #[test]
+    fn the_energy_drift_sees_a_step_that_is_too_large() {
+        for pi in [2usize, 3, 4, 5, 6, 7, 8] {
+            let normal = drift(pi, 1.0, 20.0);
+            let coarse = drift(pi, 100.0, 20.0);
+            let name = PLANETS[pi].name;
+            println!(
+                "{name:8} normal step {:9.3}%, 100x step {:12.3}%",
+                normal * 100.0,
+                coarse * 100.0
+            );
+            assert!(normal < 0.03, "{name}: {normal} at the normal step");
+            assert!(coarse > 0.05, "{name}: {coarse} at a 100x step");
+            assert!(coarse > 5.0 * normal, "{name}: {coarse} vs {normal}");
+        }
+    }
+
+    #[test]
+    fn the_energy_drift_sees_one_moon_thrown_out() {
+        for pi in [2usize, 3, 4, 5] {
+            let (mut s, _) = system(pi, cal_to_jd(2026, 11, 4.5));
+            let e0 = s.moon_orbit_energies(1);
+            let (planet_v, k) = (s.vel[1], 2);
+            s.vel[k] = planet_v + (s.vel[k] - planet_v) * 2.0;
+            let change = s.moon_energy_drift(1, &e0).unwrap();
+            println!(
+                "{:8} doubling one moon's speed reads {change:.3}",
+                PLANETS[pi].name
+            );
+            assert!(change > 1.0, "{}: only {change}", PLANETS[pi].name);
+        }
+    }
+
+    #[test]
+    fn a_system_with_no_moons_has_no_drift() {
+        let (s, _) = system(0, cal_to_jd(2026, 11, 4.5));
+        assert!(s.moon_energy_drift(1, &s.moon_orbit_energies(1)).is_none());
     }
 }

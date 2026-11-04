@@ -263,7 +263,10 @@ export const MOONS = [
   Mn(7, 'Triton', 354759.0, 5.876854, 1353.4, 0.00002, 50.0, [0.78, 0.8, 0.85], [0.6, 0.62, 0.68], 5.0),
   Mn(8, 'Charon', 19591.0, 6.38723, 606.0, 0.0002, 220.0, [0.6, 0.58, 0.56], [0.42, 0.4, 0.38], 5.0),
 ];
-MOONS.forEach((m, i) => { m.incl = MOON_INCL[i]; });
+// Uranus's IAU pole points against its spin, and its moons orbit with the spin, so their
+// orbits are nearly 180° from that pole. Kept identical to moon_plane_tilt_deg in src/sim.rs.
+const URANUS = 6;
+MOONS.forEach((m, i) => { m.incl = m.parent === URANUS ? 180.0 - MOON_INCL[i] : MOON_INCL[i]; });
 
 // Earth's Moon with precessing node (18.6 yr) and perigee (8.85 yr) — the one moon
 // whose place on its orbit isn't illustrative: about 1° from DE440s on average, about
