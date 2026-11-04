@@ -104,7 +104,7 @@ fn arm_field(g: vec2<f32>, r: f32) -> vec3<f32> {
     let crest = 0.5 + 0.5 * cos(phase);
     let lane = 0.5 + 0.5 * cos(phase + 0.85);
     let major = 0.72 + 0.28 * cos(phase * 0.5);
-    return vec3<f32>(pow(crest, 3.0) * major, pow(lane, 14.0), crest);
+    return vec3<f32>(pow(crest, 2.1) * major, pow(lane, 10.0), crest);
 }
 
 fn galaxy_rgb(gi: vec2<f32>, kpp: f32) -> vec3<f32> {
@@ -114,49 +114,51 @@ fn galaxy_rgb(gi: vec2<f32>, kpp: f32) -> vec3<f32> {
     }
     // gentle domain warp: real arms are never mathematical
     let warp = vec2<f32>(fbm2(gi * 0.21 + 11.3), fbm2(gi * 0.21 + 37.9)) - 0.5;
-    let g = gi + warp * 2.6;
+    let g = gi + warp * 2.4;
     let r = length(g);
     let a = arm_field(g, r);
     let n1 = fbm2(g * 0.62 + 4.2);
     let n2 = fbm2(g * 1.9 - 3.3);
     let n3 = fbm2(g * 6.3 + 8.8);
-    // detail octave tied to zoom, so a close view never looks like a flat wash
+    // detail tied to zoom, so a close view never looks like a flat wash
     let detail = fbm2(g / max(kpp * 42.0, 0.04) + 1.7);
 
-    let outer = smoothstep(23.0, 12.0, r);
-    let inner_hole = smoothstep(1.6, 3.8, r);
-    let radial = exp(-r / 5.2) * outer * inner_hole;
-    let clump = 0.32 + 1.5 * n1 * n1 + 0.6 * (n2 - 0.5);
-    let arms = a.x * clump * radial;
+    let outer = smoothstep(24.0, 13.0, r);
+    let inner_hole = smoothstep(1.2, 4.0, r);
+    let radial = exp(-r / 6.0) * outer * inner_hole;
+    let clump = 0.38 + 1.25 * n1 * n1 + 0.55 * (n2 - 0.5) + 0.3 * (n3 - 0.5);
+    let arms = a.x * max(clump, 0.05) * radial;
 
-    // cool young stars on the crests; warm old disc everywhere
-    let young = vec3<f32>(0.46, 0.62, 1.0) * arms * 3.1;
-    let disc = vec3<f32>(0.95, 0.80, 0.62) * exp(-r / 3.9) * outer * 0.55 * (0.72 + 0.56 * n1);
-    var col = young + disc;
+    // cool young stars on the crests; a warm old disc everywhere between them
+    let young = vec3<f32>(0.50, 0.65, 1.0) * arms * 2.3;
+    let disc = vec3<f32>(0.98, 0.78, 0.58) * exp(-r / 4.1) * outer * (0.62 + 0.5 * n1);
+    var col = young + disc * 0.62;
 
-    // dust lanes bite the inner edge of each arm, breaking up at small scale
-    let dust = a.y * smoothstep(0.32, 0.62, n2) * smoothstep(1.2, 4.0, r) * outer;
-    let filaments = smoothstep(0.54, 0.74, n3) * a.z;
-    col = col * (1.0 - clamp(0.86 * dust + 0.34 * filaments * outer, 0.0, 0.92));
+    // dust: dark lanes on the inner edge of each arm, breaking up at small scale,
+    // tinting the light behind them rather than cutting it to black
+    let dust = a.y * smoothstep(0.34, 0.66, n2) * smoothstep(1.0, 3.6, r) * outer;
+    let wisps = smoothstep(0.50, 0.76, n3) * a.z * smoothstep(0.0, 1.0, n2) * outer;
+    let extinction = clamp(0.72 * dust + 0.26 * wisps, 0.0, 0.85);
+    col = col * mix(vec3<f32>(1.0), vec3<f32>(0.26, 0.17, 0.12), extinction);
 
-    // HII regions: pink knots strung along the crests
-    let knots = smoothstep(0.68, 0.84, fbm2(g * 2.7 + 21.0)) * a.x;
-    col = col + vec3<f32>(1.0, 0.33, 0.48) * knots * radial * 2.4 * (0.5 + n3);
-    // blue clusters
-    let clusters = smoothstep(0.72, 0.86, fbm2(g * 3.6 - 13.0)) * a.x;
-    col = col + vec3<f32>(0.68, 0.82, 1.0) * clusters * radial * 2.2;
+    // HII regions: pink knots strung along the crests, with their own glow
+    let knots = smoothstep(0.66, 0.84, fbm2(g * 2.7 + 21.0)) * a.x;
+    col = col + vec3<f32>(1.0, 0.30, 0.44) * knots * radial * 1.5;
+    // blue open clusters
+    let clusters = smoothstep(0.70, 0.86, fbm2(g * 3.6 - 13.0)) * a.x;
+    col = col + vec3<f32>(0.66, 0.80, 1.0) * clusters * radial * 1.2;
 
-    // the bar (near end toward l ~ +27 deg) and the bulge, in true HDR
+    // the bar (near end toward l ~ +27 deg) and the bulge
     let ba = -0.4712;
     let bx = gi.x * cos(ba) + gi.y * sin(ba);
     let by = -gi.x * sin(ba) + gi.y * cos(ba);
-    let bar = exp(-pow(bx * bx / 13.0 + by * by / 1.15, 1.1));
-    let bulge = exp(-pow(r0 / 1.25, 1.35));
-    col = col + vec3<f32>(1.0, 0.76, 0.48) * bar * 1.15 * (0.78 + 0.44 * n2);
-    col = col + vec3<f32>(1.0, 0.84, 0.62) * bulge * 2.6;
-    // faint stellar halo so the disc doesn't end on a hard edge
+    let bar = exp(-pow(bx * bx / 12.0 + by * by / 1.3, 1.05));
+    let bulge = exp(-pow(r0 / 1.15, 1.25));
+    col = col + vec3<f32>(1.0, 0.72, 0.44) * bar * 0.62 * (0.82 + 0.36 * n2);
+    col = col + vec3<f32>(1.0, 0.82, 0.60) * bulge * 1.5;
+    // a faint stellar halo so the disc doesn't end on a hard edge
     col = col + vec3<f32>(0.72, 0.72, 0.82) * exp(-r0 / 9.0) * 0.012;
-    return col * (0.86 + 0.28 * detail);
+    return col * (0.88 + 0.24 * detail);
 }
 
 fn fog_density(g: vec2<f32>) -> f32 {
@@ -166,6 +168,41 @@ fn fog_density(g: vec2<f32>) -> f32 {
     }
     let a = arm_field(g, r);
     return clamp((0.24 + 1.5 * a.x) * exp(-r / 7.0) + 2.4 * exp(-r * r / 8.0), 0.0, 1.0);
+}
+
+// ---- distant galaxies ------------------------------------------------------
+
+// A faint little galaxy in one world-locked cell: elongated, randomly turned.
+fn cell_galaxy(g: vec2<f32>, cell: f32, seed: f32, occupancy: f32, inv: mat2x2<f32>) -> vec2<f32> {
+    let p = g / cell;
+    let c = floor(p);
+    let h = hash21(c + vec2<f32>(seed, seed * 1.37));
+    if (h > occupancy) {
+        return vec2<f32>(0.0);
+    }
+    let j = vec2<f32>(hash21(c + vec2<f32>(seed + 3.1, 0.7)), hash21(c + vec2<f32>(0.3, seed + 7.7)));
+    let d0 = inv * ((p - c - (0.25 + 0.5 * j)) * cell);
+    let ang = hash21(c + vec2<f32>(seed + 9.1, 2.2)) * PI;
+    let ca = cos(ang);
+    let sa = sin(ang);
+    let d = vec2<f32>(d0.x * ca + d0.y * sa, -d0.x * sa + d0.y * ca);
+    let b = hash21(c + vec2<f32>(seed + 11.3, seed + 5.9));
+    let size = 0.75 + 1.5 * b * b;
+    let flat_ = 1.0 + 2.4 * hash21(c + vec2<f32>(4.4, seed));
+    let e = (d.x * d.x + d.y * d.y * flat_ * flat_) / (size * size);
+    return vec2<f32>(exp(-e) * (0.28 + 0.9 * b), hash21(c + vec2<f32>(seed, 6.6)));
+}
+
+fn deep_field(d: vec2<f32>, upp: f32, inv: mat2x2<f32>) -> vec3<f32> {
+    let lk = log2(max(upp * 22.0, 1e-12));
+    let k0 = floor(lk);
+    let f = lk - k0;
+    let c0 = pow(2.0, k0);
+    let a = cell_galaxy(d, c0, 73.0 + k0 * 19.0, 0.5, inv);
+    let b = cell_galaxy(d, c0 * 2.0, 73.0 + (k0 + 1.0) * 19.0, 0.5, inv);
+    let elliptical = vec3<f32>(1.0, 0.80, 0.60);
+    let spiral = vec3<f32>(0.62, 0.74, 1.0);
+    return mix(elliptical, spiral, a.y) * a.x * (1.0 - f) + mix(elliptical, spiral, b.y) * b.x;
 }
 
 // ---- the cosmic web -------------------------------------------------------
@@ -209,17 +246,19 @@ fn web_layer(p: vec2<f32>, width: f32) -> vec2<f32> {
 fn cosmic_rgb(c: vec2<f32>, upp: f32, inv: mat2x2<f32>) -> vec3<f32> {
     // c is in tens of Mpc. Largest voids ~40 Mpc across.
     let warp = vec2<f32>(fbm2(c * 0.17 + 2.7), fbm2(c * 0.17 + 9.1)) - 0.5;
-    let q = c + warp * 3.4;
-    let big = web_layer(q / 5.0, 0.055);
-    let mid = web_layer(q / 1.9 + 7.3, 0.075);
-    let fine = web_layer(q / 0.72 + 3.1, 0.10);
-    let large_scale = 0.45 + 1.1 * fbm2(c * 0.09 + 1.3);
-    var density = big.x * 0.9 + big.y * 1.5
-        + mid.x * (0.16 + 0.8 * big.x) * 0.75 + mid.y * big.x * 0.7
-        + fine.x * (0.05 + 0.5 * mid.x) * 0.4;
-    density = density * large_scale;
+    let warp2 = vec2<f32>(fbm2(c * 0.9 + 5.1), fbm2(c * 0.9 + 1.9)) - 0.5;
+    let q = c + warp * 3.8 + warp2 * 0.55;
+    let big = web_layer(q / 4.6, 0.020);
+    let mid = web_layer(q / 1.8 + 7.3, 0.030);
+    let fine = web_layer(q / 0.66 + 3.1, 0.050);
+    // the largest structures come and go: some walls are rich, others thin out
+    let rich = smoothstep(0.30, 0.72, fbm2(c * 0.13 + 1.3));
+    let streak = 0.45 + 1.1 * fbm2(q * 1.4 + 8.0);
+    var density = big.x * (0.35 + 1.0 * rich) * streak + big.y * (0.5 + 1.2 * rich) * 0.9;
+    density = density + mid.x * (0.09 + 0.6 * big.x + 0.2 * rich) * streak + mid.y * big.x * 0.5;
+    density = density + fine.x * (0.028 + 0.24 * mid.x);
 
-    // named clusters sit in bright knots with filaments radiating from them
+    // named clusters sit in knots with filaments radiating from them
     for (var k = 0; k < 16; k = k + 1) {
         let n = V.nodes[k];
         if (n.w <= 0.0) {
@@ -227,25 +266,26 @@ fn cosmic_rgb(c: vec2<f32>, upp: f32, inv: mat2x2<f32>) -> vec3<f32> {
         }
         let dv = c - n.xy;
         let d = length(dv) / n.z;
-        if (d < 9.0) {
-            let ang = atan2(dv.y, dv.x);
-            let spokes = pow(0.5 + 0.5 * cos(ang * (4.0 + f32(k % 3)) + f32(k) * 2.4 + fbm2(c * 0.9) * 3.0), 8.0);
-            density = density + n.w * (exp(-d * d * 0.8) * 2.8 + spokes * exp(-d * 0.55) * 0.42);
+        if (d < 14.0) {
+            let dir = dv / max(length(dv), 1e-4);
+            let wob = fbm2(c * 1.1 + f32(k) * 3.7) * 2.6;
+            let ang = atan2(dir.y, dir.x) + wob;
+            let spokes = pow(0.5 + 0.5 * cos(ang * (3.0 + f32(k % 3))), 26.0);
+            density = density + n.w * (exp(-d * d * 0.7) * 1.25 + spokes * exp(-d * 0.42) * 0.44);
         }
     }
 
-    let voidc = vec3<f32>(0.10, 0.13, 0.36);
-    let sheet = vec3<f32>(0.30, 0.34, 0.86);
-    let fil = vec3<f32>(0.78, 0.60, 0.98);
-    let knot = vec3<f32>(1.0, 0.76, 0.50);
-    var col = mix(voidc, sheet, smoothstep(0.02, 0.28, density));
-    col = mix(col, fil, smoothstep(0.26, 0.85, density));
-    col = mix(col, knot, smoothstep(0.85, 2.4, density));
-    var light = col * pow(density, 1.25) * 0.5;
+    let sheet = vec3<f32>(0.24, 0.30, 0.78);
+    let fil = vec3<f32>(0.66, 0.54, 0.98);
+    let knot = vec3<f32>(1.0, 0.74, 0.50);
+    var col = mix(sheet, fil, smoothstep(0.08, 0.55, density));
+    col = mix(col, knot, smoothstep(0.55, 1.5, density));
+    var light = col * pow(density, 1.35) * 0.42;
 
     // every speck is a galaxy; they trace the web and thin out in the voids
-    let dots = star_octaves(c, upp, inv, 41.0, 4.2, 0.6);
-    light = light + mix(fil, vec3<f32>(1.0, 0.9, 0.78), dots.y) * dots.x * clamp(density * 1.2 + 0.015, 0.0, 1.6) * 0.8;
+    let dots = star_octaves(c, upp, inv, 41.0, 3.4, 0.7);
+    let on_web = clamp(pow(density, 0.8) * 1.5 + 0.012, 0.0, 1.5);
+    light = light + mix(fil, vec3<f32>(1.0, 0.9, 0.78), dots.y) * dots.x * on_web * 0.72;
     return light;
 }
 
@@ -258,12 +298,11 @@ fn helio_rgb(px: vec2<f32>) -> vec3<f32> {
     let along = dot(rel, tail) / au; // AU downstream of the Sun
     let side = length(rel - tail * dot(rel, tail)) / au;
     // a blunt nose at ~120 AU upstream, drawn out into a modest tail: a sketch
-    let stretch = 1.0 + smoothstep(-20.0, 260.0, along) * 1.1;
+    let stretch = 1.0 + smoothstep(-20.0, 220.0, along) * 0.7;
     let rr = length(vec2<f32>(along / stretch, side));
-    let shell = exp(-pow((rr - 122.0) / 10.0, 2.0));
-    let fill = smoothstep(126.0, 88.0, rr);
-    let fade = exp(-max(along, 0.0) / 520.0);
-    return vec3<f32>(0.30, 0.44, 0.92) * (shell * 0.14 + fill * 0.022) * fade * V.helio.w;
+    let shell = exp(-pow((rr - 122.0) / 9.0, 2.0));
+    let fill = smoothstep(126.0, 90.0, rr);
+    return vec3<f32>(0.30, 0.44, 0.92) * (shell * 0.12 + fill * 0.020) * V.helio.w;
 }
 
 fn oort_rgb(px: vec2<f32>) -> vec3<f32> {
@@ -310,7 +349,10 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
             let dens = fog_density(g);
             let outside = smoothstep(V.sun_g.z * 0.9, V.sun_g.z * 1.12, length(g - V.sun_g.xy));
             let dust = star_octaves(g, kpp, inv, 11.0, 4.0, 0.62);
-            let light = dust.x * clamp(dens * 2.2 + 0.05, 0.0, 1.4) * outside;
+            // once individual stars can't be resolved they should read as grain,
+            // not as a blizzard over the light they make up
+            let resolve = clamp(0.012 / max(kpp, 1e-5), 0.14, 1.0);
+            let light = dust.x * clamp(dens * 2.2 + 0.05, 0.0, 1.4) * outside * resolve;
             col = col + star_tint(dust.y) * light * V.fog_b.w * 0.9;
         }
     }
@@ -324,8 +366,7 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
         let det = determinant(m);
         let inv = mat2x2<f32>(vec2<f32>(m[1].y, -m[0].y), vec2<f32>(-m[1].x, m[0].x)) * (1.0 / det);
         let upp = sqrt(abs(det));
-        let far = star_octaves(d, upp, inv, 73.0, 9.0, 0.5);
-        col = col + star_tint(far.y * 0.8 + 0.1) * far.x * 0.16 * V.deep_a.w;
+        col = col + deep_field(d, upp, inv) * 0.5 * V.deep_a.w;
     }
 
     // the cosmic web, on the supergalactic plane

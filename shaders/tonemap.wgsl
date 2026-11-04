@@ -48,7 +48,7 @@ fn agx_look(v: vec3<f32>) -> vec3<f32> {
     let w = vec3<f32>(0.2126, 0.7152, 0.0722);
     let p = pow(max(v, vec3<f32>(0.0)), vec3<f32>(1.32));
     let lp = dot(p, w);
-    return lp + 1.28 * (p - lp);
+    return lp + 1.18 * (p - lp);
 }
 
 fn agx_eotf(v: vec3<f32>) -> vec3<f32> {

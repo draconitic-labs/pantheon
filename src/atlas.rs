@@ -9,7 +9,7 @@ use crate::engine::draw::{
     CanvasUniforms, DiscInst, DrawList, GalaxyInst, RingInst, RingMap, StrokeStyle, KIND_STAR,
 };
 use crate::engine::textures::{TexId, TexSet, TexStatus};
-use crate::frames::{band, fmt_len, smoothstep, Camera, Proj, AU, KPC, MPC, PC};
+use crate::frames::{band, smoothstep, Camera, Proj, AU, KPC, MPC, PC};
 use crate::sim::{
     self, hill_radius, lagrange_points, moon_rel, planet_axis, Clock, NBody, GM_SUN, J2000, MOONS,
     PLANETS, RINGS, SUN_RADIUS_KM,
@@ -554,7 +554,7 @@ pub fn build(inp: &BuildIn, dl: &mut DrawList) -> FrameOut {
 
     // ---- fullscreen procedural planes
     let dim = if truth { 0.35 } else { 1.0 };
-    let w_gal = band(lw, 19.0, 23.5, 0.9) * dim;
+    let w_gal = band(lw, 19.0, 23.0, 0.9) * dim;
     let w_dust = band(lw, 17.9, 22.8, 0.8) * dim;
     if w_gal > 0.001 || w_dust > 0.001 {
         if let Some((ra, rb, inc)) = proj.plane_affine(u.gal.center, u.gal.x, u.gal.y, KPC) {
@@ -582,8 +582,8 @@ pub fn build(inp: &BuildIn, dl: &mut DrawList) -> FrameOut {
                 out.uni.nodes[k] = [
                     (n.pos.dot(sx) / (10.0 * MPC)) as f32,
                     (n.pos.dot(sy) / (10.0 * MPC)) as f32,
-                    ((n.size_mpc * 0.09).max(0.12)) as f32,
-                    ((n.size_mpc / 6.0).sqrt().clamp(0.5, 1.3)) as f32,
+                    ((n.size_mpc * 0.05).max(0.08)) as f32,
+                    ((n.size_mpc / 6.0).sqrt().clamp(0.5, 1.2)) as f32,
                 ];
             }
         }
@@ -716,8 +716,10 @@ fn ruler_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
     // round numbers in the natural unit of this scale
     let (unit_m, unit_name) = if view_w < 0.6 * crate::frames::LY {
         (AU, "AU")
-    } else if view_w < 0.5 * MPC {
+    } else if view_w < 3.0 * KPC {
         (PC, "pc")
+    } else if view_w < 0.5 * MPC {
+        (KPC, "kpc")
     } else {
         (MPC, "Mpc")
     };
@@ -1038,8 +1040,8 @@ fn draw_planet_disc(
         _ => ([0.0; 3], 0.0, 0.0),
     };
     let relief = match p.name {
-        "Mercury" => 0.62,
-        "Mars" => 0.38,
+        "Mercury" => 0.5,
+        "Mars" => 0.2,
         _ => 0.0,
     };
     let zd = zmap(proj.screen(pos)[2], inp.cam.mpp * inp.w);
@@ -1611,8 +1613,8 @@ fn stars_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             continue;
         }
         let m = s.absmag;
-        let core = (1.25 - 0.085 * m).clamp(0.5, 2.5) * (0.72 + 0.28 * crowd);
-        let bright = (1.45 - 0.115 * m).clamp(0.14, 3.2) * w as f32 * (crowd + (m < 1.0) as i32 as f32 * 0.4);
+        let core = (1.45 - 0.09 * m).clamp(0.6, 2.9) * (0.72 + 0.28 * crowd);
+        let bright = (2.3 - 0.17 * m).clamp(0.28, 5.0) * w as f32 * (crowd + (m < 1.0) as i32 as f32 * 0.4);
         let rgb = crate::data::star_rgb(s.bp_rp);
         let c = if truth {
             let p = Prov::Measured.rgb();
@@ -1621,7 +1623,7 @@ fn stars_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             [rgb[0], rgb[1], rgb[2], bright]
         };
         // only the true luminaries get a diffraction cross
-        let spike = if m < -1.5 { 0.42 } else { 0.0 };
+        let spike = if m < -1.0 { 0.4 } else { 0.0 };
         let glow = core * (1.5 + (1.6 - m * 0.16).clamp(0.0, 1.6));
         dl.point(px, core, glow, spike, c);
         if core > 1.2 || s.name.is_some() {
@@ -1689,11 +1691,11 @@ fn stars_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             cands.push((rank, ei, px));
         }
         cands.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        for (k, (_, ei, px)) in cands.iter().take(90).enumerate() {
+        for (k, (_, ei, px)) in cands.iter().take(40).enumerate() {
             let e = &u.exos[*ei];
-            let fade = if k < 24 { 1.0 } else { 0.5 };
+            let fade = if k < 16 { 1.0 } else { 0.45 };
             let c = ink(theme::INK_GOLD, 0.62 * pw as f32 * fade, truth, Prov::Measured);
-            dl.circle(*px, 5.5, StrokeStyle::new(c, 0.9));
+            dl.circle(*px, 5.0, StrokeStyle::new(c, 0.9));
             out.picks.push(Pickable { pos: *px, r: 8.0, obj: ObjectRef::ExoHost(*ei) });
             if lw < 17.6 && k < 14 {
                 out.labels.push(Label {
@@ -1879,9 +1881,11 @@ fn draw_galaxy_glyph(
         let c = Prov::Illustrative.rgb();
         [c[0], c[1], c[2], 0.7 * w as f32]
     } else if g.spiral {
-        [0.60, 0.72, 1.0, 1.0 * w as f32]
+        [0.60, 0.72, 1.0, 1.9 * w as f32]
     } else {
-        [0.72, 0.78, 1.0, 0.95 * w as f32]
+        // dwarfs are faint: bright enough to find when tiny, quiet when resolved
+        let quiet = smoothstep(4.0, 22.0, r_px as f64) as f32;
+        [0.72, 0.78, 1.0, (1.7 - 1.3 * quiet) * w as f32]
     };
     push_galaxy(proj, dl, px, g.size_kpc * 0.5 * KPC, plane, kind, seed, tint, inp.cam.mpp);
     // something to see and click, however small on screen
@@ -1923,13 +1927,23 @@ fn localgroup_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out:
         }
         draw_galaxy_glyph(inp, proj, gi, px, dl, out, gw);
     }
+    // the big two sit in vast, faint halos; at this scale those are the structure
+    let halo_w = band(lw, 22.0, 24.6, 0.6) as f32;
+    if halo_w > 0.01 {
+        let tint = [0.42, 0.52, 0.92, halo_w];
+        push_galaxy(proj, dl, proj.px(u.gal.center), 300.0 * KPC, None, 3.0, 0.21, tint, inp.cam.mpp);
+        if let Some(m31) = u.galaxies.iter().find(|g| g.name.contains("M31")) {
+            let tint = [0.52, 0.50, 0.90, halo_w];
+            push_galaxy(proj, dl, proj.px(m31.pos), 300.0 * KPC, None, 3.0, 0.47, tint, inp.cam.mpp);
+        }
+    }
     // The Milky Way itself, as a galaxy like the others, once the map's own
     // illustration has shrunk away. Same tilt the real one has in this frame.
-    let mw_w = band(lw, 22.5, 25.0, 0.7);
+    let mw_w = band(lw, 22.0, 25.0, 0.6);
     let mw_px = proj.px(u.gal.center);
     if mw_w > 0.02 && on_screen(mw_px, inp.w, inp.h, 200.0) {
         let radius = 15.0 * KPC;
-        let tint = [0.62, 0.74, 1.0, mw_w as f32];
+        let tint = [0.62, 0.74, 1.0, 1.9 * mw_w as f32];
         push_galaxy(proj, dl, mw_px, radius, Some((u.gal.x, u.gal.y)), 0.0, 0.42, tint, inp.cam.mpp);
         let r_px = (radius / inp.cam.mpp) as f32;
         if r_px < 2.5 {
@@ -1966,7 +1980,7 @@ fn cosmic_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mu
         let c = ink([1.0, 0.86, 0.66], 1.6 * w as f32, truth, Prov::Measured);
         // the catalog position, plus a swarm that reads as a cluster's galaxies
         // (the members themselves are illustrative)
-        dl.point(px, 1.6, r_px.clamp(3.0, 40.0) * 0.9, 0.0, c);
+        dl.point(px, 1.4, r_px.clamp(2.0, 18.0) * 0.5, 0.0, c);
         let spread = r_px.max(5.0) as f64;
         for k in 0..36 {
             let ang = seeded(k, ni * 7 + 3) * std::f64::consts::TAU;

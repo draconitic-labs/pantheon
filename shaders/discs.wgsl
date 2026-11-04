@@ -184,7 +184,7 @@ fn fs(in: VsOut) -> FsOut {
     if (kind == 3) {
         let emission = in.flags.w;
         let mu = nz;
-        let limb = 0.36 + 0.64 * pow(mu, 0.62);
+        let limb = 0.30 + 0.70 * pow(mu, 0.55);
         // granulation over the map: slow flow, procedural and marked illustrative
         let flow = fbm3(q * 34.0 + vec3<f32>(time * 0.014, -time * 0.011, time * 0.008));
         let fine = fbm3(q * 120.0 + vec3<f32>(-time * 0.02, time * 0.016, 0.0));
@@ -192,10 +192,10 @@ fn fs(in: VsOut) -> FsOut {
         let grain = 0.86 + 0.2 * flow + 0.12 * fine;
         var surf: vec3<f32>;
         if (img_fade > 0.001) {
-            // the map's mottling read as temperature: orange-gold to near white
-            let h = pow(clamp(lum(day), 0.0, 1.0), 0.6);
-            let ramp = mix(vec3<f32>(1.0, 0.50, 0.13), vec3<f32>(1.0, 0.90, 0.60), smoothstep(0.2, 0.9, h));
-            let img = ramp * (0.72 + 0.72 * h) * grain;
+            // the map's mottling read as temperature: deep orange to gold-white
+            let h = pow(clamp(lum(day), 0.0, 1.0), 0.75);
+            let ramp = mix(vec3<f32>(1.0, 0.40, 0.08), vec3<f32>(1.0, 0.80, 0.40), smoothstep(0.12, 0.85, h));
+            let img = ramp * (0.62 + 0.86 * h) * grain;
             let pr = in.ca.rgb * (0.7 + 0.5 * cell) * grain;
             surf = mix(pr, img, img_fade);
         } else {
@@ -237,6 +237,10 @@ fn fs(in: VsOut) -> FsOut {
 
     // relief: shade from image brightness (a look, not elevation data)
     var ns = n;
+    if (in.fx.w > 0.001) {
+        // rocky maps ship saturated; pull them toward the colours the eye reports
+        albedo = mix(vec3<f32>(lum(albedo)), albedo, 0.74);
+    }
     if (in.fx.w > 0.001 && img_fade > 0.5) {
         let span = max(max(abs(gx.y), abs(gy.y)), 0.0002);
         let du = span * 1.5 / max(cos(lat), 0.15);

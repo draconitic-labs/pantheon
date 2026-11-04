@@ -66,10 +66,14 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
         let clumps = smoothstep(0.58, 0.78, fbm2(g * 8.0 + seed * 5.0));
         col = in.tint.rgb * body * 1.1 + vec3<f32>(1.0, 0.55, 0.66) * clumps * body * 0.8;
         col = col + warm * exp(-rs * rs * 40.0) * 0.4;
-    } else {
+    } else if (kind == 2) {
         // spheroidal dwarfs: a faint, smooth, old stellar population
         let body = exp(-pow(r * 2.4, 1.25));
         col = mix(warm, vec3<f32>(0.8, 0.82, 0.95), 0.35) * body * fade * 0.5;
+    } else {
+        // a galaxy's extended halo: no sharp edge, the faintest possible glow
+        let n = fbm2(g * 3.0 + seed * 13.0);
+        col = in.tint.rgb * exp(-r * r * 4.2) * (0.72 + 0.56 * n) * 0.10;
     }
     return vec4<f32>(col * in.tint.a, 0.0);
 }

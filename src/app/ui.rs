@@ -448,6 +448,15 @@ impl Pantheon {
             return;
         }
         let l = layout(rect.width(), rect.height());
+        self.panel_rects.clear();
+        self.panel_rects.push(l.toolbar);
+        self.panel_rects.push(Rect::from_min_size(l.title.min, egui::vec2(l.title.width().min(430.0), l.title.height())));
+        self.panel_rects.push(l.bar);
+        if let (Some(r), true) = (l.rail, self.modes.ladder) {
+            if l.rail_labels {
+                self.panel_rects.push(r);
+            }
+        }
         self.title_block(ctx, &l);
         self.edge_markers(ctx, &l, rect);
         self.toolbar(ctx, &l);
@@ -1051,7 +1060,7 @@ impl Pantheon {
         let mut awaken = false;
         let expand_id = egui::Id::new("card-sources");
         let mut sources = ctx.data_mut(|d| *d.get_temp_mut_or::<bool>(expand_id, false));
-        egui::Area::new(egui::Id::new("card"))
+        let card_rect = egui::Area::new(egui::Id::new("card"))
             .pivot(Align2::LEFT_BOTTOM)
             .fixed_pos(col.left_bottom())
             .show(ctx, |ui| {
@@ -1143,8 +1152,11 @@ impl Pantheon {
                         );
                     }
                 });
-            });
+            })
+            .response
+            .rect;
         ctx.data_mut(|d| d.insert_temp(expand_id, sources));
+        self.panel_rects.push(card_rect);
         if close {
             self.focus = None;
             self.follow = None;

@@ -14,7 +14,14 @@ path = "src/lib.rs"
 name = "pantheon"
 path = "src/main.rs"
 
+[features]
+default = ["audio"]
+# Ambience. Needs ALSA headers on Linux (alsa-lib-devel or libasound2-dev);
+# build with --no-default-features to leave sound out entirely.
+audio = ["dep:cpal"]
+
 [dependencies]
+cpal = { version = "0.15", optional = true }
 eframe = { version = "0.32", default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }
 egui = "0.32"
 wgpu = "25"

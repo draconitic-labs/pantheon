@@ -1,64 +1,16 @@
-//! Ambience: a tiny dependency-free generative audio engine.
+//! Ambience: a small generative audio engine.
 //!
-//! Streams synthesized audio through the classic winmm `waveOut` API (no
-//! external crates — links the system `winmm` import library). The piece is
-//! generative rather than a looped file: four slow pad chords cross-fade on a
-//! ~96 s cycle, sparse pentatonic chimes ring over them, and a faint filtered
-//! wash breathes underneath — so it cycles forever with no seam.
-
-#![cfg(windows)]
+//! The piece is generative rather than a looped file: four slow pad chords
+//! cross-fade on a ~96 s cycle, sparse pentatonic chimes ring over them, and a
+//! faint filtered wash breathes underneath, so it cycles forever with no seam.
+//! Output goes through cpal, which talks to ALSA (and PipeWire or PulseAudio
+//! through it) on Linux. The device is opened only when someone turns sound on.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::mpsc::channel;
 use std::sync::Arc;
 
-const SR: u32 = 44_100;
-const CHANNELS: u16 = 2;
-const BUF_FRAMES: usize = 11_025; // 0.25 s per buffer
-const N_BUFS: usize = 4;
-
-#[repr(C)]
-struct WaveFormatEx {
-    format_tag: u16,
-    channels: u16,
-    samples_per_sec: u32,
-    avg_bytes_per_sec: u32,
-    block_align: u16,
-    bits_per_sample: u16,
-    cb_size: u16,
-}
-
-#[repr(C)]
-struct WaveHdr {
-    data: *mut u8,
-    buffer_length: u32,
-    bytes_recorded: u32,
-    user: usize,
-    flags: u32,
-    loops: u32,
-    next: *mut WaveHdr,
-    reserved: usize,
-}
-
-type HWaveOut = isize;
-const WAVE_MAPPER: u32 = 0xFFFF_FFFF;
-const WHDR_DONE: u32 = 0x0000_0001;
-
-#[link(name = "winmm")]
-extern "system" {
-    fn waveOutOpen(
-        ph: *mut HWaveOut,
-        device: u32,
-        format: *const WaveFormatEx,
-        callback: usize,
-        instance: usize,
-        flags: u32,
-    ) -> u32;
-    fn waveOutPrepareHeader(h: HWaveOut, hdr: *mut WaveHdr, size: u32) -> u32;
-    fn waveOutUnprepareHeader(h: HWaveOut, hdr: *mut WaveHdr, size: u32) -> u32;
-    fn waveOutWrite(h: HWaveOut, hdr: *mut WaveHdr, size: u32) -> u32;
-    fn waveOutReset(h: HWaveOut) -> u32;
-    fn waveOutClose(h: HWaveOut) -> u32;
-}
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 // --------------------------------------------------------------- synth
 
@@ -112,13 +64,14 @@ impl Synth {
         (self.rng >> 11) as f64 / (1u64 << 53) as f64
     }
 
-    fn fill(&mut self, out: &mut [i16], target_gain: f32) {
-        let dt = 1.0 / SR as f64;
-        let n = out.len() / 2;
+    /// Render interleaved stereo at `sr` Hz into `out`.
+    fn fill(&mut self, out: &mut [f32], target_gain: f32, sr: f64, channels: usize) {
+        let dt = 1.0 / sr;
+        let n = out.len() / channels;
         for i in 0..n {
             self.t += dt;
             let t = self.t;
-            self.gain += (target_gain - self.gain) * 0.0004;
+            self.gain += (target_gain - self.gain) * (0.0004 * 44_100.0 / sr as f32);
 
             // chord weights: circular distance on the 4-slot cycle
             let x = (t / CHORD_S) % 4.0;
@@ -182,13 +135,20 @@ impl Synth {
 
             // gentle soft-clip and output
             let g = self.gain as f64;
-            let sat = |v: f64| -> i16 {
+            let sat = |v: f64| -> f32 {
                 let v = v * g;
-                let v = v / (1.0 + v.abs()); // smooth limiter
-                (v * 30_000.0) as i16
+                (v / (1.0 + v.abs())) as f32 * 0.92 // smooth limiter
             };
-            out[i * 2] = sat(l);
-            out[i * 2 + 1] = sat(r);
+            let frame = &mut out[i * channels..(i + 1) * channels];
+            match frame {
+                [m] => *m = sat(0.5 * (l + r)),
+                [a, b, rest @ ..] => {
+                    *a = sat(l);
+                    *b = sat(r);
+                    rest.fill(0.0);
+                }
+                [] => {}
+            }
         }
     }
 }
@@ -203,86 +163,102 @@ pub struct Ambience {
 
 impl Ambience {
     /// Open the default output device and start the generative stream.
-    /// Returns None (silently) when no audio device is available.
+    /// Returns None when no usable audio device is available.
     pub fn start(initial_gain: f32) -> Option<Ambience> {
         let stop = Arc::new(AtomicBool::new(false));
         let gain = Arc::new(AtomicU32::new(initial_gain.to_bits()));
         let (stop_t, gain_t) = (stop.clone(), gain.clone());
-
-        let fmt = WaveFormatEx {
-            format_tag: 1, // PCM
-            channels: CHANNELS,
-            samples_per_sec: SR,
-            avg_bytes_per_sec: SR * CHANNELS as u32 * 2,
-            block_align: CHANNELS * 2,
-            bits_per_sample: 16,
-            cb_size: 0,
-        };
-        let mut h: HWaveOut = 0;
-        let rc = unsafe { waveOutOpen(&mut h, WAVE_MAPPER, &fmt, 0, 0, 0) };
-        if rc != 0 {
-            log::warn!("ambience: waveOutOpen failed ({rc}) — audio disabled");
-            return None;
-        }
-
+        let (ready_tx, ready_rx) = channel::<bool>();
+        // a cpal stream isn't Send on every platform: it lives on its own thread
         let thread = std::thread::Builder::new()
             .name("pantheon-ambience".into())
             .spawn(move || {
-                let mut synth = Synth::new();
-                let mut bufs: Vec<Box<[i16]>> =
-                    (0..N_BUFS).map(|_| vec![0i16; BUF_FRAMES * 2].into_boxed_slice()).collect();
-                let mut hdrs: Vec<WaveHdr> = bufs
-                    .iter_mut()
-                    .map(|b| WaveHdr {
-                        data: b.as_mut_ptr() as *mut u8,
-                        buffer_length: (b.len() * 2) as u32,
-                        bytes_recorded: 0,
-                        user: 0,
-                        flags: 0,
-                        loops: 0,
-                        next: std::ptr::null_mut(),
-                        reserved: 0,
-                    })
-                    .collect();
-                let hsz = std::mem::size_of::<WaveHdr>() as u32;
-                unsafe {
-                    for (k, hdr) in hdrs.iter_mut().enumerate() {
-                        let g = f32::from_bits(gain_t.load(Ordering::Relaxed));
-                        synth.fill(&mut bufs[k], g);
-                        waveOutPrepareHeader(h, hdr, hsz);
-                        waveOutWrite(h, hdr, hsz);
+                let stream = match open_stream(gain_t) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        log::warn!("ambience unavailable: {e}");
+                        let _ = ready_tx.send(false);
+                        return;
                     }
-                    while !stop_t.load(Ordering::Relaxed) {
-                        let mut wrote = false;
-                        for (k, hdr) in hdrs.iter_mut().enumerate() {
-                            if hdr.flags & WHDR_DONE != 0 {
-                                let g = f32::from_bits(gain_t.load(Ordering::Relaxed));
-                                synth.fill(&mut bufs[k], g);
-                                hdr.flags &= !WHDR_DONE;
-                                waveOutWrite(h, hdr, hsz);
-                                wrote = true;
-                            }
-                        }
-                        if !wrote {
-                            std::thread::sleep(std::time::Duration::from_millis(15));
-                        }
-                    }
-                    waveOutReset(h);
-                    for hdr in hdrs.iter_mut() {
-                        waveOutUnprepareHeader(h, hdr, hsz);
-                    }
-                    waveOutClose(h);
+                };
+                let _ = ready_tx.send(true);
+                while !stop_t.load(Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(60));
                 }
-                drop(bufs);
+                drop(stream);
             })
             .ok()?;
-        Some(Ambience { stop, gain, thread: Some(thread) })
+        if ready_rx.recv_timeout(std::time::Duration::from_secs(3)).unwrap_or(false) {
+            Some(Ambience { stop, gain, thread: Some(thread) })
+        } else {
+            stop.store(true, Ordering::Relaxed);
+            None
+        }
     }
 
-    /// 0.0 = silent (ramped smoothly — no clicks), ~0.5 = pleasant default.
+    /// 0.0 = silent (ramped smoothly, no clicks), ~0.5 = pleasant default.
     pub fn set_gain(&self, g: f32) {
         self.gain.store(g.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
     }
+}
+
+fn open_stream(gain: Arc<AtomicU32>) -> Result<cpal::Stream, String> {
+    let host = cpal::default_host();
+    let device = host.default_output_device().ok_or("no default output device")?;
+    let config = device.default_output_config().map_err(|e| e.to_string())?;
+    let format = config.sample_format();
+    let config: cpal::StreamConfig = config.into();
+    let sr = config.sample_rate.0 as f64;
+    let channels = config.channels as usize;
+    if channels == 0 {
+        return Err("device reports no channels".into());
+    }
+    let on_err = |e| log::warn!("ambience stream: {e}");
+    let mut synth = Synth::new();
+    let stream = match format {
+        cpal::SampleFormat::F32 => device.build_output_stream(
+            &config,
+            move |out: &mut [f32], _| {
+                synth.fill(out, f32::from_bits(gain.load(Ordering::Relaxed)), sr, channels);
+            },
+            on_err,
+            None,
+        ),
+        cpal::SampleFormat::I16 => {
+            let mut tmp: Vec<f32> = Vec::new();
+            device.build_output_stream(
+                &config,
+                move |out: &mut [i16], _| {
+                    tmp.resize(out.len(), 0.0);
+                    synth.fill(&mut tmp, f32::from_bits(gain.load(Ordering::Relaxed)), sr, channels);
+                    for (o, v) in out.iter_mut().zip(&tmp) {
+                        *o = (*v * 32_767.0) as i16;
+                    }
+                },
+                on_err,
+                None,
+            )
+        }
+        cpal::SampleFormat::U16 => {
+            let mut tmp: Vec<f32> = Vec::new();
+            device.build_output_stream(
+                &config,
+                move |out: &mut [u16], _| {
+                    tmp.resize(out.len(), 0.0);
+                    synth.fill(&mut tmp, f32::from_bits(gain.load(Ordering::Relaxed)), sr, channels);
+                    for (o, v) in out.iter_mut().zip(&tmp) {
+                        *o = ((*v * 0.5 + 0.5) * 65_535.0) as u16;
+                    }
+                },
+                on_err,
+                None,
+            )
+        }
+        other => return Err(format!("unsupported sample format {other:?}")),
+    }
+    .map_err(|e| e.to_string())?;
+    stream.play().map_err(|e| e.to_string())?;
+    Ok(stream)
 }
 
 impl Drop for Ambience {
@@ -291,5 +267,40 @@ impl Drop for Ambience {
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn synth_makes_bounded_nonsilent_sound_and_fades_with_gain() {
+        let mut s = Synth::new();
+        // let the gain ramp settle, then measure several seconds at 48 kHz stereo
+        let mut buf = vec![0f32; 48_000 * 2 * 4];
+        s.fill(&mut buf, 0.5, 48_000.0, 2);
+        s.fill(&mut buf, 0.5, 48_000.0, 2);
+        let peak = buf.iter().fold(0f32, |a, v| a.max(v.abs()));
+        let rms = (buf.iter().map(|v| v * v).sum::<f32>() / buf.len() as f32).sqrt();
+        assert!(peak <= 1.0, "peak {peak}");
+        assert!(rms > 0.005, "rms {rms}");
+        assert!(buf.iter().all(|v| v.is_finite()));
+        // with the gain at zero it fades to silence
+        let mut quiet = vec![0f32; 48_000 * 2];
+        s.fill(&mut quiet, 0.0, 48_000.0, 2);
+        s.fill(&mut quiet, 0.0, 48_000.0, 2);
+        let tail = quiet[quiet.len() - 4_000..].iter().fold(0f32, |a, v| a.max(v.abs()));
+        assert!(tail < 1e-3, "tail {tail}");
+    }
+
+    #[test]
+    fn synth_handles_mono_and_surround_layouts() {
+        let mut s = Synth::new();
+        let mut mono = vec![0f32; 4_800];
+        s.fill(&mut mono, 0.5, 48_000.0, 1);
+        let mut six = vec![0f32; 6 * 1_000];
+        s.fill(&mut six, 0.5, 48_000.0, 6);
+        assert!(six.chunks(6).all(|c| c[2..].iter().all(|v| *v == 0.0)));
     }
 }

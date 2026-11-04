@@ -20,7 +20,7 @@ use crate::engine::draw::{DrawList, Pipelines};
 use crate::engine::gpu::{save_png, GpuContext, ViewTarget};
 use crate::engine::textures::TextureBank;
 use crate::frames::{fmt_len, Camera, AU};
-use crate::sim::{self, fmt_jd, jd_now, Clock, NBody, J2000, MOONS, PLANETS};
+use crate::sim::{self, fmt_jd, jd_now, Clock, NBody, MOONS, PLANETS};
 use crate::theme;
 
 pub use search::{Dest, SearchState};
@@ -112,6 +112,7 @@ pub struct Pantheon {
     /// labels placed last frame, for clicks and hysteresis (UX B3)
     sticky: std::collections::HashSet<String>,
     label_hits: Vec<(Rect, ObjectRef)>,
+    panel_rects: Vec<Rect>,
     /// back-stack for flights
     history: Vec<HistoryEntry>,
     // ---- motion state
@@ -238,6 +239,7 @@ impl Pantheon {
             hover: None,
             sticky: std::collections::HashSet::new(),
             label_hits: Vec::new(),
+            panel_rects: Vec::new(),
             history: Vec::new(),
             zoom_pending: 0.0,
             zoom_anchor: None,
@@ -1103,7 +1105,8 @@ impl Pantheon {
         order.sort_by_key(|&i| {
             -(fo.labels[i].priority + if self.sticky.contains(&fo.labels[i].text) { 12 } else { 0 })
         });
-        let mut placed: Vec<Rect> = Vec::new();
+        // panels from last frame count as taken: no names hiding behind the UI
+        let mut placed: Vec<Rect> = self.panel_rects.clone();
         let mut placed_texts: std::collections::HashSet<String> = Default::default();
         let mut hits: Vec<(Rect, ObjectRef)> = Vec::new();
         let show = self.modes.labels;
@@ -1766,8 +1769,7 @@ pub const SHOTS: &[Shot] = &[
         name: "luna",
         desc: "The Moon close-up: maria and craters",
         setup: |a| {
-            let jd = a.clock.jd;
-            let p = sim::body_pos(2, jd) + sim::luna_rel(jd);
+            let p = obj_pos(&a.u, ObjectRef::Moon(0), a.clock.jd, None);
             view(a, p, 1.0e7, Some(ObjectRef::Moon(0)));
         },
     },
@@ -1913,8 +1915,9 @@ pub fn run_shots(which: &str, w: u32, h: u32, out: &std::path::Path) -> anyhow::
     host.app.view_h = h as f64;
     let mut done = 0;
     let mut failures: Vec<String> = Vec::new();
+    let wanted: Vec<&str> = which.split(',').map(str::trim).collect();
     for shot in SHOTS {
-        if which != "all" && which != shot.name {
+        if which != "all" && !wanted.contains(&shot.name) {
             continue;
         }
         // reset ALL transient state between shots — deterministic procedural

@@ -3,7 +3,7 @@
 
 pub mod app;
 pub mod atlas;
-#[cfg(windows)]
+#[cfg(feature = "audio")]
 pub mod audio;
 pub mod cli;
 pub mod data;
