@@ -113,6 +113,8 @@ fn seen(out: &mut FrameOut, e: crate::evidence::Ev, what: &'static str) {
 enum SurfaceSource {
     Sun,
     Map,
+    /// a map is on disk, and the procedural look is standing in until it arrives
+    Loading,
     Procedural(PositionSource),
 }
 
@@ -1347,7 +1349,12 @@ fn draw_planet_disc(
         } else {
             PositionSource::PlanetElements
         };
-        note_surface(out, r_px, SurfaceSource::Procedural(position));
+        let source = if planet_tex(p.name).is_some_and(|t| inp.tex.on_disk(t)) {
+            SurfaceSource::Loading
+        } else {
+            SurfaceSource::Procedural(position)
+        };
+        note_surface(out, r_px, source);
         seen(out, Ev::ProceduralSurface, "surface patterns");
     }
 
@@ -1679,7 +1686,12 @@ fn moons_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
                 } else {
                     PositionSource::MoonElements
                 };
-                note_surface(out, r_px, SurfaceSource::Procedural(position));
+                let source = if tex.is_some_and(|t| inp.tex.on_disk(t)) {
+                    SurfaceSource::Loading
+                } else {
+                    SurfaceSource::Procedural(position)
+                };
+                note_surface(out, r_px, source);
                 seen(
                     out,
                     crate::evidence::Ev::ProceduralSurface,

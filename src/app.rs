@@ -33,6 +33,9 @@ pub struct PathKey {
     #[serde(default)]
     pub center: [f64; 3],
     pub mpp: f64,
+    /// the window width `mpp` was recorded at, so a render at any size frames the same view
+    #[serde(default)]
+    pub view_w: Option<f64>,
     #[serde(default)]
     pub tilt: f64,
     #[serde(default)]
@@ -76,6 +79,55 @@ struct HistoryEntry {
     scene_exo: Option<usize>,
 }
 
+/// Most substeps a simulation takes in one frame.
+const ISLAND_MAX_SUBSTEPS: usize = 4000;
+
+/// How many substeps to take this frame, or `None` if time has outrun the simulation. One slow
+/// frame only makes its steps coarser for that frame: it takes half a second of frames that
+/// can't keep up to end a simulation, or a step so coarse the moons would fly apart.
+fn island_substeps(dt_sim: f64, dt_sub: f64, dt: f64, shortfall_s: &mut f64) -> Option<usize> {
+    let wanted = (dt_sim.abs() / dt_sub).ceil();
+    if wanted <= ISLAND_MAX_SUBSTEPS as f64 {
+        *shortfall_s = 0.0;
+        return Some(wanted as usize);
+    }
+    *shortfall_s += dt;
+    if *shortfall_s > 0.5 || wanted > 20.0 * ISLAND_MAX_SUBSTEPS as f64 {
+        return None;
+    }
+    Some(ISLAND_MAX_SUBSTEPS)
+}
+
+/// Write a new file named `stem`.json in `dir`, or `stem`-2.json and so on: never over an old one.
+pub(crate) fn write_new_file(
+    dir: &std::path::Path,
+    stem: &str,
+    contents: &str,
+) -> anyhow::Result<std::path::PathBuf> {
+    use std::io::Write;
+    for n in 1..10_000 {
+        let name = if n == 1 {
+            format!("{stem}.json")
+        } else {
+            format!("{stem}-{n}.json")
+        };
+        let path = dir.join(name);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut f) => {
+                f.write_all(contents.as_bytes())?;
+                return Ok(path);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    anyhow::bail!("too many saved flights named {stem}")
+}
+
 /// Where the planet sits in a simulation's bodies: after the Sun, before its moons.
 const ISLAND_PLANET: usize = 1;
 
@@ -102,6 +154,8 @@ pub struct Pantheon {
     pub scene_exo: Option<usize>,
     pub follow: Option<(ObjectRef, DVec3)>,
     pub island: Option<Island>,
+    /// how long the simulation has been unable to keep up with the clock, in seconds
+    island_shortfall: f64,
     pub capture: Vec<PathKey>,
     pub play: Option<PathPlay>,
     pub picks: Vec<Pickable>,
@@ -252,6 +306,7 @@ impl Pantheon {
             scene_exo: None,
             follow: Some((ObjectRef::Planet(2), DVec3::ZERO)),
             island: None,
+            island_shortfall: 0.0,
             capture: Vec::new(),
             play: None,
             picks: Vec::new(),
@@ -354,6 +409,14 @@ impl Pantheon {
             .fly_to_view(h.center, h.mpp, h.tilt, h.yaw, self.view_w, dur);
     }
 
+    /// End a flight where the camera is now. A follow left pointing at the destination
+    /// would otherwise snap the camera to it at whatever zoom the flight had reached.
+    fn stop_flight_here(&mut self) {
+        if self.cam.anim.take().is_some() {
+            self.sync_follow();
+        }
+    }
+
     fn stop_motion(&mut self) {
         self.zoom_pending = 0.0;
         self.zoom_anchor = None;
@@ -435,23 +498,24 @@ impl Pantheon {
                 } else {
                     min_p * 86_400.0 / 600.0
                 };
-                let n = (dt_sim.abs() / dt_sub).ceil() as usize;
-                if n > 4000 {
-                    outrun = true;
-                } else if n > 0 {
-                    let h = dt_sim / n as f64;
-                    for s in 0..n {
-                        isl.sim.step(h);
-                        if s % 4 == 0 {
-                            for (k, p) in isl.sim.pos.iter().enumerate() {
-                                isl.trails[k].push(*p);
-                                if isl.trails[k].len() > 500 {
-                                    isl.trails[k].remove(0);
+                match island_substeps(dt_sim, dt_sub, dt, &mut self.island_shortfall) {
+                    None => outrun = true,
+                    Some(0) => {}
+                    Some(n) => {
+                        let h = dt_sim / n as f64;
+                        for s in 0..n {
+                            isl.sim.step(h);
+                            if s % 4 == 0 {
+                                for (k, p) in isl.sim.pos.iter().enumerate() {
+                                    isl.trails[k].push(*p);
+                                    if isl.trails[k].len() > 500 {
+                                        isl.trails[k].remove(0);
+                                    }
                                 }
                             }
                         }
+                        isl.jd += dt_sim / 86_400.0;
                     }
-                    isl.jd += dt_sim / 86_400.0;
                 }
             }
         }
@@ -724,7 +788,7 @@ impl Pantheon {
         }
         self.cam.fly_to_view(
             center,
-            key.mpp,
+            key.view_w.map_or(key.mpp, |w0| key.mpp * w0 / self.view_w),
             key.tilt,
             key.yaw,
             self.view_w,
@@ -759,15 +823,22 @@ impl Pantheon {
     }
 
     fn fly_to_object(&mut self, obj: ObjectRef, half_extent: f64) {
-        self.push_history();
+        let pos = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref());
+        let mpp = self.framing_mpp(half_extent);
+        // already framed here: nothing to come back from
+        let view = self.cam.mpp * self.view_w;
+        let here = self.cam.anim.is_none()
+            && (self.cam.center_root() - pos).length() < 0.02 * view
+            && (mpp / self.cam.mpp - 1.0).abs() < 0.05;
+        if !here {
+            self.push_history();
+        }
         self.stop_motion();
         // after the history entry above, which remembers the scene being left
         self.scene_exo = match obj {
             ObjectRef::ExoHost(ei) | ObjectRef::ExoPlanet(ei, _) => Some(ei),
             _ => None,
         };
-        let pos = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref());
-        let mpp = self.framing_mpp(half_extent);
         self.focus = Some(obj);
         self.follow = Some((obj, DVec3::ZERO));
         let dur = self.cam.flight_seconds(pos, mpp, self.view_w);
@@ -1017,7 +1088,7 @@ impl Pantheon {
             let d = resp.drag_delta();
             self.cam.tilt = (self.cam.tilt + d.y as f64 * 0.005).clamp(-1.2, 1.45);
             self.cam.yaw -= d.x as f64 * 0.005;
-            self.cam.anim = None;
+            self.stop_flight_here();
             self.pan_vel = [0.0, 0.0];
         } else if resp.dragged_by(egui::PointerButton::Primary) {
             let d = resp.drag_delta();
@@ -1515,7 +1586,8 @@ impl Pantheon {
                         Ev::ProceduralSurface
                     },
                 ));
-                if m.name == "Moon" && u.moon_truth.is_some() {
+                // the same condition as drawing it
+                if m.name == "Moon" && u.moon_truth.as_ref().is_some_and(|t| t.covers(jd, 5.0)) {
                     provs.push(("dashed arc (Truth mode)".into(), Ev::HorizonsVectors));
                 }
                 can_awaken = true;
@@ -2553,6 +2625,133 @@ mod tests {
                 check(a, "a faster rate");
             }
         }
+    }
+
+    #[test]
+    fn one_slow_frame_does_not_end_a_simulation() {
+        // Mars at 1 month/s: Phobos's substep is about 46 s
+        let (rate, substep) = (2.63e6, 46.0);
+        let mut short = 0.0;
+        assert_eq!(
+            island_substeps(rate / 60.0, substep, 1.0 / 60.0, &mut short),
+            Some(953)
+        );
+        assert_eq!(short, 0.0);
+        // one frame of 80 ms: coarser, but it runs, and then all is forgiven
+        assert_eq!(
+            island_substeps(rate * 0.08, substep, 0.08, &mut short),
+            Some(4000)
+        );
+        assert_eq!(
+            island_substeps(rate / 60.0, substep, 1.0 / 60.0, &mut short),
+            Some(953)
+        );
+        assert_eq!(short, 0.0);
+        // a sustained shortfall ends it
+        let mut frames = 0;
+        while island_substeps(rate * 0.1, substep, 0.1, &mut short).is_some() {
+            frames += 1;
+            assert!(frames < 10, "it should end within half a second");
+        }
+        // and time far too fast ends it at once
+        let mut short = 0.0;
+        assert_eq!(
+            island_substeps(3.156e13 / 60.0, substep, 1.0 / 60.0, &mut short),
+            None
+        );
+    }
+
+    #[test]
+    fn a_slow_frame_in_the_real_app_keeps_the_simulation() {
+        let Some(mut h) = host() else { return };
+        let a = &mut h.app;
+        a.dive_to(ObjectRef::Planet(3));
+        land(a);
+        a.awaken();
+        a.clock.rate = 2.63e6;
+        a.tick(FRAME);
+        a.tick(0.08);
+        a.tick(FRAME);
+        assert!(a.island.is_some(), "one 80 ms frame ended the simulation");
+    }
+
+    #[test]
+    fn flying_to_where_you_already_are_adds_no_history() {
+        let Some(mut h) = host() else { return };
+        let a = &mut h.app;
+        a.dive_to(ObjectRef::Planet(3));
+        land(a);
+        let before = a.history.len();
+        for _ in 0..3 {
+            a.dive_to(ObjectRef::Planet(3));
+            land(a);
+        }
+        assert_eq!(a.history.len(), before);
+        a.dive_to(ObjectRef::Planet(4));
+        assert_eq!(a.history.len(), before + 1);
+    }
+
+    #[test]
+    fn stopping_a_flight_stays_where_it_was() {
+        let Some(mut h) = host() else { return };
+        let a = &mut h.app;
+        a.dive_to(ObjectRef::Planet(2));
+        land(a);
+        a.dive_to(ObjectRef::Planet(4));
+        for _ in 0..40 {
+            a.tick(FRAME);
+        }
+        let (here, mpp) = (a.cam.center_root(), a.cam.mpp);
+        a.stop_flight_here();
+        for _ in 0..5 {
+            a.tick(FRAME);
+        }
+        let moved = (a.cam.center_root() - here).length();
+        assert!(moved < 0.05 * mpp * a.view_w, "snapped {moved} m");
+        assert_eq!(a.cam.mpp, mpp);
+    }
+
+    #[test]
+    fn a_saved_flight_never_overwrites_another() {
+        let dir = std::env::temp_dir().join(format!("pantheon-save-test-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let a = write_new_file(&dir, "path_x", "one").unwrap();
+        let b = write_new_file(&dir, "path_x", "two").unwrap();
+        let (ta, tb) = (
+            std::fs::read_to_string(&a).unwrap(),
+            std::fs::read_to_string(&b).unwrap(),
+        );
+        std::fs::remove_file(&a).unwrap();
+        std::fs::remove_file(&b).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
+        assert_ne!(a, b);
+        assert_eq!((ta.as_str(), tb.as_str()), ("one", "two"));
+    }
+
+    #[test]
+    fn a_recording_frames_the_same_view_at_any_size() {
+        let Some(mut h) = host() else { return };
+        let a = &mut h.app;
+        a.view_w = 3840.0;
+        let key = PathKey {
+            center: [0.0; 3],
+            mpp: 1000.0,
+            view_w: Some(1700.0),
+            tilt: 0.0,
+            yaw: 0.0,
+            jd: sim::J2000,
+            dur: 0.1,
+            hold: 0.0,
+            at: None,
+            host: None,
+        };
+        a.apply_key(&key);
+        land(a);
+        assert!(
+            (a.cam.mpp * 3840.0 - 1000.0 * 1700.0).abs() < 1e-3 * 1700000.0,
+            "{}",
+            a.cam.mpp
+        );
     }
 
     #[test]

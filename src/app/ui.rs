@@ -1592,6 +1592,7 @@ impl Pantheon {
                     self.capture.push(super::PathKey {
                         center: [c.x, c.y, c.z],
                         mpp: self.cam.mpp,
+                        view_w: Some(self.view_w),
                         tilt: self.cam.tilt,
                         yaw: self.cam.yaw,
                         jd: self.clock.jd,
@@ -1614,13 +1615,13 @@ impl Pantheon {
                 if ui.button("Save").clicked() {
                     let dir = std::path::PathBuf::from("exports/paths");
                     let stamp = fmt_jd(jd_now()).replace([' ', ':'], "-");
-                    let path = dir.join(format!("path_{stamp}.json"));
                     match std::fs::create_dir_all(&dir)
                         .map_err(anyhow::Error::from)
                         .and_then(|_| Ok(serde_json::to_string_pretty(&self.capture)?))
-                        .and_then(|js| Ok(std::fs::write(&path, js)?))
-                    {
-                        Ok(()) => self.note(format!("Saved {}", path.display())),
+                        .and_then(|js| {
+                            crate::app::write_new_file(&dir, &format!("path_{stamp}"), &js)
+                        }) {
+                        Ok(path) => self.note(format!("Saved {}", path.display())),
                         Err(e) => self.note(format!("Could not save the path: {e}")),
                     }
                 }
@@ -1826,7 +1827,7 @@ impl Pantheon {
                         );
                     } else if !self.data_gaps.is_empty() {
                         ui.label(
-                            RichText::new("Real planet maps and spacecraft tracks aren't downloaded yet: run tools/fetch_data.py.")
+                            RichText::new(format!("{} Run tools/fetch_data.py to add it.", self.data_gaps.join(" ")))
                                 .size(11.5)
                                 .color(theme::BRASS),
                         );
