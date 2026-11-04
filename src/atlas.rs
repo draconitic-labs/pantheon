@@ -2102,7 +2102,7 @@ fn stars_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
     // ring fits the view until it has shrunk to a small mark.
     let reach = inp.u.gaia_reach_pc;
     let reach_lw = (reach.max(1.0) * PC).log10();
-    let edge_w = band(lw, reach_lw - 0.5, reach_lw + 0.9, 0.35) as f32;
+    let edge_w = band(lw, reach_lw - 0.2, reach_lw + 1.3, 0.35) as f32;
     if reach > 0.0 && edge_w > 0.01 {
         let r_px = (reach * PC / inp.cam.mpp) as f32;
         if r_px > 24.0 {
