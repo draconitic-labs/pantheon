@@ -12,14 +12,17 @@ spacecraft and planet tracks, JPL kernels (about 3 GB), and surface imagery
   tools/fetch_data.py --no-kernels   skip the large kernels
   tools/fetch_data.py --force        fetch again even if present
 
-Every file lands under a temporary name and is renamed only when it's complete,
-so an interrupted run never leaves a truncated dataset behind.
+Every file lands under a temporary name and is renamed only when it's complete:
+all the bytes the server promised arrived, it's the size this script expects where
+that's known, and it starts the way that kind of file should. A later run checks
+what's already here the same way, so running this again replaces a truncated file.
 """
 
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import http.client
 import json
 import sys
 import time
@@ -51,6 +54,37 @@ EXOPLANETS = (
     "sy_dist,sy_vmag from ps where default_flag=1"
 )
 
+# Exact sizes of the files that never change upstream. Catalogs and Horizons replies
+# differ with each fetch, so those are checked by their end marker or by what the
+# server promised instead.
+SIZES = {
+    "spice/naif0012.tls": 5_257,
+    "spice/de440s.bsp": 32_726_016,
+    "spice/mar099.bsp": 1_227_574_272,
+    "spice/jup365.bsp": 1_136_581_632,
+    "spice/sat441.bsp": 661_592_064,
+    "spice/nep097.bsp": 105_262_080,
+    "spice/plu060.bsp": 135_207_936,
+    "textures/8k_earth_daymap.jpg": 4_565_076,
+    "textures/8k_earth_nightmap.jpg": 3_144_468,
+    "textures/2k_earth_clouds.jpg": 965_676,
+    "textures/8k_moon.jpg": 15_030_356,
+    "textures/8k_mars.jpg": 8_396_951,
+    "textures/8k_jupiter.jpg": 3_080_980,
+    "textures/8k_saturn.jpg": 1_098_204,
+    "textures/8k_saturn_ring_alpha.png": 64_790,
+    "textures/8k_sun.jpg": 3_696_361,
+    "textures/4k_venus_atmosphere.jpg": 1_546_146,
+    "textures/8k_mercury.jpg": 15_035_740,
+    "textures/2k_uranus.jpg": 77_751,
+    "textures/2k_neptune.jpg": 241_580,
+    "textures/eso_milkyway.jpg": 8_228_817,
+}
+
+JPEG = b"\xff\xd8\xff"
+PNG = b"\x89PNG"
+KERNEL = b"DAF/SPK "
+
 
 def tap(base: str, **params: str) -> str:
     return base + "?" + urllib.parse.urlencode(params)
@@ -77,41 +111,43 @@ def horizons(command: str, start: str, stop: str, step: str, center: str = "500@
 
 
 # (group, path under assets/data, url, approximate MB, must contain)
-def manifest() -> list[tuple[str, str, str, float, str | None]]:
-    items: list[tuple[str, str, str, float, str | None]] = [
-        ("catalogs", "gaia_nearby.csv", tap(GAIA_TAP, REQUEST="doQuery", LANG="ADQL", FORMAT="csv", QUERY=GAIA_NEAR), 1.8, "source_id"),
-        ("catalogs", "gaia_bright.csv", tap(GAIA_TAP, REQUEST="doQuery", LANG="ADQL", FORMAT="csv", QUERY=GAIA_BRIGHT), 0.9, "source_id"),
-        ("catalogs", "exoplanets.csv", tap(EXO_TAP, query=EXOPLANETS, format="csv"), 1.1, "pl_name"),
-        ("catalogs", "ne_110m_coastline.geojson", f"{NE}/ne_110m_coastline.geojson", 0.14, "FeatureCollection"),
-        ("catalogs", "ne_110m_land.geojson", f"{NE}/ne_110m_land.geojson", 0.14, "FeatureCollection"),
+def manifest() -> list[tuple[str, str, str, float, bytes | None]]:
+    items: list[tuple[str, str, str, float, bytes | None]] = [
+        ("catalogs", "gaia_nearby.csv", tap(GAIA_TAP, REQUEST="doQuery", LANG="ADQL", FORMAT="csv", QUERY=GAIA_NEAR), 1.8, b"source_id"),
+        ("catalogs", "gaia_bright.csv", tap(GAIA_TAP, REQUEST="doQuery", LANG="ADQL", FORMAT="csv", QUERY=GAIA_BRIGHT), 0.9, b"source_id"),
+        ("catalogs", "exoplanets.csv", tap(EXO_TAP, query=EXOPLANETS, format="csv"), 1.1, b"pl_name"),
+        ("catalogs", "ne_110m_coastline.geojson", f"{NE}/ne_110m_coastline.geojson", 0.14, b"FeatureCollection"),
+        ("catalogs", "ne_110m_land.geojson", f"{NE}/ne_110m_land.geojson", 0.14, b"FeatureCollection"),
     ]
+    # Pioneer 10's ephemeris begins 1972-03-03 02:04 TDB, so the day after launch is too early
     craft = [
-        ("voyager1", "-31", "1977-09-06", "2026-07-01", "1mo"),
-        ("voyager2", "-32", "1977-08-21", "2026-07-01", "1mo"),
-        ("pioneer10", "-23", "1972-03-03", "2026-07-01", "1mo"),
-        ("pioneer11", "-24", "1973-04-07", "2026-07-01", "1mo"),
-        ("newhorizons", "-98", "2006-01-20", "2026-07-01", "1mo"),
-        ("parker", "-96", "2018-08-13", "2026-07-01", "7d"),
+        ("voyager1", "-31", "1977-09-06", "2027-07-01", "1mo"),
+        ("voyager2", "-32", "1977-08-21", "2027-07-01", "1mo"),
+        ("pioneer10", "-23", "1972-03-04", "2027-07-01", "1mo"),
+        ("pioneer11", "-24", "1973-04-07", "2027-07-01", "1mo"),
+        ("newhorizons", "-98", "2006-01-20", "2027-07-01", "1mo"),
+        ("parker", "-96", "2018-08-13", "2027-07-01", "7d"),
         ("cassini", "-82", "1997-10-16", "2017-09-14", "10d"),
     ]
+    # $$EOE closes a Horizons table, so a reply that was cut off doesn't have it
     for name, cmd, start, stop, step in craft:
-        items.append(("tracks", f"spacecraft/{name}.txt", horizons(cmd, start, stop, step), 0.12, "$$SOE"))
+        items.append(("tracks", f"spacecraft/{name}.txt", horizons(cmd, start, stop, step), 0.12, b"$$EOE"))
     # planet and Moon vectors around now: the cross-check shown on each card
     for name, cmd in [
         ("mercury", "199"), ("venus", "299"), ("earth", "399"), ("mars", "499"), ("jupiter", "599"),
         ("saturn", "699"), ("uranus", "799"), ("neptune", "899"), ("pluto", "999"),
     ]:
-        items.append(("tracks", f"spacecraft/planet_{name}.txt", horizons(cmd, "2025-07-01", "2027-07-01", "5d"), 0.03, "$$SOE"))
-    items.append(("tracks", "spacecraft/moon_geo.txt", horizons("301", "2026-06-01", "2026-09-01", "6h", "500@399"), 0.08, "$$SOE"))
+        items.append(("tracks", f"spacecraft/planet_{name}.txt", horizons(cmd, "2025-07-01", "2027-07-01", "5d"), 0.03, b"$$EOE"))
+    items.append(("tracks", "spacecraft/moon_geo.txt", horizons("301", "2026-06-01", "2026-09-01", "6h", "500@399"), 0.08, b"$$EOE"))
     items.extend(
         [
-            ("kernels", "spice/naif0012.tls", f"{NAIF}/lsk/naif0012.tls", 0.01, None),
-            ("kernels", "spice/de440s.bsp", f"{NAIF}/spk/planets/de440s.bsp", 32, None),
-            ("kernels", "spice/mar099.bsp", f"{NAIF}/spk/satellites/mar099.bsp", 1171, None),
-            ("kernels", "spice/jup365.bsp", f"{NAIF}/spk/satellites/jup365.bsp", 1084, None),
-            ("kernels", "spice/sat441.bsp", f"{NAIF}/spk/satellites/sat441.bsp", 631, None),
-            ("kernels", "spice/nep097.bsp", f"{NAIF}/spk/satellites/nep097.bsp", 100, None),
-            ("kernels", "spice/plu060.bsp", f"{NAIF}/spk/satellites/plu060.bsp", 129, None),
+            ("kernels", "spice/naif0012.tls", f"{NAIF}/lsk/naif0012.tls", 0.01, b"KPL/LSK"),
+            ("kernels", "spice/de440s.bsp", f"{NAIF}/spk/planets/de440s.bsp", 32, KERNEL),
+            ("kernels", "spice/mar099.bsp", f"{NAIF}/spk/satellites/mar099.bsp", 1171, KERNEL),
+            ("kernels", "spice/jup365.bsp", f"{NAIF}/spk/satellites/jup365.bsp", 1084, KERNEL),
+            ("kernels", "spice/sat441.bsp", f"{NAIF}/spk/satellites/sat441.bsp", 631, KERNEL),
+            ("kernels", "spice/nep097.bsp", f"{NAIF}/spk/satellites/nep097.bsp", 100, KERNEL),
+            ("kernels", "spice/plu060.bsp", f"{NAIF}/spk/satellites/plu060.bsp", 129, KERNEL),
         ]
     )
     for name, mb in [
@@ -120,12 +156,29 @@ def manifest() -> list[tuple[str, str, str, float, str | None]]:
         ("8k_saturn_ring_alpha.png", 0.1), ("8k_sun.jpg", 3.5), ("4k_venus_atmosphere.jpg", 1.5),
         ("8k_mercury.jpg", 14.3), ("2k_uranus.jpg", 0.1), ("2k_neptune.jpg", 0.2),
     ]:
-        items.append(("maps", f"textures/{name}", f"{SSS}/{name}", mb, None))
-    items.append(("maps", "textures/eso_milkyway.jpg", ESO_PANORAMA, 7.8, None))
+        items.append(("maps", f"textures/{name}", f"{SSS}/{name}", mb, PNG if name.endswith(".png") else JPEG))
+    items.append(("maps", "textures/eso_milkyway.jpg", ESO_PANORAMA, 7.8, JPEG))
     return items
 
 
-def download(url: str, dest: Path, expect: str | None) -> tuple[bool, str]:
+def defect(path: Path, rel: str, expect: bytes | None) -> str | None:
+    """Why this file can't be trusted as a complete copy of `rel`, or None if it can."""
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return "missing"
+    want = SIZES.get(rel)
+    if want is not None and size != want:
+        return f"{size:,} bytes where {want:,} are expected"
+    if expect is not None:
+        with open(path, "rb") as f:
+            head = f.read(1 << 22)
+        if expect not in head:
+            return f"it doesn't contain the expected marker {expect!r}"
+    return None
+
+
+def download(url: str, dest: Path, rel: str, expect: bytes | None) -> tuple[bool, str]:
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(dest.name + ".part")
     req = urllib.request.Request(url, headers={"User-Agent": "pantheon-fetch/1 (+tools/fetch_data.py)"})
@@ -143,21 +196,23 @@ def download(url: str, dest: Path, expect: str | None) -> tuple[bool, str]:
                 if total > 50_000_000 and time.monotonic() - last > 5:
                     print(f"    {got * 100 // total}% of {total // 1_000_000} MB", flush=True)
                     last = time.monotonic()
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
+    except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError) as e:
         tmp.unlink(missing_ok=True)
-        return False, str(e)
+        return False, f"{type(e).__name__}: {e}"
+    # A connection that drops mid-file just looks like the end of the data to read()
+    if total and got != total:
+        tmp.unlink()
+        return False, f"the connection dropped: {got:,} of {total:,} bytes arrived"
     size = tmp.stat().st_size
     # services report errors as short text bodies with a success status
-    if size < 200:
+    if size < 200 and rel not in SIZES:
         msg = tmp.read_text(errors="replace").strip()[:160]
         tmp.unlink()
         return False, f"too small ({size} bytes): {msg}"
-    if expect is not None:
-        with open(tmp, "rb") as f:
-            head = f.read(1 << 22)
-        if expect.encode() not in head:
-            tmp.unlink()
-            return False, f"response is missing the expected marker {expect!r}"
+    problem = defect(tmp, rel, expect)
+    if problem is not None:
+        tmp.unlink()
+        return False, f"the reply isn't usable: {problem}"
     tmp.replace(dest)
     return True, f"{size // 1000} kB"
 
@@ -244,11 +299,11 @@ def main() -> int:
         it for it in manifest()
         if (args.only is None or it[0] == args.only) and not (args.no_kernels and it[0] == "kernels")
     ]
-    todo = [it for it in items if args.force or not (data / it[1]).is_file()]
+    todo = [it for it in items if args.force or defect(data / it[1], it[1], it[4]) is not None]
     total_mb = sum(it[3] for it in todo)
     if args.list:
-        for group, rel, _url, mb, _expect in items:
-            state = "present" if (data / rel).is_file() else "missing"
+        for group, rel, _url, mb, expect in items:
+            state = defect(data / rel, rel, expect) or "present"
             print(f"{group:9} {rel:38} {mb:8.1f} MB  {state}")
         print(f"to fetch: {len(todo)} files, about {total_mb:.0f} MB")
         return 0
@@ -263,7 +318,7 @@ def main() -> int:
     for group, rel, url, _mb, expect in todo:
         print(f"  {rel}", flush=True)
         t0 = time.monotonic()
-        ok, detail = download(url, data / rel, expect)
+        ok, detail = download(url, data / rel, rel, expect)
         log.append(f"{rel}: ok={ok} {detail} secs={time.monotonic() - t0:.0f}")
         if ok:
             print(f"    {detail}")

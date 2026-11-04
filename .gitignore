@@ -1,8 +1,10 @@
 /target/
 /exports/
-!/exports/paths/
 /assets/data/spacecraft/*.txt
 /assets/data/spice/*.bsp
 /assets/data/textures/
+/assets/data/fetch_log.txt
 /target-3d/
 /src-tauri/gen/
+*.part
+__pycache__/

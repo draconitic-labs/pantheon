@@ -42,7 +42,8 @@ jobs:
 
       - name: Check the Python tools and installer
         run: |
-          python3 -m py_compile tools/fetch_data.py tools/make_icon.py
+          python3 -m py_compile tools/fetch_data.py tools/test_fetch_data.py tools/make_icon.py
+          python3 tools/test_fetch_data.py
           bash -n scripts/install-desktop.sh
 
   shell:

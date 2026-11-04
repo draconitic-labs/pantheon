@@ -14,6 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import fetch_data  # noqa: E402
 
+PINNED_SIZES = dict(fetch_data.SIZES)
+
 
 class Misbehaving(http.server.BaseHTTPRequestHandler):
     """Each path is one way for a download to go wrong."""
@@ -147,9 +149,7 @@ class Fetch(unittest.TestCase):
 
     def test_every_pinned_size_is_a_file_in_the_manifest(self):
         rels = {item[1] for item in fetch_data.manifest()}
-        # the real table, not this test's stand-in
-        self.doCleanups()
-        self.assertLessEqual(set(fetch_data.SIZES), rels)
+        self.assertLessEqual(set(PINNED_SIZES), rels)
 
 
 if __name__ == "__main__":
