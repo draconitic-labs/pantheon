@@ -6,6 +6,7 @@
 //!   PANTHEON_START_URL  page to open: full URL, or a path/query for the local server
 //!   PANTHEON_PORT       preferred backend port (default 8090)
 //!   PANTHEON_QA=1       enable the test hooks in the backend (see serve.rs)
+//!   PANTHEON_WEBVIEW_DATA  where WebKit keeps its data (default: webview-data beside the binary)
 //!   WEBKIT_DISABLE_DMABUF_RENDERER  set to 0 to keep the DMA-BUF renderer on Wayland
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
@@ -37,6 +38,14 @@ fn start_url(port: u16) -> String {
     }
 }
 
+/// WebKit's data (the first-run flag, its cache) stays in the checkout with the
+/// binary and the datasets, so uninstalling leaves nothing in the home folder.
+fn webview_data_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("PANTHEON_WEBVIEW_DATA")
+        .map(Into::into)
+        .or_else(|| Some(std::env::current_exe().ok()?.parent()?.join("webview-data")))
+}
+
 fn main() {
     prepare_webkit_env();
     let port_req = std::env::var("PANTHEON_PORT")
@@ -53,11 +62,14 @@ fn main() {
                     WebviewUrl::App("index.html".into())
                 }
             };
-            WebviewWindowBuilder::new(app, "main", url)
+            let mut window = WebviewWindowBuilder::new(app, "main", url)
                 .title("Pantheon 3D")
                 .inner_size(1600.0, 950.0)
-                .min_inner_size(640.0, 420.0)
-                .build()?;
+                .min_inner_size(640.0, 420.0);
+            if let Some(dir) = webview_data_dir() {
+                window = window.data_directory(dir);
+            }
+            window.build()?;
             Ok(())
         })
         .run(tauri::generate_context!())

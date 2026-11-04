@@ -44,6 +44,13 @@ if [ "$uninstall" = 1 ]; then
   rm -f "$apps/pantheon.desktop" "$apps/pantheon-3d.desktop"
   rm -f "$icons/pantheon.png" "$icons/pantheon-3d.png"
   refresh_caches
+  # Shared caches and folders go only if nothing else is left in them
+  ls "$apps"/*.desktop >/dev/null 2>&1 || rm -f "$apps/mimeinfo.cache"
+  hicolor="$HOME/.local/share/icons/hicolor"
+  if [ -z "$(find "$hicolor" -type f ! -name icon-theme.cache -print -quit 2>/dev/null)" ]; then
+    rm -f "$hicolor/icon-theme.cache"
+  fi
+  rmdir -p --ignore-fail-on-non-empty "$icons" "$apps" 2>/dev/null || true
   echo "Removed the Pantheon menu entries and icons. Your checkout is untouched."
   exit 0
 fi
@@ -105,6 +112,7 @@ Icon=pantheon-3d
 Terminal=false
 Categories=Education;Science;Astronomy;
 Keywords=universe;space;planets;stars;galaxy;3d;
+StartupWMClass=pantheon-3d
 DESKTOP
 else
   rm -f "$apps/pantheon-3d.desktop" "$icons/pantheon-3d.png"
