@@ -334,7 +334,8 @@ mod tests {
     fn trappist_is_found_and_suggested() {
         let u = crate::data::Universe::load();
         let s = SearchState::new(&u);
-        assert_eq!(names(&s.entries, "TRAPPIST")[0], "TRAPPIST-1");
+        // the search box lowercases what's typed before ranking
+        assert_eq!(names(&s.entries, "trappist")[0], "TRAPPIST-1");
         assert!(s
             .suggestions
             .iter()
