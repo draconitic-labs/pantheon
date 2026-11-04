@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  atlas:
+    name: Build, test, lint (native atlas)
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libwayland-dev libxkbcommon-dev \
+            libx11-dev libxcursor-dev libxi-dev libxrandr-dev mesa-vulkan-drivers
+
+      # rust-toolchain.toml pins the compiler; rustup installs it on first use
+      - name: Install the pinned toolchain
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup component add clippy rustfmt
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Build
+        run: cargo build --release --locked --bin pantheon --bin pantheon-cli
+
+      - name: Test
+        run: cargo test --locked --lib --bins
+
+      - name: Clippy
+        run: cargo clippy --locked --lib --bins -- -D warnings
+
+      - name: Check the Python tools and installer
+        run: |
+          python3 -m py_compile tools/fetch_data.py tools/make_icon.py
+          bash -n scripts/install-desktop.sh
