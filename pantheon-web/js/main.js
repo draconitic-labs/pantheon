@@ -284,6 +284,8 @@ const catalogs = {
 function resolveExoDistances() {
   if (!starsNear || !exoSystems.length) return;
   const tol = Math.cos(0.05 * DEG);
+  let reachPc = 0;
+  for (let i = 0; i < starsNear.count; i++) reachPc = Math.max(reachPc, starsNear.meta[i].distPc);
   for (const sys of exoSystems) {
     if (sys.ra == null || (sys.distPc != null && sys.distPc > 60)) continue;
     const a = sys.ra * DEG, d = sys.dec * DEG, cd = Math.cos(d);
