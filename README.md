@@ -109,7 +109,7 @@ card's "Where this comes from" gives source, citation and frame for each value.
 
 | You see | It is | Class |
 |---|---|---|
-| Planet and moon positions | JPL DE440s and satellite kernels, with Standish and mean elements outside coverage or without kernels | measured / modeled |
+| Planet and moon positions | JPL DE440s and satellite kernels, with Standish and mean elements outside coverage or without kernels. Our Moon's fallback is about 1° off on average, about 3° at worst | measured / modeled |
 | The moons of Uranus | Always mean elements, because no Uranian kernel is downloaded. Where each sits along its orbit is chosen for legibility | modeled / illustrative |
 | Spacecraft paths | JPL Horizons vectors, Hermite-interpolated, never extrapolated | measured |
 | Nearby stars and the naked-eye sky | ESA Gaia DR3: the 12,000 largest parallaxes among sources brighter than G 16 with parallax known to 10%, which reach about 35 pc and leave out fainter stars inside that, plus every source brighter than G 6 | measured |
@@ -200,8 +200,9 @@ is synthetic.
 
 **Without the downloads.** A fresh clone has no `assets/data/textures` or SPICE kernels. It
 still runs and says so on screen: planets become procedural, Earth is real outlines with
-painted colors, the sky is the illustrative Galaxy model, and every position comes from
-mean elements. `tools/fetch_data.py` fetches the rest.
+painted colors, the sky is the illustrative Galaxy model, and positions come from mean
+elements, with our Moon on a simple model about a degree off. `tools/fetch_data.py` fetches
+the rest.
 
 **Quality.** Automatic by default: it measures real frame cost and steps between four tiers,
 and the Quality menu shows the numbers or fixes a tier. For a frame readout on screen, run

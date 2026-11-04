@@ -483,8 +483,9 @@ impl Pantheon {
             }
         }
         self.update_presentation(dt);
-        // exoplanet pocket persists until the camera actually leaves it
-        if let Some(ei) = self.scene_exo {
+        // exoplanet pocket persists until the camera actually leaves it. A flight there
+        // starts far away, so distance means nothing until it has landed.
+        if let (Some(ei), None) = (self.scene_exo, &self.cam.anim) {
             let lw = self.cam.log_width(self.view_w);
             let d = (self.cam.center_root() - self.u.exos[ei].pos).length();
             if lw > 15.8 || d > crate::frames::PC {

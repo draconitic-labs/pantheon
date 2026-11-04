@@ -566,6 +566,9 @@ impl Pantheon {
                 .fixed_pos(egui::pos2(l.bar.center().x, l.bar.top() - 10.0))
                 .show(ctx, |ui| {
                     panel_frame(ctx).show(ui, |ui| {
+                        // room for the sentence: an Area wraps to whatever it had last frame
+                        let chars = msg.chars().count() as f32;
+                        ui.set_width((chars * 6.6).clamp(60.0, 480.0));
                         ui.label(RichText::new(msg).color(theme::VELLUM).size(13.0));
                     });
                 });
