@@ -1,6 +1,6 @@
 // js/scene/cosmos.js — local group catalog, cosmic-web nodes and procedural
 // filaments, Oort shell. Catalog tables are ports of src/data.rs
-// (LOCAL_GROUP, COSMIC_NODES); the web point layer is PROCEDURAL
+// (LOCAL_GROUP, COSMIC_NODES); the web layers are PROCEDURAL
 // (evidence key 'web-procedural'). All positions sun-centered ecliptic meters.
 import * as THREE from 'three';
 import { mulberry32, gauss, icrsToEclUnit } from './galaxy.js';
@@ -70,86 +70,150 @@ export const COSMIC_NODES = NODE_ROWS.map(([name, ra, dec, distMpc, sizeMpc]) =>
 }));
 
 // -------------------------------------------------------------- cosmic web
-// ~40k faint points: gaussian blobs at each node plus noisy quadratic-Bezier
-// bridges between nodes closer than 40 Mpc (~60 pts/Mpc, 1.5 Mpc jitter).
-// Deep blue-violet / ivory mix, brightness 0.15–0.5. PROCEDURAL layer.
-const WEB_VIOLET = [0.478, 0.455, 0.784]; // 0x7a74c8
-const WEB_IVORY = [0.91, 0.894, 0.847]; //   0xe8e4d8
+// PROCEDURAL. Real catalog clusters anchor a synthetic network: random seed nodes
+// in a 420 Mpc sphere joined to their nearest neighbours, with galaxies strung
+// along the edges and piled into the nodes. Returns a sharp galaxy layer and a soft
+// fog layer along the same filaments. Order is shuffled so a draw range can thin it.
+const WEB_VIOLET = [0.34, 0.42, 1.0];
+const WEB_ICE = [0.72, 0.84, 1.0];
+const WEB_WARM = [1.0, 0.78, 0.55];
+const WEB_IVORY = [0.91, 0.894, 0.847];
 
-export function buildCosmicWeb(seededRand = mulberry32(0xc05b1c)) {
+export function buildCosmicWeb(seededRand = mulberry32(0xc05b1c), { galaxies = 340000, fog = 26000 } = {}) {
   const rand = seededRand;
-  const TARGET = 40000;
-  const pos = [], col = [], siz = [];
-
-  const putWeb = (v, brightBoost = 0) => {
-    pos.push(v.x, v.y, v.z);
-    const t = rand() * 0.45;
-    const b = Math.min(0.15 + 0.35 * Math.pow(rand(), 1.4) + brightBoost, 0.5);
-    col.push(
-      (WEB_VIOLET[0] + (WEB_IVORY[0] - WEB_VIOLET[0]) * t) * b,
-      (WEB_VIOLET[1] + (WEB_IVORY[1] - WEB_VIOLET[1]) * t) * b,
-      (WEB_VIOLET[2] + (WEB_IVORY[2] - WEB_VIOLET[2]) * t) * b,
-    );
-    siz.push(0.3 + 0.8 * Math.pow(rand(), 2));
-  };
-
-  // bridges first (their count is set by geometry), blobs fill to TARGET
-  const bridges = [];
-  let bridgePts = 0;
-  for (let i = 0; i < COSMIC_NODES.length; i++) {
-    for (let j = i + 1; j < COSMIC_NODES.length; j++) {
-      const d = COSMIC_NODES[i].world.distanceTo(COSMIC_NODES[j].world);
-      if (d < 40 * MPC) {
-        const npts = Math.round((60 * d) / MPC);
-        bridges.push([i, j, npts, d]);
-        bridgePts += npts;
-      }
+  const nodes = COSMIC_NODES.map(n => ({ p: n.world.clone(), w: 1.5 + n.sizeMpc * 0.35, real: true }));
+  const SEEDS = 620;
+  while (nodes.length < SEEDS) {
+    const v = new THREE.Vector3(gauss(rand), gauss(rand), gauss(rand)).normalize();
+    const r = 420 * Math.cbrt(rand()) * MPC;
+    if (r < 12 * MPC) continue;
+    nodes.push({ p: v.multiplyScalar(r), w: 0.35 + 1.6 * Math.pow(rand(), 3), real: false });
+  }
+  // k-nearest-neighbour graph, deduplicated
+  const edges = new Map();
+  for (let i = 0; i < nodes.length; i++) {
+    const near = [];
+    for (let j = 0; j < nodes.length; j++) {
+      if (j !== i) near.push([nodes[i].p.distanceToSquared(nodes[j].p), j]);
+    }
+    near.sort((a, b) => a[0] - b[0]);
+    const k = 2 + Math.floor(rand() * 2.4);
+    for (let n = 0; n < k; n++) {
+      const j = near[n][1], key = i < j ? `${i}:${j}` : `${j}:${i}`;
+      const d = Math.sqrt(near[n][0]);
+      if (d < 130 * MPC) edges.set(key, [Math.min(i, j), Math.max(i, j), d]);
     }
   }
-  const p = new THREE.Vector3();
-  for (const [i, j, npts, d] of bridges) {
-    const a = COSMIC_NODES[i].world, b = COSMIC_NODES[j].world;
-    // bow the filament: quadratic Bezier whose control point sits off the
-    // chord midpoint, perpendicular to the chord
-    const chord = new THREE.Vector3().subVectors(b, a).normalize();
-    const perp = new THREE.Vector3(gauss(rand), gauss(rand), gauss(rand));
+  const edgeList = [...edges.values()];
+  let edgeWeight = 0;
+  for (const [a, b, d] of edgeList) edgeWeight += (d / MPC) * (nodes[a].w + nodes[b].w);
+
+  const pos = new Float32Array(galaxies * 3), col = new Float32Array(galaxies * 3), siz = new Float32Array(galaxies);
+  const fpos = new Float32Array(fog * 3), fcol = new Float32Array(fog * 3), fsiz = new Float32Array(fog);
+  let ng = 0, nf = 0;
+  const put = (x, y, z, c, b, s) => {
+    if (ng >= galaxies) return;
+    pos[3 * ng] = x; pos[3 * ng + 1] = y; pos[3 * ng + 2] = z;
+    col[3 * ng] = c[0] * b; col[3 * ng + 1] = c[1] * b; col[3 * ng + 2] = c[2] * b;
+    siz[ng++] = s;
+  };
+  const mix3 = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+  const c = new THREE.Vector3(), perp = new THREE.Vector3(), chord = new THREE.Vector3();
+  const filamentShare = 0.62, clusterShare = 0.32;
+  const filamentCount = galaxies * filamentShare;
+  for (const [a, b, d] of edgeList) {
+    const A = nodes[a].p, B = nodes[b].p;
+    const dM = d / MPC, weight = dM * (nodes[a].w + nodes[b].w);
+    const n = Math.round(filamentCount * weight / edgeWeight);
+    chord.subVectors(B, A).normalize();
+    perp.set(gauss(rand), gauss(rand), gauss(rand));
     perp.addScaledVector(chord, -perp.dot(chord)).normalize();
-    const c1 = new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5).addScaledVector(perp, (0.08 + 0.12 * rand()) * d);
-    for (let k = 0; k < npts; k++) {
-      const t = (k + 0.5) / npts;
-      const s = 1 - t;
-      p.set(
-        s * s * a.x + 2 * s * t * c1.x + t * t * b.x,
-        s * s * a.y + 2 * s * t * c1.y + t * t * b.y,
-        s * s * a.z + 2 * s * t * c1.z + t * t * b.z,
-      );
-      p.x += gauss(rand) * 1.5 * MPC;
-      p.y += gauss(rand) * 1.5 * MPC;
-      p.z += gauss(rand) * 1.5 * MPC;
-      putWeb(p);
+    c.addVectors(A, B).multiplyScalar(0.5).addScaledVector(perp, (0.06 + 0.14 * rand()) * d);
+    const width = (1.0 + 1.6 * rand()) * MPC;
+    for (let k = 0; k < n; k++) {
+      const t = rand(), s = 1 - t;
+      const w = width * (0.6 + 0.8 * Math.sin(Math.PI * t));
+      put(s * s * A.x + 2 * s * t * c.x + t * t * B.x + gauss(rand) * w,
+        s * s * A.y + 2 * s * t * c.y + t * t * B.y + gauss(rand) * w,
+        s * s * A.z + 2 * s * t * c.z + t * t * B.z + gauss(rand) * w,
+        mix3(WEB_VIOLET, WEB_ICE, rand()), 0.55 + 0.75 * Math.pow(rand(), 2.5), 0.45 + 1.1 * Math.pow(rand(), 3));
+    }
+    const nFog = Math.round(fog * 0.9 * weight / edgeWeight);
+    for (let k = 0; k < nFog && nf < fog; k++) {
+      const t = rand(), s = 1 - t;
+      fpos[3 * nf] = s * s * A.x + 2 * s * t * c.x + t * t * B.x + gauss(rand) * width * 0.8;
+      fpos[3 * nf + 1] = s * s * A.y + 2 * s * t * c.y + t * t * B.y + gauss(rand) * width * 0.8;
+      fpos[3 * nf + 2] = s * s * A.z + 2 * s * t * c.z + t * t * B.z + gauss(rand) * width * 0.8;
+      const hue = mix3(WEB_VIOLET, WEB_ICE, rand() * 0.5);
+      fcol.set(hue, 3 * nf);
+      fsiz[nf++] = 0.6 + 1.1 * rand();
     }
   }
-
-  // node blobs, weighted by cluster size
-  const blobTotal = Math.max(TARGET - bridgePts, 5000);
-  const wsum = COSMIC_NODES.reduce((s, n) => s + n.sizeMpc, 0);
-  for (const node of COSMIC_NODES) {
-    const count = Math.round((blobTotal * node.sizeMpc) / wsum);
-    const sigma = node.sizeMpc * 0.5 * MPC;
-    for (let k = 0; k < count; k++) {
-      p.copy(node.world);
-      p.x += gauss(rand) * sigma;
-      p.y += gauss(rand) * sigma;
-      p.z += gauss(rand) * sigma;
-      putWeb(p, 0.08 * rand()); // cluster cores glow a touch warmer
+  // clusters: warm, dense, sized by node weight
+  let wsum = 0;
+  for (const n of nodes) wsum += n.w * n.w;
+  for (const nd of nodes) {
+    const n = Math.round(galaxies * clusterShare * nd.w * nd.w / wsum);
+    const sigma = (0.8 + 1.5 * nd.w) * MPC;
+    for (let k = 0; k < n; k++) {
+      const q = Math.pow(rand(), 1.6);
+      put(nd.p.x + gauss(rand) * sigma * q, nd.p.y + gauss(rand) * sigma * q, nd.p.z + gauss(rand) * sigma * q,
+        mix3(WEB_WARM, WEB_IVORY, rand() * 0.7), 0.75 + 1.1 * Math.pow(rand(), 2), 0.6 + 1.5 * Math.pow(rand(), 2.5));
     }
   }
-
+  // the rest fill the voids thinly
+  while (ng < galaxies) {
+    const v = new THREE.Vector3(gauss(rand), gauss(rand), gauss(rand)).normalize().multiplyScalar(440 * Math.cbrt(rand()) * MPC);
+    put(v.x, v.y, v.z, mix3(WEB_VIOLET, WEB_IVORY, rand()), 0.2 + 0.25 * rand(), 0.35 + 0.5 * rand());
+  }
+  // shuffle, so setDrawRange thins evenly on weaker GPUs
+  for (let i = galaxies - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    for (let k = 0; k < 3; k++) {
+      let t = pos[3 * i + k]; pos[3 * i + k] = pos[3 * j + k]; pos[3 * j + k] = t;
+      t = col[3 * i + k]; col[3 * i + k] = col[3 * j + k]; col[3 * j + k] = t;
+    }
+    const t = siz[i]; siz[i] = siz[j]; siz[j] = t;
+  }
   return {
-    positions: new Float32Array(pos),
-    colors: new Float32Array(col),
-    sizes: new Float32Array(siz),
+    galaxies: { positions: pos, colors: col, sizes: siz },
+    fog: { positions: fpos.subarray(0, nf * 3), colors: fcol.subarray(0, nf * 3), sizes: fsiz.subarray(0, nf) },
   };
+}
+
+// Field stars of the dwarf satellites: gaussian swarms at catalog positions.
+export function buildDwarfStars(rand, perDwarf = 1400) {
+  const dwarfs = LOCAL_GROUP.filter(g => !g.spiral && !/Magellanic/.test(g.name));
+  const n = dwarfs.length * perDwarf;
+  const positions = new Float32Array(3 * n), colors = new Float32Array(3 * n), sizes = new Float32Array(n);
+  let i = 0;
+  for (const g of dwarfs) {
+    const sigma = g.sizeKpc * 0.28 * KPC;
+    for (let k = 0; k < perDwarf; k++, i++) {
+      const q = Math.pow(rand(), 1.4);
+      positions[3 * i] = g.world.x + gauss(rand) * sigma * q;
+      positions[3 * i + 1] = g.world.y + gauss(rand) * sigma * q;
+      positions[3 * i + 2] = g.world.z + gauss(rand) * sigma * q;
+      const b = 0.5 + 0.7 * Math.pow(rand(), 3);
+      colors[3 * i] = 1.0 * b; colors[3 * i + 1] = 0.86 * b; colors[3 * i + 2] = 0.68 * b;
+      sizes[i] = 0.4 + 0.9 * rand();
+    }
+  }
+  return { positions, colors, sizes };
+}
+
+// Disc normal from sky position, position angle and inclination (literature values
+// for these three). The sign of the near side is a convention.
+export function discBasis(raDeg, decDeg, paDeg, incDeg) {
+  const L = icrsToEclUnit(raDeg, decDeg);
+  const N = icrsToEclUnit(raDeg, decDeg + 0.5).sub(L).normalize();
+  const E = new THREE.Vector3().crossVectors(N, L).normalize();
+  const pa = paDeg * Math.PI / 180, inc = incDeg * Math.PI / 180;
+  const major = N.clone().multiplyScalar(Math.cos(pa)).addScaledVector(E, Math.sin(pa));
+  const minor = N.clone().multiplyScalar(-Math.sin(pa)).addScaledVector(E, Math.cos(pa));
+  const z = L.clone().multiplyScalar(-Math.cos(inc)).addScaledVector(minor, Math.sin(inc)).normalize();
+  const x = major.clone().addScaledVector(z, -major.dot(z)).normalize();
+  return { x, y: new THREE.Vector3().crossVectors(z, x), z };
 }
 
 // --------------------------------------------------------------- Oort shell
@@ -177,4 +241,75 @@ export function buildOort(seededRand = mulberry32(0x0087)) {
     sizes[i] = 0.3 + 0.5 * Math.pow(rand(), 1.5);
   }
   return { positions, colors, sizes };
+}
+
+// -------------------------------------------------------------- far sprites
+// Every catalog galaxy and cluster as extended light: constant surface brightness
+// while resolved, flux-conserving below a pixel. Positions are catalog values; the
+// glow is a stand-in. `vis` lets the volume pass take over close up.
+const FAR_V = /* glsl */`
+  attribute vec3 col; attribute float rad; attribute float gain; attribute float vis;
+  varying vec3 vCol; varying float vA, vRatio, vAng;
+  uniform float uPc, uPxScale, uPR;
+  #include <common>
+  #include <logdepthbuf_pars_vertex>
+  void main() {
+    vCol = col;
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    float d = length(mv.xyz / uPc);
+    float raw = 2.0 * rad / d * uPxScale;
+    float px = clamp(raw, 2.2, 900.0);
+    float a = gain * vis * clamp(raw / 2.2, 0.03, 1.0);
+    a *= 1.0 - smoothstep(600.0, 900.0, raw);
+    vA = a;
+    float h = fract(float(gl_VertexID) * 0.61803398875);
+    vRatio = 0.45 + 0.55 * fract(h * 7.13);
+    vAng = h * 6.2831853;
+    if (a < 0.0005) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; return; }
+    gl_PointSize = px * uPR;
+    gl_Position = projectionMatrix * mv;
+    #include <logdepthbuf_vertex>
+  }
+`;
+const FAR_F = /* glsl */`
+  varying vec3 vCol; varying float vA, vRatio, vAng;
+  #include <common>
+  #include <logdepthbuf_pars_fragment>
+  void main() {
+    #include <logdepthbuf_fragment>
+    vec2 pc = gl_PointCoord * 2.0 - 1.0;
+    float c = cos(vAng), s = sin(vAng);
+    pc = vec2(c * pc.x - s * pc.y, s * pc.x + c * pc.y);
+    pc.y /= vRatio;
+    float d2 = dot(pc, pc);
+    if (d2 > 1.0) discard;
+    gl_FragColor = vec4(vCol * (exp(-d2 * 7.0) + 0.35 * exp(-d2 * 2.2) * (1.0 - d2)) * vA, 1.0);
+  }
+`;
+
+export function makeFarSprites(items, pxScaleU, prU) {
+  const n = items.length;
+  const pos = new Float32Array(3 * n), col = new Float32Array(3 * n), rad = new Float32Array(n), gain = new Float32Array(n), vis = new Float32Array(n).fill(1);
+  items.forEach((it, i) => {
+    pos.set([it.world.x, it.world.y, it.world.z], 3 * i);
+    col.set(it.col, 3 * i);
+    rad[i] = it.radius / PC;
+    gain[i] = it.gain;
+  });
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('col', new THREE.BufferAttribute(col, 3));
+  g.setAttribute('rad', new THREE.BufferAttribute(rad, 1));
+  g.setAttribute('gain', new THREE.BufferAttribute(gain, 1));
+  g.setAttribute('vis', new THREE.BufferAttribute(vis, 1));
+  const mat = new THREE.ShaderMaterial({
+    vertexShader: FAR_V, fragmentShader: FAR_F,
+    uniforms: { uPc: { value: PC }, uPxScale: pxScaleU, uPR: prU },
+    blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
+  });
+  const pts = new THREE.Points(g, mat);
+  pts.frustumCulled = false;
+  pts.renderOrder = -6;
+  pts.userData.vis = g.getAttribute('vis');
+  return pts;
 }

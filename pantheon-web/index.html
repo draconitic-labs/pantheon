@@ -1,6 +1,8 @@
+<!doctype html>
+<html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pantheon — An Infinite Vector Atlas of the Living Universe</title>
+<title>Pantheon 3D</title>
 <link rel="stylesheet" href="css/style.css">
 <script type="importmap">
 {
@@ -10,13 +12,23 @@
   }
 }
 </script>
-<canvas id="canvas"></canvas>
+<canvas id="canvas" tabindex="-1"></canvas>
 <div id="labels"></div>
-<div id="crosshair"></div>
-<div id="hud"></div>
 <div id="searchwrap"></div>
+<nav id="rail" aria-label="Places, from home to the edge of the map"></nav>
+<div id="place" aria-live="polite"></div>
+<div id="tools"></div>
 <div id="card"></div>
 <div id="timebar"></div>
-<div id="toast"></div>
+<div id="credit"></div>
+<div id="hint"></div>
+<div id="banner"></div>
+<div id="tourbar"></div>
+<div id="toast" role="status"></div>
+<div id="notice"></div>
 <div id="help"></div>
+<div id="loader"><div class="load-name">Pantheon</div><div class="load-text">Loading kernels and catalogs</div></div>
+<noscript>Pantheon 3D needs JavaScript and WebGL2.</noscript>
+<script src="js/qa.js"></script>
 <script type="module" src="js/main.js"></script>
+</html>

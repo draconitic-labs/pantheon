@@ -1,385 +1,226 @@
-// Pantheon 3D — the solar system: procedurally-shaded spheres with IAU
-// orientations, motion-graded orbit engravings, rings, Earth vector
-// coastlines + night lights, spacecraft trails, and flux-faithful far glows.
+// Pantheon 3D: the solar system. Spheres with IAU orientations, single-scattering
+// atmospheres, Earth's cloud shell and night side, rings with mutual shadows,
+// eclipses from real geometry, the Sun's surface and corona, orbit engravings,
+// spacecraft tracks, and flux-faithful points for everything too small to resolve.
 //
 // All world math is f64 (JS numbers / THREE.Vector3); every group is parked
-// camera-relative each frame. Mesh geometry is a unit sphere scaled by the
-// body radius; object space IS the body-fixed frame (poles at object +Y,
-// prime meridian at object +X), so surface noise stays pinned to the ground
-// while the IAU quaternion spins the mesh.
+// camera-relative each frame. Mesh object space IS the body-fixed frame: poles at
+// object +Y, prime meridian at object +X, east toward -Z.
 import * as THREE from 'three';
 import * as eph from '../eph.js';
+import { makeStarPoints } from './stars.js';
+import {
+  BODY_VSH, BODY_FSH, ATMO_FSH, CLOUD_FSH, RING_VSH, RING_FSH, STAR_FSH,
+  CORONA_VSH, CORONA_FSH, GLARE_FSH, ORBIT_VSH, ORBIT_FSH,
+} from './shaders.js';
 
-const NOISE = /* glsl */`
-  float hash1(vec3 p) {
-    p = fract(p * 0.3183099 + vec3(0.1, 0.17, 0.13));
-    p *= 17.0;
-    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
-  }
-  float vnoise(vec3 p) {
-    vec3 i = floor(p), f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    return mix(
-      mix(mix(hash1(i), hash1(i + vec3(1,0,0)), f.x),
-          mix(hash1(i + vec3(0,1,0)), hash1(i + vec3(1,1,0)), f.x), f.y),
-      mix(mix(hash1(i + vec3(0,0,1)), hash1(i + vec3(1,0,1)), f.x),
-          mix(hash1(i + vec3(0,1,1)), hash1(i + vec3(1,1,1)), f.x), f.y), f.z);
-  }
-  float fbm(vec3 p) {
-    float a = 0.5, s = 0.0;
-    for (int i = 0; i < 5; i++) { s += a * vnoise(p); p *= 2.03; a *= 0.5; }
-    return s;
-  }
-`;
+const AU = 1.495978707e11;
+const PC = 3.0856775814913673e16;
+const RSUN = 6.957e8;
+const DEG = Math.PI / 180;
 
-const BODY_VSH = /* glsl */`
-  varying vec3 vObj;      // object-space position on unit sphere (= normal)
-  varying vec3 vViewDir;  // view-space direction to fragment
-  varying vec3 vNormalV;  // view-space normal
-  #include <common>
-  #include <logdepthbuf_pars_vertex>
-  void main() {
-    vObj = position;
-    vec4 mv = modelViewMatrix * vec4(position, 1.0);
-    vViewDir = normalize(mv.xyz);
-    vNormalV = normalize(normalMatrix * normal);
-    gl_Position = projectionMatrix * mv;
-    #include <logdepthbuf_vertex>
-  }
-`;
-
-const BODY_FSH = /* glsl */`
-  varying vec3 vObj;
-  varying vec3 vViewDir;
-  varying vec3 vNormalV;
-  uniform int uKind;        // 0 sun, 1 rocky, 2 gas, 3 ice, 4 earth
-  uniform vec3 uColA, uColB;
-  uniform vec4 uParam;      // x: polar cap, y: detail, z: band freq, w: spot
-  uniform vec3 uSunObj;     // sun direction, object space
-  uniform float uTime, uSeed;
-  uniform float uClose;     // 0 far .. 1 at the surface (extra octaves + relief)
-  uniform sampler2D uMap;   // equirect imagery (lon 0 at center, north up)
-  uniform float uHasMap;
-  uniform sampler2D uNight; uniform float uHasNight;
-  uniform sampler2D uClouds; uniform float uHasClouds;
-  #include <common>
-  #include <logdepthbuf_pars_fragment>
-  ${NOISE}
-  void main() {
-    #include <logdepthbuf_fragment>
-    vec3 n = normalize(vObj);
-    vec3 np = n;              // shading normal (relief-perturbed up close)
-    float lat = asin(clamp(n.y, -1.0, 1.0));
-    float lon = atan(n.z, n.x);
-    // object +X is the IAU prime meridian, so this lands lon 0 at map center
-    vec2 tuv = vec2(lon * 0.15915494 + 0.5, lat * 0.31830989 + 0.5);
-    vec3 p = n * uParam.y + vec3(uSeed);
-    vec3 col;
-    if (uKind == 0) {
-      // Sun: granulation + limb darkening, HDR emissive
-      float g = fbm(n * 14.0 + vec3(0.0, uTime * 0.02, 0.0));
-      float g2 = fbm(n * 40.0 - vec3(uTime * 0.03));
-      float limb = pow(max(dot(-vViewDir, vNormalV), 0.0), 0.55);
-      if (uHasMap > 0.5) {
-        col = texture2D(uMap, tuv).rgb * (0.6 + 0.55 * g) * (0.5 + 1.05 * limb) * 2.4;
-      } else {
-        col = mix(uColB, uColA, g * 0.7 + g2 * 0.3) * (0.55 + 1.1 * limb) * 2.5;
-      }
-      gl_FragColor = vec4(col, 1.0);
-      return;
-    } else if (uHasMap > 0.5) {
-      // real imagery; clouds ride slightly east with time
-      col = texture2D(uMap, tuv).rgb;
-      if (uHasClouds > 0.5) {
-        float cl = texture2D(uClouds, vec2(fract(tuv.x + uTime * 0.0004), tuv.y)).r;
-        col = mix(col, vec3(1.0), cl * 0.8);
-      }
-    } else if (uKind == 2) {
-      // banded gas giant: latitudinal bands warped by turbulence
-      float turb = fbm(vec3(lon * 1.5, lat * 3.0, uSeed)) - 0.5;
-      float band = sin(lat * uParam.z + turb * 3.4) * 0.5 + 0.5;
-      float fine = fbm(vec3(lon * 4.0, lat * uParam.z * 1.7, uSeed + 4.0));
-      col = mix(uColA, uColB, band) * (0.82 + 0.36 * fine);
-      if (uParam.w > 0.0) {
-        // great oval storm
-        vec2 d = vec2((lon - 0.6) * cos(lat) / 0.26, (lat + 0.38) / 0.11);
-        float spot = exp(-dot(d, d));
-        col = mix(col, vec3(0.78, 0.42, 0.28), spot * uParam.w);
-      }
-    } else if (uKind == 3) {
-      // ice giant: serene gradient, whisper bands
-      float band = sin(lat * uParam.z) * 0.5 + 0.5;
-      float haze = fbm(p * 0.8);
-      col = mix(uColA, uColB, lat * 0.5 + 0.5) * (0.9 + 0.12 * band + 0.08 * haze);
-    } else if (uKind == 4) {
-      // Earth: deep ink ocean; coasts/lights are vector children
-      float sea = fbm(p * 2.0);
-      col = mix(uColA, uColB, sea * 0.55);
-      col += vec3(0.10, 0.13, 0.16) * pow(1.0 - abs(dot(vViewDir, vNormalV)), 2.0);
-    } else {
-      // rocky: albedo fbm + crater-ish sharpening + optional polar caps
-      float a1 = fbm(p * 3.0);
-      float a2 = fbm(p * 9.0 + 7.0);
-      col = mix(uColA, uColB, a1) * (0.72 + 0.55 * a2);
-      if (uParam.x > 0.0) {
-        float cap = smoothstep(uParam.x, uParam.x + 0.07, abs(n.y) + 0.05 * (a1 - 0.5));
-        col = mix(col, vec3(0.93, 0.94, 0.96), cap);
-      }
-    }
-    // close-range detail — uClose is a uniform, so the branch is free when far
-    if (uClose > 0.002) {
-      float f1 = fbm(p * 7.0 + 11.0);
-      float f2 = fbm(p * 26.0 + 23.0);
-      if (uKind == 2 || uKind == 3) {
-        // storm filaments sheared along the bands
-        float fl = fbm(vec3(lon * 10.0, lat * 40.0, uSeed + 7.0));
-        col *= 1.0 + uClose * (0.22 * (fl - 0.5) + 0.12 * (f2 - 0.5));
-      } else if (uKind == 4) {
-        col *= 1.0 + uClose * 0.15 * (f2 - 0.5);   // ocean mottling
-      } else {
-        float ridge = 1.0 - abs(f1 * 2.0 - 1.0);
-        col *= 1.0 + uClose * (0.30 * (f1 - 0.5) + 0.26 * (f2 - 0.5) - 0.16 * ridge * ridge);
-        // relief: perturb the shading normal from the same height field —
-        // only truly near the ground, or the terminator crunches at range
-        float rel = smoothstep(0.72, 1.0, uClose);
-        if (rel > 0.001) {
-          vec3 t1 = normalize(cross(n, abs(n.y) > 0.93 ? vec3(1, 0, 0) : vec3(0, 1, 0)));
-          vec3 t2 = cross(n, t1);
-          float e = 0.012;
-          float hC = fbm((n * uParam.y + vec3(uSeed)) * 9.0 + 31.0);
-          float hX = fbm(((n + t1 * e) * uParam.y + vec3(uSeed)) * 9.0 + 31.0);
-          float hY = fbm(((n + t2 * e) * uParam.y + vec3(uSeed)) * 9.0 + 31.0);
-          np = normalize(n - (t1 * (hX - hC) + t2 * (hY - hC)) * (0.04 / e) * rel);
-        }
-      }
-    }
-    float diff = smoothstep(-0.06, 0.14, dot(np, uSunObj));
-    // city lights emerge on the night side (Black Marble), dimmed under cloud
-    vec3 night = vec3(0.0);
-    if (uHasNight > 0.5) {
-      night = texture2D(uNight, tuv).rgb * pow(1.0 - diff, 3.0) * 1.25;
-      if (uHasClouds > 0.5) {
-        float cl = texture2D(uClouds, vec2(fract(tuv.x + uTime * 0.0004), tuv.y)).r;
-        night *= 1.0 - cl * 0.7;
-      }
-    }
-    // engraved graticule, 15 deg hairlines (recedes over imagery + up close)
-    float gLat = abs(fract(lat * 57.29578 / 15.0 + 0.5) - 0.5);
-    float gLon = abs(fract(lon * 57.29578 / 15.0 + 0.5) - 0.5) * cos(lat);
-    float grat = (1.0 - smoothstep(0.0, 0.03, min(gLat, gLon))) * 0.05 * (1.0 - 0.8 * uHasMap);
-    col = col * (0.045 + diff) + night + vec3(0.85, 0.70, 0.42) * grat * (0.25 + diff) * (1.0 - 0.6 * uClose);
-    gl_FragColor = vec4(col, 1.0);
-  }
-`;
-
-const ATMO_VSH = /* glsl */`
-  varying vec3 vN; varying vec3 vV; varying vec3 vObj;
-  #include <common>
-  #include <logdepthbuf_pars_vertex>
-  void main() {
-    vObj = position;
-    vec4 mv = modelViewMatrix * vec4(position, 1.0);
-    vN = normalize(normalMatrix * normal);
-    vV = normalize(mv.xyz);
-    gl_Position = projectionMatrix * mv;
-    #include <logdepthbuf_vertex>
-  }
-`;
-const ATMO_FSH = /* glsl */`
-  varying vec3 vN; varying vec3 vV; varying vec3 vObj;
-  uniform vec3 uCol; uniform float uStrength; uniform vec3 uSunObj;
-  #include <common>
-  #include <logdepthbuf_pars_fragment>
-  void main() {
-    #include <logdepthbuf_fragment>
-    float rim = pow(1.0 - abs(dot(vN, vV)), 3.0);
-    float day = smoothstep(-0.35, 0.3, dot(normalize(vObj), uSunObj));
-    gl_FragColor = vec4(uCol * rim * uStrength * (0.12 + day), 1.0);
-  }
-`;
-
-const ORBIT_VSH = /* glsl */`
-  attribute float t;
-  varying float vT;
-  #include <common>
-  #include <logdepthbuf_pars_vertex>
-  void main() {
-    vT = t;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-    #include <logdepthbuf_vertex>
-  }
-`;
-const ORBIT_FSH = /* glsl */`
-  varying float vT;
-  uniform vec3 uCol; uniform float uHead; uniform float uGain;
-  #include <common>
-  #include <logdepthbuf_pars_fragment>
-  void main() {
-    #include <logdepthbuf_fragment>
-    float d = fract(uHead - vT);          // 0 at head, grows behind
-    float a = 0.06 + 0.5 * pow(1.0 - d, 3.0);
-    gl_FragColor = vec4(uCol * a * uGain, 1.0);
-  }
-`;
-
-const LIGHTS_VSH = /* glsl */`
-  varying float vGate;
-  uniform vec3 uSunObj;
-  #include <common>
-  #include <logdepthbuf_pars_vertex>
-  void main() {
-    vec3 n = normalize(position);
-    vGate = smoothstep(0.02, -0.12, dot(n, uSunObj));   // night side only
-    vec4 mv = modelViewMatrix * vec4(position, 1.0);
-    gl_PointSize = 1.8;
-    gl_Position = projectionMatrix * mv;
-    #include <logdepthbuf_vertex>
-  }
-`;
-const LIGHTS_FSH = /* glsl */`
-  varying float vGate;
-  #include <common>
-  #include <logdepthbuf_pars_fragment>
-  void main() {
-    #include <logdepthbuf_fragment>
-    vec2 pc = gl_PointCoord * 2.0 - 1.0;
-    float d2 = dot(pc, pc);
-    if (d2 > 1.0) discard;
-    gl_FragColor = vec4(vec3(1.0, 0.82, 0.58) * exp(-d2 * 3.0) * vGate * 0.85, 1.0);
-  }
-`;
-
-const RING_VSH = /* glsl */`
-  varying vec3 vObj;
-  #include <common>
-  #include <logdepthbuf_pars_vertex>
-  void main() {
-    vObj = position;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-    #include <logdepthbuf_vertex>
-  }
-`;
-const RING_FSH = /* glsl */`
-  varying vec3 vObj;
-  uniform vec4 uZones[12];   // r0, r1 (m), alpha, tone
-  uniform int uNZones;
-  uniform vec3 uSunObj;
-  uniform sampler2D uMap;    // radial strip: u = (r-inner)/(outer-inner)
-  uniform float uHasMap, uInner, uOuter;
-  #include <common>
-  #include <logdepthbuf_pars_fragment>
-  ${NOISE}
-  void main() {
-    #include <logdepthbuf_fragment>
-    float r = length(vObj.xy);
-    float lit = 0.35 + 0.65 * abs(uSunObj.z);
-    if (uHasMap > 0.5) {
-      vec4 t = texture2D(uMap, vec2(clamp((r - uInner) / (uOuter - uInner), 0.0, 1.0), 0.5));
-      if (t.a <= 0.02) discard;
-      gl_FragColor = vec4(t.rgb * t.a * (0.55 + 1.15 * lit), 1.0);
-      return;
-    }
-    float a = 0.0, tone = 1.0;
-    for (int i = 0; i < 12; i++) {
-      if (i >= uNZones) break;
-      vec4 z = uZones[i];
-      if (r >= z.x && r <= z.y) {
-        float e = min(smoothstep(z.x, z.x + (z.y - z.x) * 0.12, r),
-                      1.0 - smoothstep(z.y - (z.y - z.x) * 0.12, z.y, r));
-        a = max(a, z.z * e); tone = z.w;
-      }
-    }
-    if (a <= 0.001) discard;
-    float grain = 0.75 + 0.5 * vnoise(vec3(r * 3.0e-7, 0.0, 0.0));
-    vec3 col = mix(vec3(0.86, 0.78, 0.62), vec3(0.72, 0.68, 0.60), tone);
-    gl_FragColor = vec4(col * a * grain * lit * 0.85, 1.0);
-  }
-`;
-
-const GLOW_VSH = /* glsl */`
-  attribute vec3 col;
-  attribute float lum;
-  varying vec3 vCol; varying float vPx;
-  uniform float uPx; uniform float uPc;
-  #include <common>
-  #include <logdepthbuf_pars_vertex>
-  void main() {
-    vCol = col;
-    vec4 mv = modelViewMatrix * vec4(position, 1.0);
-    float dp = length(mv.xyz / uPc);   // divide first: meters² overflows f32
-    float flux = lum / max(dp * dp * 0.01, 1e-16);
-    float px = uPx * pow(flux, 0.25);
-    vPx = px;
-    gl_PointSize = clamp(px, 1.0, 26.0);
-    gl_Position = projectionMatrix * mv;
-    #include <logdepthbuf_vertex>
-  }
-`;
-const GLOW_FSH = /* glsl */`
-  varying vec3 vCol; varying float vPx;
-  #include <common>
-  #include <logdepthbuf_pars_fragment>
-  void main() {
-    #include <logdepthbuf_fragment>
-    vec2 pc = gl_PointCoord * 2.0 - 1.0;
-    float d2 = dot(pc, pc);
-    if (d2 > 1.0) discard;
-    float e = clamp(vPx / 1.4, 0.0, 1.0); e *= e;
-    float rays = 1.0 + 0.25 * pow(abs(pc.x * pc.y) * 4.0, 0.5) * smoothstep(8.0, 20.0, vPx);
-    gl_FragColor = vec4(vCol * (exp(-d2 * 4.5) + 0.2 * exp(-d2 * 1.2)) * e / rays, 1.0);
-  }
-`;
-
-// Per-body surface styling, keyed by name (decoupled from eph kind numbering).
+// Surface styling. light: 0 lambert, 1 regolith, 2 cloud tops. flat: polar
+// flattening. Optical depths (tau, zenith) and scale heights are in body radii;
+// heights above Earth are exaggerated about 1.5x so the limb reads at planet scale.
 const STYLE = {
-  Sun:     { kind: 0, a: '#fff6e0', b: '#ffb44d', p: [0, 1, 0, 0] },
-  Mercury: { kind: 1, a: '#8a8078', b: '#565049', p: [0, 1.7, 0, 0] },
-  Venus:   { kind: 1, a: '#e8d5a8', b: '#c9ab74', p: [0, 0.8, 0, 0], atmo: ['#e8d8b0', 1.1] },
-  Earth:   { kind: 4, a: '#0a1d33', b: '#123252', p: [0, 2, 0, 0], atmo: ['#6fa8dc', 1.5] },
-  Mars:    { kind: 1, a: '#b06a43', b: '#7a4530', p: [0.9, 1.3, 0, 0], atmo: ['#c88a5a', 0.35] },
-  Jupiter: { kind: 2, a: '#d8c0a0', b: '#a07858', p: [0, 1, 9.0, 0.9] },
-  Saturn:  { kind: 2, a: '#e0d0a8', b: '#b8a070', p: [0, 1, 7.0, 0] },
-  Uranus:  { kind: 3, a: '#9fd4d8', b: '#7fb8c8', p: [0, 1, 6.0, 0] },
-  Neptune: { kind: 3, a: '#4f78c8', b: '#35529a', p: [0, 1, 6.0, 0], atmo: ['#6f90d8', 0.4] },
-  Pluto:   { kind: 1, a: '#c8b49a', b: '#8a7460', p: [0.85, 1.2, 0, 0] },
-  Moon:    { kind: 1, a: '#b8b4ac', b: '#6a675f', p: [0, 2.2, 0, 0] },
-  Io:      { kind: 1, a: '#d8c060', b: '#a08030', p: [0, 1.8, 0, 0] },
-  Europa:  { kind: 1, a: '#d8cfc0', b: '#a89880', p: [0, 1.1, 0, 0] },
-  Titan:   { kind: 1, a: '#c89850', b: '#906830', p: [0, 0.7, 0, 0], atmo: ['#d8a860', 0.9] },
-  Triton:  { kind: 1, a: '#d0c8c0', b: '#98908a', p: [0.8, 1.3, 0, 0] },
+  Mercury: { kind: 1, a: '#8a8078', b: '#565049', p: [0, 1.7, 0, 0], light: 1, bump: 0.35 },
+  Venus: {
+    kind: 1, a: '#e8d5a8', b: '#c9ab74', p: [0, 0.8, 0, 0], light: 2,
+    atmo: { Hr: 0.0028, Hm: 0.0028, top: 1.022, tauR: [0.18, 0.28, 0.45], tauM: [0.28, 0.24, 0.15], g: 0.72, e: 14 },
+  },
+  Earth: {
+    kind: 4, a: '#0a1d33', b: '#123252', p: [0, 2, 0, 0], light: 0, bump: 0.22, amb: 0.0012, sunset: [1.0, 0.72, 0.5],
+    atmo: { Hr: 0.0019, Hm: 0.00035, top: 1.018, tauR: [0.0464, 0.108, 0.265], tauO: [0.0156, 0.045, 0.002], tauM: [0.03, 0.03, 0.03], g: 0.78, e: 15 },
+  },
+  Mars: {
+    kind: 1, a: '#b06a43', b: '#7a4530', p: [0.9, 1.3, 0, 0], light: 1, bump: 0.3, amb: 0.001, sunset: [1.0, 0.7, 0.55],
+    atmo: { Hr: 0.0048, Hm: 0.0048, top: 1.035, tauR: [0.002, 0.004, 0.01], tauM: [0.3, 0.18, 0.09], g: 0.65, e: 14 },
+  },
+  Jupiter: {
+    kind: 2, a: '#d8c0a0', b: '#a07858', p: [0, 1, 9.0, 0.9], light: 2, flat: 0.0649,
+    atmo: { Hr: 0.0024, Hm: 0.0024, top: 1.02, tauR: [0.05, 0.08, 0.13], tauM: [0.06, 0.05, 0.035], g: 0.6, e: 10 },
+  },
+  Saturn: {
+    kind: 2, a: '#e0d0a8', b: '#b8a070', p: [0, 1, 7.0, 0], light: 2, flat: 0.0980,
+    atmo: { Hr: 0.0024, Hm: 0.0024, top: 1.02, tauR: [0.05, 0.07, 0.1], tauM: [0.06, 0.05, 0.035], g: 0.6, e: 10 },
+  },
+  Uranus: {
+    kind: 3, a: '#9fd4d8', b: '#7fb8c8', p: [0, 1, 6.0, 0], light: 2, flat: 0.0229,
+    atmo: { Hr: 0.004, Hm: 0.004, top: 1.03, tauR: [0.06, 0.14, 0.2], tauM: [0.01, 0.015, 0.02], g: 0.6, e: 16 },
+  },
+  Neptune: {
+    kind: 3, a: '#4f78c8', b: '#35529a', p: [0, 1, 6.0, 0], light: 2, flat: 0.0171,
+    atmo: { Hr: 0.004, Hm: 0.004, top: 1.03, tauR: [0.05, 0.1, 0.28], tauM: [0.01, 0.015, 0.03], g: 0.6, e: 16 },
+  },
+  Pluto: { kind: 1, a: '#c8b49a', b: '#8a7460', p: [0.85, 1.2, 0, 0], light: 1 },
+  Moon: { kind: 1, a: '#b8b4ac', b: '#6a675f', p: [0, 2.2, 0, 0], light: 1, bump: 0.45, amb: 0.0015 },
+  Io: { kind: 1, a: '#d8c060', b: '#a08030', p: [0, 1.8, 0, 0], light: 1 },
+  Europa: { kind: 1, a: '#d8cfc0', b: '#a89880', p: [0, 1.1, 0, 0], light: 1 },
+  Titan: {
+    kind: 1, a: '#c89850', b: '#906830', p: [0, 0.7, 0, 0], light: 2,
+    atmo: { Hr: 0.016, Hm: 0.02, top: 1.16, tauR: [0.03, 0.07, 0.17], tauM: [0.75, 0.38, 0.12], g: 0.7, e: 16 },
+  },
+  Triton: { kind: 1, a: '#d0c8c0', b: '#98908a', p: [0.8, 1.3, 0, 0], light: 1 },
 };
-function styleFor(name) {
-  return STYLE[name] || { kind: 1, a: '#a89c8c', b: '#6a6055', p: [0, 1.5, 0, 0] };
-}
+const styleFor = (name) => STYLE[name] || { kind: 1, a: '#a89c8c', b: '#6a6055', p: [0, 1.5, 0, 0], light: 1 };
 
-function basisToQuatMesh(b) {   // object +Y -> pole, +X -> prime meridian
-  const zc = b.x.clone().cross(b.z);
-  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(b.x, b.z, zc));
+// Absolute magnitude H (1 AU from Sun and observer), for a true naked-eye look.
+const ABS_MAG = {
+  Mercury: -0.6, Venus: -4.47, Earth: -3.86, Mars: -1.52, Jupiter: -9.4, Saturn: -8.88,
+  Uranus: -7.19, Neptune: -6.87, Pluto: -0.44, Moon: 0.21, Titan: -1.2, Io: -1.7, Europa: -1.4,
+  Ganymede: -2.1, Callisto: -1.0,
+};
+const POINT_COLOR = {
+  Mercury: [0.8, 0.76, 0.7], Venus: [1.0, 0.95, 0.8], Earth: [0.55, 0.72, 1.0], Mars: [1.0, 0.6, 0.4],
+  Jupiter: [1.0, 0.9, 0.75], Saturn: [1.0, 0.94, 0.78], Uranus: [0.7, 0.95, 0.95], Neptune: [0.55, 0.65, 1.0],
+  Pluto: [0.85, 0.8, 0.72],
+};
+
+const MAPS = {
+  Sun: '8k_sun.jpg', Mercury: '8k_mercury.jpg', Venus: '4k_venus_atmosphere.jpg',
+  Earth: '8k_earth_daymap.jpg', Moon: '8k_moon.jpg', Mars: '8k_mars.jpg',
+  Jupiter: '8k_jupiter.jpg', Saturn: '8k_saturn.jpg',
+  Uranus: '2k_uranus.jpg', Neptune: '2k_neptune.jpg',
+};
+
+// Domain of the Saturn ring strip, fitted to the known gaps: the Cassini Division
+// at u = 0.70 and the C ring's inner edge at u = 0.08 give these radii.
+const SATURN_STRIP = { inner: 68824e3, outer: 141754e3 };
+
+// object +Y -> pole, +X -> prime meridian; east ends up on object -Z
+function basisToQuatMesh(b) {
+  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(b.x, b.z, b.x.clone().cross(b.z)));
 }
-function basisToQuatRing(b) {   // object +Z -> pole (ring/orbit plane in XY)
+// object +Z -> pole (ring plane in XY)
+function basisToQuatRing(b) {
   return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(b.x, b.z.clone().cross(b.x), b.z));
 }
 
-// shared 1x1 placeholder so sampler uniforms are always bound
 const PLACEHOLDER_TEX = new THREE.DataTexture(new Uint8Array([128, 128, 128, 255]), 1, 1);
 PLACEHOLDER_TEX.needsUpdate = true;
 
-function bodyMaterial(name, seed) {
-  const s = styleFor(name);
+export function bodyMaterial(style, seed, quality) {
+  const s = style;
+  const uniforms = {
+    uKind: { value: s.kind }, uLight: { value: s.light || 0 }, uNOcc: { value: 0 },
+    uColA: { value: new THREE.Color(s.a) }, uColB: { value: new THREE.Color(s.b) },
+    uParam: { value: new THREE.Vector4(...s.p) },
+    uSunObj: { value: new THREE.Vector3(0, 0, 1) }, uCamObj: { value: new THREE.Vector3(0, 0, 3) },
+    uSunTint: { value: new THREE.Vector3(...(s.sunset || [1, 1, 1])) },
+    uTime: { value: 0 }, uSeed: { value: seed }, uClose: { value: 0 },
+    uSunI: { value: 2.6 }, uAmb: { value: s.amb ?? 0.0008 }, uFlat: { value: 1 - (s.flat || 0) },
+    uBump: { value: s.bump || 0 }, uCloudLon: { value: 0 }, uSunAng: { value: 0.0047 },
+    uMap: { value: PLACEHOLDER_TEX }, uNight: { value: PLACEHOLDER_TEX },
+    uClouds: { value: PLACEHOLDER_TEX }, uRingMap: { value: PLACEHOLDER_TEX },
+    uHasMap: { value: 0 }, uHasNight: { value: 0 }, uHasClouds: { value: 0 }, uHasRing: { value: 0 },
+    uRingIn: { value: 1 }, uRingOut: { value: 2 }, uMapTexel: { value: new THREE.Vector2(0.001, 0.001) },
+    uOcc: { value: [new THREE.Vector4(), new THREE.Vector4(), new THREE.Vector4(), new THREE.Vector4()] },
+  };
+  return new THREE.ShaderMaterial({ vertexShader: BODY_VSH, fragmentShader: BODY_FSH, uniforms });
+}
+
+const OVER_BLEND = {
+  blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+  blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
+  blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
+  transparent: true, depthWrite: false,
+};
+
+export function atmoMaterial(a) {
+  const beta = (t, H) => new THREE.Vector3(t[0] / H, t[1] / H, t[2] / H);
   return new THREE.ShaderMaterial({
-    vertexShader: BODY_VSH, fragmentShader: BODY_FSH,
+    vertexShader: BODY_VSH, fragmentShader: ATMO_FSH,
     uniforms: {
-      uKind: { value: s.kind },
-      uColA: { value: new THREE.Color(s.a) },
-      uColB: { value: new THREE.Color(s.b) },
-      uParam: { value: new THREE.Vector4(...s.p) },
-      uSunObj: { value: new THREE.Vector3(0, 0, 1) },
-      uTime: { value: 0 }, uSeed: { value: seed },
-      uClose: { value: 0 },
-      uMap: { value: PLACEHOLDER_TEX }, uHasMap: { value: 0 },
-      uNight: { value: PLACEHOLDER_TEX }, uHasNight: { value: 0 },
-      uClouds: { value: PLACEHOLDER_TEX }, uHasClouds: { value: 0 },
+      uCamObj: { value: new THREE.Vector3(0, 0, 3) }, uSunObj: { value: new THREE.Vector3(0, 0, 1) },
+      uBetaR: { value: beta(a.tauR, a.Hr) }, uBetaO: { value: beta(a.tauO || [0, 0, 0], a.Hr) },
+      uBetaM: { value: beta(a.tauM, a.Hm) },
+      uHr: { value: a.Hr }, uHm: { value: a.Hm }, uG: { value: a.g }, uTop: { value: a.top },
+      uSunE: { value: a.e }, uN: { value: 12 }, uNL: { value: 3 },
     },
+    ...OVER_BLEND,
+  });
+}
+
+// A star as a solid object: surface, corona, and screen-sized glare. Used for the
+// Sun and for any catalog star you fly to.
+export function makeStarObject(sphereGeo, { tint = [1, 1, 1], intensity = 7.0, span = 9, glare = true } = {}) {
+  const group = new THREE.Group();
+  const tintV = new THREE.Vector3(...tint);
+  const mat = new THREE.ShaderMaterial({
+    vertexShader: BODY_VSH, fragmentShader: STAR_FSH,
+    uniforms: {
+      uCamObj: { value: new THREE.Vector3(0, 0, 3) }, uTint: { value: tintV },
+      uMap: { value: PLACEHOLDER_TEX }, uHasMap: { value: 0 },
+      uTime: { value: 0 }, uClose: { value: 0 }, uI: { value: intensity },
+    },
+  });
+  const mesh = new THREE.Mesh(sphereGeo, mat);
+  group.add(mesh);
+  const corona = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
+    vertexShader: CORONA_VSH, fragmentShader: CORONA_FSH,
+    uniforms: {
+      uRight: { value: new THREE.Vector3(1, 0, 0) }, uUp: { value: new THREE.Vector3(0, 1, 0) }, uTint: { value: tintV },
+      uSpan: { value: span }, uTime: { value: 0 }, uI: { value: 1 }, uDisc: { value: 1 },
+    },
+    blending: THREE.AdditiveBlending, transparent: true, depthWrite: false,
+  }));
+  corona.frustumCulled = false;
+  corona.renderOrder = 3;
+  group.add(corona);
+  let glareMesh = null;
+  if (glare) {
+    glareMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
+      vertexShader: CORONA_VSH, fragmentShader: GLARE_FSH,
+      uniforms: { uTint: { value: tintV }, uI: { value: 0 }, uSpan: { value: 1 } },
+      blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, depthTest: true,
+    }));
+    glareMesh.frustumCulled = false;
+    glareMesh.renderOrder = 4;
+    group.add(glareMesh);
+  }
+  return { group, mesh, mat, corona, glare: glareMesh, span, radius: 1, vis: 1, flare: 1 };
+}
+
+const _v = new THREE.Vector3();
+const _q = new THREE.Quaternion();
+const _r = new THREE.Vector3();
+const _u = new THREE.Vector3();
+
+// radius and camera drive what a star object shows; called once per frame
+export function updateStarObject(s, world, radius, camWorld, camQuat, tSec, pxScale, occlusion = 1) {
+  s.group.position.set(world.x - camWorld.x, world.y - camWorld.y, world.z - camWorld.z);
+  s.mesh.scale.setScalar(radius);
+  const d = world.distanceTo(camWorld);
+  const inv = s.mesh.quaternion.clone().invert();
+  s.mat.uniforms.uCamObj.value.copy(camWorld).sub(world).divideScalar(radius).applyQuaternion(inv);
+  const discPx = radius / Math.max(d, radius) * pxScale;
+  s.mat.uniforms.uTime.value = tSec;
+  s.mat.uniforms.uClose.value = THREE.MathUtils.smoothstep(discPx, 700, 3200);
+  s.corona.quaternion.copy(camQuat);
+  s.corona.scale.setScalar(radius * s.span);
+  const cu = s.corona.material.uniforms;
+  cu.uRight.value.set(1, 0, 0).applyQuaternion(camQuat);
+  cu.uUp.value.set(0, 1, 0).applyQuaternion(camQuat);
+  cu.uTime.value = tSec;
+  s.corona.visible = discPx > 0.7;
+  if (s.glare) {
+    const dAU = d / AU;
+    const px = 340 / Math.pow(1 + dAU * 0.12, 0.6);
+    const fadeNear = 1 - THREE.MathUtils.smoothstep(discPx, 26, 130);
+    const fadeFar = 1 - THREE.MathUtils.smoothstep(d, 3e15, 3e16);
+    s.glare.visible = fadeNear * fadeFar > 0.002;
+    s.glare.quaternion.copy(camQuat);
+    s.glare.scale.setScalar(px * d / pxScale);
+    s.flare += (occlusion - s.flare) * 0.25;
+    s.glare.material.uniforms.uI.value = 1.15 * fadeNear * fadeFar * s.flare;
+  }
+}
+
+function orbitMaterial(color, gain) {
+  return new THREE.ShaderMaterial({
+    vertexShader: ORBIT_VSH, fragmentShader: ORBIT_FSH,
+    uniforms: { uCol: { value: new THREE.Color(color) }, uHead: { value: 0 }, uGain: { value: gain }, uNear: { value: 1e9 } },
+    blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
   });
 }
 
@@ -393,14 +234,9 @@ function orbitLine(samples, color, gain = 1) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   g.setAttribute('t', new THREE.BufferAttribute(tt, 1));
-  g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e16);
-  const mat = new THREE.ShaderMaterial({
-    vertexShader: ORBIT_VSH, fragmentShader: ORBIT_FSH,
-    uniforms: { uCol: { value: new THREE.Color(color) }, uHead: { value: 0 }, uGain: { value: gain } },
-    blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
-  });
-  const line = new THREE.Line(g, mat);
+  const line = new THREE.Line(g, orbitMaterial(color, gain));
   line.frustumCulled = false;
+  line.renderOrder = -4;
   return line;
 }
 
@@ -415,254 +251,289 @@ function pointInRings(lon, lat, rings) {
   return inside;
 }
 
+// object space: +Y pole, +X prime meridian, east toward -Z (right-handed)
 function lonLatToUnit(lonDeg, latDeg) {
-  // object space: +Y pole, +X prime meridian, right-handed (lon east +)
-  const lon = lonDeg * Math.PI / 180, lat = latDeg * Math.PI / 180;
-  return new THREE.Vector3(Math.cos(lat) * Math.cos(lon), Math.sin(lat), Math.cos(lat) * Math.sin(lon));
+  const lon = lonDeg * DEG, lat = latDeg * DEG;
+  return new THREE.Vector3(Math.cos(lat) * Math.cos(lon), Math.sin(lat), -Math.cos(lat) * Math.sin(lon));
+}
+
+// Ring strip when there is no imagery: painted from the published zones.
+function zoneStrip(zones, inner, outer) {
+  const W = 1024;
+  const d = new Uint8Array(W * 4);
+  for (let i = 0; i < W; i++) {
+    const r = inner + (outer - inner) * (i + 0.5) / W;
+    let a = 0;
+    for (const z of zones) {
+      if (r >= z.rIn && r <= z.rOut) {
+        const w = (z.rOut - z.rIn) * 0.1;
+        a = Math.max(a, z.density * 0.85 * Math.min(1, (r - z.rIn) / w, (z.rOut - r) / w));
+      }
+    }
+    d[4 * i] = 160; d[4 * i + 1] = 148; d[4 * i + 2] = 128;
+    d[4 * i + 3] = Math.round(255 * Math.min(a * (0.82 + 0.18 * Math.sin(i * 0.37) * Math.sin(i * 0.11)), 1));
+  }
+  const t = new THREE.DataTexture(d, W, 1);
+  t.magFilter = THREE.LinearFilter;
+  t.minFilter = THREE.LinearFilter;
+  t.needsUpdate = true;
+  return t;
 }
 
 export class SolarSystem {
-  constructor(scene) {
+  constructor(scene, textures) {
     this.scene = scene;
+    this.textures = textures;
     this.helio = new THREE.Group();            // heliocentric static ink (orbits, trails)
     scene.add(this.helio);
-    this.sphereGeo = new THREE.SphereGeometry(1, 96, 64);
+    this.sphereHi = new THREE.SphereGeometry(1, 256, 160);
+    this.sphereLo = new THREE.SphereGeometry(1, 96, 64);
     this.bodiesList = [];
-    this.groups = new Map();                   // name -> {group, mesh, mat, radius, ...}
-    this.moonOrbitGroups = new Map();          // planet name -> group (parent-centered)
+    this.groups = new Map();                   // name -> record
+    this.moonOrbitGroups = new Map();          // planet name -> {group, a}
     this.orbitLines = new Map();               // name -> {line, jd0, period}
-    this.trackHeads = [];
-    this.stateCache = null;                    // set via setStates
+    this.tracks = [];
+    this.stateCache = null;
+    this.fetchedOk = false;
+    this.quality = { atmo: [12, 3] };
     this._buildSun();
     for (let i = 0; i < eph.PLANETS.length; i++) this._buildPlanet(i);
     this._buildMoons();
-    this._buildGlowPoints();
+    this._buildPoints();
+    this.updatePositions(eph.jdTdb(eph.jdUtcNow()));
   }
 
-  _mkBodyGroup(name, radius, seed, withAtmo) {
+  setQuality(q) {
+    this.quality = q;
+    for (const rec of this.groups.values()) {
+      if (rec.atmoMat) { rec.atmoMat.uniforms.uN.value = q.atmo[0]; rec.atmoMat.uniforms.uNL.value = q.atmo[1]; }
+    }
+  }
+
+  _mkBody(name, radius, seed, geo) {
     const group = new THREE.Group();
-    const mat = bodyMaterial(name, seed);
-    const mesh = new THREE.Mesh(this.sphereGeo, mat);
-    mesh.scale.setScalar(radius);
+    const style = styleFor(name);
+    const mat = bodyMaterial(style, seed);
+    const mesh = new THREE.Mesh(geo, mat);
+    const flat = style.flat || 0;
+    mesh.scale.set(radius, radius * (1 - flat), radius);
     group.add(mesh);
-    let atmoMat = null;
-    const st = styleFor(name);
-    if (st.atmo) {
-      atmoMat = new THREE.ShaderMaterial({
-        vertexShader: ATMO_VSH, fragmentShader: ATMO_FSH,
-        uniforms: {
-          uCol: { value: new THREE.Color(st.atmo[0]) },
-          uStrength: { value: st.atmo[1] },
-          uSunObj: { value: new THREE.Vector3(0, 0, 1) },
-        },
-        blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
-        side: THREE.FrontSide,
-      });
-      const shell = new THREE.Mesh(this.sphereGeo, atmoMat);
-      shell.scale.setScalar(radius * 1.022);
+    const rec = { name, group, mesh, mat, atmoMat: null, radius, world: new THREE.Vector3(), style, flat, textured: false, wantTex: false };
+    if (style.atmo) {
+      rec.atmoMat = atmoMaterial(style.atmo);
+      const shell = new THREE.Mesh(this.sphereLo, rec.atmoMat);
+      shell.scale.set(radius * style.atmo.top, radius * style.atmo.top * (1 - flat), radius * style.atmo.top);
+      shell.renderOrder = 2;
+      rec.shell = shell;
       group.add(shell);
     }
     this.scene.add(group);
-    const rec = { name, group, mesh, mat, atmoMat, radius, world: new THREE.Vector3() };
     this.groups.set(name, rec);
     return rec;
   }
 
   _buildSun() {
-    const r = this._mkBodyGroup('Sun', 6.957e8, 1.0);
-    // additive glow billboard, fixed angular size
-    const gmat = new THREE.ShaderMaterial({
-      vertexShader: /* glsl */`
-        varying vec2 vUv;
-        #include <common>
-        #include <logdepthbuf_pars_vertex>
-        void main() {
-          vUv = uv * 2.0 - 1.0;
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-          #include <logdepthbuf_vertex>
-        }`,
-      fragmentShader: /* glsl */`
-        varying vec2 vUv;
-        #include <common>
-        #include <logdepthbuf_pars_fragment>
-        void main() {
-          #include <logdepthbuf_fragment>
-          float d = length(vUv);
-          if (d > 1.0) discard;
-          float g = exp(-d * d * 7.0) * 1.4 + exp(-d * 2.6) * 0.3;
-          float rays = 1.0 + 0.35 * pow(abs(vUv.x * vUv.y) * 4.0, 0.6);
-          g *= smoothstep(1.0, 0.72, d);   // reach zero before the quad edge
-          gl_FragColor = vec4(vec3(1.0, 0.88, 0.66) * g / rays, 1.0);
-        }`,
-      blending: THREE.AdditiveBlending, depthWrite: false, depthTest: true, transparent: true,
-    });
-    this.sunGlow = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), gmat);
-    this.sunGlow.frustumCulled = false;
-    r.group.add(this.sunGlow);
+    const star = makeStarObject(this.sphereHi, { tint: [1.0, 0.9, 0.72], intensity: 2.6 });
+    this.scene.add(star.group);
+    this.sun = star;
+    const rec = {
+      name: 'Sun', group: star.group, mesh: star.mesh, mat: star.mat, radius: RSUN,
+      world: new THREE.Vector3(), style: { kind: 0 }, flat: 0, textured: false, wantTex: false, isStar: true,
+    };
+    this.groups.set('Sun', rec);
   }
 
   _buildPlanet(i) {
     const p = eph.PLANETS[i];
-    const rec = this._mkBodyGroup(p.name, p.radius, i * 3.7 + 2);
+    const rec = this._mkBody(p.name, p.radius, i * 3.7 + 2, this.sphereHi);
     rec.planetIdx = i;
-    // orbit engraving, sampled uniformly in time over one period
-    const per = p.period || this._estimatePeriod(i);
+    const per = p.period || 365.25 * Math.pow(p.a || 1, 1.5);
     rec.period = per;
     const jd0 = eph.jdTdb(eph.jdUtcNow());
-    const N = 512, samples = [];
+    const N = 720, samples = [];
     for (let k = 0; k < N; k++) samples.push(eph.planetState(i, jd0 + per * k / N).pos);
     samples.push(samples[0].clone());
+    rec.orbitA = samples.reduce((m, s) => Math.max(m, s.length()), 0);
     const line = orbitLine(samples, '#d8b36a', 0.9);
     this.helio.add(line);
     this.orbitLines.set(p.name, { line, jd0, period: per });
     this._buildRings(rec, i);
-    if (p.name === 'Earth') rec.needsEarthExtras = true;
-  }
-
-  _estimatePeriod(i) {
-    const a = eph.PLANETS[i].a || 1;
-    return 365.25 * Math.pow(a, 1.5);
   }
 
   _buildRings(rec, planetIdx) {
     const entry = (eph.RINGS || []).find(r => r.planet === planetIdx);
     if (!entry || !entry.zones.length) return;
-    const zones = entry.zones;
-    const inner = Math.min(...zones.map(z => z.rIn));
-    const outer = Math.max(...zones.map(z => z.rOut));
-    const geo = new THREE.RingGeometry(inner, outer, 256, 4);
-    const zArr = [];
-    for (let i = 0; i < 12; i++) {
-      const z = zones[i];
-      zArr.push(z ? new THREE.Vector4(z.rIn, z.rOut, Math.min(z.density * 0.7, 0.85), 0.5)
-                  : new THREE.Vector4(0, 0, 0, 0));
-    }
+    const R = rec.radius;
+    const isSaturn = rec.name === 'Saturn';
+    const inner = isSaturn ? SATURN_STRIP.inner : Math.min(...entry.zones.map(z => z.rIn));
+    const outer = isSaturn ? SATURN_STRIP.outer : Math.max(...entry.zones.map(z => z.rOut));
+    const strip = zoneStrip(entry.zones, inner, outer);
+    const geo = new THREE.RingGeometry(inner / R, outer / R, 512, 1);
     const mat = new THREE.ShaderMaterial({
       vertexShader: RING_VSH, fragmentShader: RING_FSH,
       uniforms: {
-        uZones: { value: zArr }, uNZones: { value: Math.min(zones.length, 12) },
-        uSunObj: { value: new THREE.Vector3(0, 0, 1) },
-        uMap: { value: PLACEHOLDER_TEX }, uHasMap: { value: 0 },
-        uInner: { value: inner }, uOuter: { value: outer },
+        uSunObj: { value: new THREE.Vector3(0, 0, 1) }, uCamObj: { value: new THREE.Vector3(0, 0, 3) },
+        uMap: { value: strip }, uInner: { value: inner / R }, uOuter: { value: outer / R },
+        uSunI: { value: 2 }, uFlat: { value: 1 - rec.flat }, uClose: { value: 0 },
       },
-      blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, side: THREE.DoubleSide,
+      ...OVER_BLEND, side: THREE.DoubleSide,
     });
     rec.ring = new THREE.Mesh(geo, mat);
+    rec.ring.scale.setScalar(R);
+    rec.ring.renderOrder = 1;
+    rec.ringOuter = outer;
     rec.group.add(rec.ring);
+    if (isSaturn) {
+      const mu = rec.mat.uniforms;
+      mu.uRingMap.value = strip;
+      mu.uHasRing.value = 1;
+      mu.uRingIn.value = inner / R;
+      mu.uRingOut.value = outer / R;
+    }
   }
 
   _buildMoons() {
+    const jd0 = eph.jdTdb(eph.jdUtcNow());
     for (let mi = 0; mi < eph.MOONS.length; mi++) {
       const m = eph.MOONS[mi];
-      const rec = this._mkBodyGroup(m.name, m.radius, 40 + mi * 1.31);
+      const rec = this._mkBody(m.name, m.radius, 40 + mi * 1.31, this.sphereLo);
       rec.moonIdx = mi;
       rec.parent = eph.PLANETS[m.parent].name;
       let og = this.moonOrbitGroups.get(rec.parent);
       if (!og) {
-        og = new THREE.Group();
-        this.scene.add(og);
+        og = { group: new THREE.Group(), a: 0 };
+        this.scene.add(og.group);
         this.moonOrbitGroups.set(rec.parent, og);
       }
-      const jd0 = eph.jdTdb(eph.jdUtcNow());
-      const N = 192, samples = [];
+      const N = 256, samples = [];
       for (let k = 0; k < N; k++) samples.push(eph.moonRel(mi, jd0 + m.period * k / N));
       samples.push(samples[0].clone());
-      const line = orbitLine(samples, '#9ab8d8', 0.7);
-      og.add(line);
-      this.orbitLines.set(m.name, { line, jd0, period: m.period });
+      const a = samples[0].length();
+      rec.orbitA = a;
+      og.a = Math.max(og.a, a);
+      const line = orbitLine(samples, '#9ab8d8', 0.8);
+      og.group.add(line);
+      this.orbitLines.set(m.name, { line, jd0, period: m.period, a });
     }
   }
 
-  _buildGlowPoints() {
-    // planets (and the Sun) as physically-fading glow points for far viewing
-    const names = ['Sun', ...eph.PLANETS.map(p => p.name)];
-    // rel. luminosity vs Mg=0 at 10 pc; Sun real (Mg 4.67), planets tuned to
-    // read like the bright wanderers they are from ~1 AU
-    const LUM = { Sun: 0.0136, Mercury: 3e-15, Venus: 3.2e-14, Earth: 1.5e-14, Mars: 6e-15,
-      Jupiter: 5e-14, Saturn: 2.6e-14, Uranus: 4e-15, Neptune: 3e-15, Pluto: 3e-16 };
-    const COL = { Sun: [1.0, 0.93, 0.78], Mercury: [0.8, 0.76, 0.7], Venus: [1.0, 0.95, 0.8],
-      Earth: [0.55, 0.72, 1.0], Mars: [1.0, 0.6, 0.4], Jupiter: [1.0, 0.9, 0.75],
-      Saturn: [1.0, 0.94, 0.78], Uranus: [0.7, 0.95, 0.95], Neptune: [0.55, 0.65, 1.0],
-      Pluto: [0.85, 0.8, 0.72] };
+  // Everything too small to resolve still shows, at its true apparent magnitude.
+  _buildPoints() {
+    const names = ['Sun', ...eph.PLANETS.map(p => p.name), ...eph.MOONS.map(m => m.name)];
     const n = names.length;
-    const pos = new Float32Array(n * 3), col = new Float32Array(n * 3), lum = new Float32Array(n);
+    const pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+    const meta = [];
     for (let i = 0; i < n; i++) {
-      const c = COL[names[i]] || [0.9, 0.88, 0.8];
-      col.set(c, 3 * i);
-      lum[i] = LUM[names[i]] || 1e-15;
+      col.set(POINT_COLOR[names[i]] || (names[i] === 'Sun' ? [1, 0.95, 0.85] : [0.9, 0.88, 0.8]), 3 * i);
+      meta.push({ gmag: 0, distPc: 10 });
     }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    g.setAttribute('col', new THREE.BufferAttribute(col, 3));
-    g.setAttribute('lum', new THREE.BufferAttribute(lum, 1));
-    g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e14);
-    const mat = new THREE.ShaderMaterial({
-      vertexShader: GLOW_VSH, fragmentShader: GLOW_FSH,
-      uniforms: { uPx: { value: 8.0 }, uPc: { value: 3.0856775814913673e16 } },
-      blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
-    });
-    this.glowNames = names;
-    this.glowPts = new THREE.Points(g, mat);
-    this.glowPts.frustumCulled = false;
-    this.glowGroup = new THREE.Group();
-    this.glowGroup.add(this.glowPts);
-    this.scene.add(this.glowGroup);
+    this.pointNames = names;
+    const pts = makeStarPoints({ count: n, positions: pos, colors: col, meta }, { perVertexVis: true });
+    this.points = pts;
+    this.pointVis = new Float32Array(n);
+    pts.geometry.setAttribute('vis', new THREE.BufferAttribute(this.pointVis, 1));
+    pts.renderOrder = -5;
+    this.pointGroup = new THREE.Group();
+    this.pointGroup.add(pts);
+    this.scene.add(this.pointGroup);
   }
 
-  // Real imagery (fetched CC-BY/PD mosaics; see provenance). Loads lazily and
-  // flips uHasMap per body — the procedural surface is the fallback until then.
-  initTextures(maxAniso = 4) {
-    const loader = new THREE.TextureLoader();
-    const load = (file, cb) => loader.load(
-      '/data/textures/' + file,
-      (t) => { t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = maxAniso; cb(t); },
-      undefined,
-      () => {},   // missing texture -> stay procedural
-    );
-    const MAPS = {
-      Sun: '8k_sun.jpg', Mercury: '8k_mercury.jpg', Venus: '4k_venus_atmosphere.jpg',
-      Earth: '8k_earth_daymap.jpg', Moon: '8k_moon.jpg', Mars: '8k_mars.jpg',
-      Jupiter: '8k_jupiter.jpg', Saturn: '8k_saturn.jpg',
-      Uranus: '2k_uranus.jpg', Neptune: '2k_neptune.jpg',
-    };
-    for (const [name, file] of Object.entries(MAPS)) {
-      const rec = this.groups.get(name);
-      if (!rec) continue;
-      load(file, (t) => {
+  // ---- imagery -------------------------------------------------------------
+  // Each body asks for its maps as you approach; the place you fly to asks first.
+  wantTextures(name, urgent = false) {
+    const rec = this.groups.get(name);
+    const bank = this.textures;
+    if (!rec || !bank) return;
+    if (rec.wantTex) {
+      if (urgent && MAPS[name]) bank.prioritize(MAPS[name]);
+      return;
+    }
+    rec.wantTex = true;
+    const file = MAPS[name];
+    if (file) {
+      bank.request(file, (t) => {
         rec.mat.uniforms.uMap.value = t;
         rec.mat.uniforms.uHasMap.value = 1;
+        if (rec.mat.uniforms.uMapTexel) rec.mat.uniforms.uMapTexel.value.set(1 / t.userData.size[0], 1 / t.userData.size[1]);
         rec.textured = true;
-      });
+      }, { urgent });
     }
-    const earth = this.groups.get('Earth');
-    if (earth) {
-      load('8k_earth_nightmap.jpg', (t) => {
-        earth.mat.uniforms.uNight.value = t;
-        earth.mat.uniforms.uHasNight.value = 1;
-        // measured Black Marble supersedes the illustrative light points
-        if (earth.lightsObj) earth.lightsObj.visible = false;
-      });
-      load('2k_earth_clouds.jpg', (t) => {
-        earth.mat.uniforms.uClouds.value = t;
-        earth.mat.uniforms.uHasClouds.value = 1;
-      });
+    if (name === 'Earth') {
+      bank.request('8k_earth_nightmap.jpg', (t) => {
+        rec.mat.uniforms.uNight.value = t;
+        rec.mat.uniforms.uHasNight.value = 1;
+        rec.nightReal = true;
+        if (rec.lightsObj) rec.lightsObj.visible = false;
+      }, { urgent });
+      bank.request('2k_earth_clouds.jpg', (t) => {
+        rec.mat.uniforms.uClouds.value = t;
+        rec.mat.uniforms.uHasClouds.value = 1;
+        rec.cloudsReal = true;
+        this._addClouds(rec, t);
+      }, { urgent, srgb: false });
     }
-    const sat = this.groups.get('Saturn');
-    if (sat && sat.ring) {
-      load('8k_saturn_ring_alpha.png', (t) => {
-        sat.ring.material.uniforms.uMap.value = t;
-        sat.ring.material.uniforms.uHasMap.value = 1;
-      });
+    if (name === 'Saturn' && rec.ring && bank.has('8k_saturn_ring_alpha.png')) {
+      bank.request('8k_saturn_ring_alpha.png', (t) => {
+        rec.ring.material.uniforms.uMap.value = t;
+        rec.mat.uniforms.uRingMap.value = t;
+        rec.ringReal = true;
+      }, { urgent, wrap: false });
     }
   }
 
-  // Earth vector extras — call once coast (and land) GeoJSON rings are loaded.
+  _addClouds(earth, tex) {
+    const mat = new THREE.ShaderMaterial({
+      vertexShader: BODY_VSH, fragmentShader: CLOUD_FSH,
+      uniforms: {
+        uSunObj: { value: new THREE.Vector3(0, 0, 1) }, uClouds: { value: tex },
+        uCloudLon: { value: 0 }, uSunI: { value: 2.6 }, uClose: { value: 0 },
+      },
+      ...OVER_BLEND,
+    });
+    const shell = new THREE.Mesh(this.sphereHi, mat);
+    shell.scale.setScalar(earth.radius * 1.0045);
+    shell.renderOrder = 1;
+    earth.cloudMat = mat;
+    earth.cloudShell = shell;
+    earth.group.add(shell);
+  }
+
+  // Earth's fresh-clone fallback: Natural Earth land on a painted globe, plus
+  // vector coasts and a synthetic settlement prior for the night side.
   addEarthExtras(coastRings, landRings, rand) {
     const earth = this.groups.get('Earth');
     if (!earth || earth.coastAdded) return;
     earth.coastAdded = true;
-    // coastlines as line segments on the unit sphere (children of the mesh:
-    // they inherit radius scale and the IAU spin quaternion)
+    if (!earth.textured && !this.textures.has(MAPS.Earth) && landRings && landRings.length) {
+      const c = document.createElement('canvas');
+      c.width = 2048; c.height = 1024;
+      const g = c.getContext('2d');
+      g.fillStyle = '#10335c';
+      g.fillRect(0, 0, 2048, 1024);
+      const grad = g.createLinearGradient(0, 0, 0, 1024);
+      grad.addColorStop(0.0, '#dfe6ea'); grad.addColorStop(0.14, '#c7cec9'); grad.addColorStop(0.24, '#5a6f47');
+      grad.addColorStop(0.38, '#7b7a4c'); grad.addColorStop(0.46, '#a59463'); grad.addColorStop(0.54, '#4d6a38');
+      grad.addColorStop(0.68, '#7e7a50'); grad.addColorStop(0.82, '#9aa79c'); grad.addColorStop(0.9, '#e4e9ec'); grad.addColorStop(1, '#eef1f3');
+      g.fillStyle = grad;
+      g.beginPath();
+      for (const ring of landRings) {
+        ring.forEach(([lon, lat], i) => {
+          const x = (lon + 180) / 360 * 2048, y = (90 - lat) / 180 * 1024;
+          if (i) g.lineTo(x, y); else g.moveTo(x, y);
+        });
+        g.closePath();
+      }
+      g.fill('evenodd');
+      const t = new THREE.CanvasTexture(c);
+      t.colorSpace = THREE.SRGBColorSpace;
+      t.wrapS = THREE.RepeatWrapping;
+      t.anisotropy = 8;
+      earth.mat.uniforms.uMap.value = t;
+      earth.mat.uniforms.uHasMap.value = 1;
+      earth.mat.uniforms.uMapTexel.value.set(1 / 2048, 1 / 1024);
+      earth.mat.uniforms.uBump.value = 0;
+      earth.paintedLand = true;
+    }
     const verts = [];
     for (const ring of coastRings) {
       for (let i = 0; i + 1 < ring.length; i++) {
@@ -686,20 +557,20 @@ export class SolarSystem {
         #include <logdepthbuf_pars_fragment>
         void main() {
           #include <logdepthbuf_fragment>
-          gl_FragColor = vec4(vec3(0.85, 0.72, 0.45) * 0.55, 1.0);
+          gl_FragColor = vec4(vec3(0.85, 0.72, 0.45) * 0.4, 1.0);
         }`,
       blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
     });
     const coast = new THREE.LineSegments(cg, cmat);
     coast.frustumCulled = false;
+    coast.visible = !!earth.paintedLand;
     earth.mesh.add(coast);
-    // night lights: deterministic settlement points on land, night side only
-    if (landRings && landRings.length) {
+    if (earth.paintedLand && landRings && landRings.length) {
       const pts = [];
       let tries = 0;
-      while (pts.length < 1200 * 3 && tries++ < 60000) {
+      while (pts.length < 1600 * 3 && tries++ < 60000) {
         const lon = rand() * 360 - 180;
-        const lat = (Math.asin(rand() * 2 - 1) * 180 / Math.PI) * 0.72; // mid-lat prior
+        const lat = (Math.asin(rand() * 2 - 1) * 180 / Math.PI) * 0.72;
         if (pointInRings(lon, lat, landRings)) {
           const v = lonLatToUnit(lon, lat).multiplyScalar(1.002);
           pts.push(v.x, v.y, v.z);
@@ -708,21 +579,41 @@ export class SolarSystem {
       const lg = new THREE.BufferGeometry();
       lg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pts), 3));
       earth.lightsMat = new THREE.ShaderMaterial({
-        vertexShader: LIGHTS_VSH, fragmentShader: LIGHTS_FSH,
+        vertexShader: /* glsl */`
+          varying float vGate;
+          uniform vec3 uSunObj;
+          #include <common>
+          #include <logdepthbuf_pars_vertex>
+          void main() {
+            vGate = smoothstep(0.02, -0.12, dot(normalize(position), uSunObj));
+            gl_PointSize = 1.8;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            #include <logdepthbuf_vertex>
+          }`,
+        fragmentShader: /* glsl */`
+          varying float vGate;
+          #include <common>
+          #include <logdepthbuf_pars_fragment>
+          void main() {
+            #include <logdepthbuf_fragment>
+            vec2 pc = gl_PointCoord * 2.0 - 1.0;
+            float d2 = dot(pc, pc);
+            if (d2 > 1.0) discard;
+            gl_FragColor = vec4(vec3(1.0, 0.82, 0.58) * exp(-d2 * 3.0) * vGate * 1.6, 1.0);
+          }`,
         uniforms: { uSunObj: { value: new THREE.Vector3(0, 0, 1) } },
         blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
       });
       const lights = new THREE.Points(lg, earth.lightsMat);
       lights.frustumCulled = false;
-      if (earth.mat.uniforms.uHasNight.value > 0.5) lights.visible = false;
       earth.lightsObj = lights;
       earth.mesh.add(lights);
     }
   }
 
   setTracks(tracks) {
-    this.tracks = tracks || [];
-    for (const tr of this.tracks) {
+    this.tracks = [];
+    for (const tr of tracks || []) {
       const n = tr.samples.length;
       if (n < 2) continue;
       const pos = new Float32Array(n * 3), tt = new Float32Array(n);
@@ -733,149 +624,296 @@ export class SolarSystem {
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
       g.setAttribute('t', new THREE.BufferAttribute(tt, 1));
-      g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e14);
-      const mat = new THREE.ShaderMaterial({
-        vertexShader: ORBIT_VSH, fragmentShader: ORBIT_FSH,
-        uniforms: { uCol: { value: new THREE.Color('#7ea8d8') }, uHead: { value: 1.0 }, uGain: { value: 0.8 } },
-        blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
-      });
-      const line = new THREE.Line(g, mat);
+      const line = new THREE.Line(g, orbitMaterial('#7ea8d8', 0.8));
+      line.material.uniforms.uHead.value = 1.0;
       line.frustumCulled = false;
+      line.renderOrder = -4;
       this.helio.add(line);
-      const last = tr.samples[n - 1];
-      this.trackHeads.push({ name: tr.name, world: new THREE.Vector3(last[1], last[2], last[3]) });
+      this.tracks.push({ name: tr.name, note: tr.note, samples: tr.samples, line, world: new THREE.Vector3() });
+    }
+    this.updatePositions(this.lastJd ?? eph.jdTdb(eph.jdUtcNow()));
+  }
+
+  // position along a Horizons arc: linear in the cached samples, clamped at the ends
+  _trackAt(tr, jd) {
+    const s = tr.samples;
+    let lo = 0, hi = s.length - 1;
+    if (jd <= s[0][0]) { hi = 0; } else if (jd >= s[hi][0]) { lo = hi; } else {
+      while (hi - lo > 1) { const m = (lo + hi) >> 1; if (s[m][0] <= jd) lo = m; else hi = m; }
+    }
+    if (lo === hi) { tr.world.set(s[lo][1], s[lo][2], s[lo][3]); tr.outside = jd < s[0][0] || jd > s[s.length - 1][0]; return; }
+    const f = (jd - s[lo][0]) / (s[hi][0] - s[lo][0]);
+    tr.world.set(s[lo][1] + (s[hi][1] - s[lo][1]) * f, s[lo][2] + (s[hi][2] - s[lo][2]) * f, s[lo][3] + (s[hi][3] - s[lo][3]) * f);
+    tr.outside = false;
+  }
+
+  setStates(states) {
+    this.stateCache = states;
+    if (states) {
+      this._stateIdx = new Map();
+      for (const b of states.bodies || []) this._stateIdx.set('p:' + b.name, b);
+      for (const m of states.moons || []) this._stateIdx.set('m:' + m.name, m);
     }
   }
 
-  setStates(states) { this.stateCache = states; }
-
+  // SPICE state carried forward along its instantaneous circular arc: stays on the
+  // orbit at any time rate, where straight-line extrapolation made moons jump.
   _statePos(kind, name, idx, jd) {
-    // API cache (SPICE truth) extrapolated by vel; fallback: analytic elements
     const c = this.stateCache;
-    if (c) {
-      const list = kind === 'planet' ? c.bodies : c.moons;
-      const e = list && list.find(b => b.name === name);
-      if (e) {
-        const dj = jd - c.jd;
-        if (Math.abs(dj) < 1.5) {
-          return new THREE.Vector3(
-            e.pos[0] + e.vel[0] * dj, e.pos[1] + e.vel[1] * dj, e.pos[2] + e.vel[2] * dj);
+    if (c && this._stateIdx) {
+      const e = this._stateIdx.get((kind === 'planet' ? 'p:' : 'm:') + name);
+      const dj = jd - c.jd;
+      if (e && Math.abs(dj) < 12) {
+        _r.set(e.pos[0], e.pos[1], e.pos[2]);
+        _v.set(e.vel[0], e.vel[1], e.vel[2]);
+        const r2 = _r.lengthSq();
+        if (r2 > 0) {
+          _u.crossVectors(_r, _v);
+          const h = _u.length();
+          if (h > 0) {
+            _u.divideScalar(h);
+            _q.setFromAxisAngle(_u, (h / r2) * dj);
+            return _r.clone().applyQuaternion(_q);
+          }
         }
+        return _r.clone().addScaledVector(_v, dj);
       }
     }
     return kind === 'planet' ? eph.planetState(idx, jd).pos : eph.moonRel(idx, jd);
   }
 
-  stateSrc() {
-    return this.stateCache && this.stateCache.src === 'spice' ? 'DE440s + SPKs' : 'mean elements';
+  // true while the drawn positions rest on kernel states rather than mean elements
+  usingKernels(jd) {
+    const c = this.stateCache;
+    return !!(c && c.src === 'spice' && Math.abs(jd - c.jd) < 12);
   }
 
-  update(jd, camWorld, tSec) {
+  stateSrc(jd) {
+    return this.usingKernels(jd ?? this.lastJd) ? 'DE440s + satellite SPKs' : 'mean elements';
+  }
+
+  // Moves every body to jd. Runs before the camera so frame-riding never lags.
+  updatePositions(jd) {
+    this.lastJd = jd;
     this.bodiesList.length = 0;
-    const off = (g, world) => {
-      g.position.set(world.x - camWorld.x, world.y - camWorld.y, world.z - camWorld.z);
-    };
-    // Sun
     const sun = this.groups.get('Sun');
     sun.world.set(0, 0, 0);
-    off(sun.group, sun.world);
-    sun.mat.uniforms.uTime.value = tSec;
-    // corona billboard stays body-scaled; the flux glow point carries the
-    // sun's appearance at range (a fixed-angular quad reads as an artifact)
-    this.sunGlow.scale.setScalar(sun.radius * 4.5);
-    this.sunGlow.quaternion.copy(this._camQuat || new THREE.Quaternion());
     this.bodiesList.push({ name: 'Sun', kind: 'star', world: sun.world, radius: sun.radius });
-    // helio ink + glow cloud ride the sun frame
-    this.helio.position.copy(sun.group.position);
-    this.glowGroup.position.copy(sun.group.position);
-    // planets
     for (let i = 0; i < eph.PLANETS.length; i++) {
       const p = eph.PLANETS[i];
       const rec = this.groups.get(p.name);
       rec.world.copy(this._statePos('planet', p.name, i, jd));
-      off(rec.group, rec.world);
-      const basis = eph.bodyBasis(i, jd);
-      rec.mesh.quaternion.copy(basisToQuatMesh(basis));
-      if (rec.ring) rec.ring.quaternion.copy(basisToQuatRing(basis));
-      const d = rec.world.distanceTo(camWorld);
-      rec.group.visible = d < rec.radius * 250000;
-      if (rec.group.visible) this._lightUniforms(rec, camWorld);
-      const ol = this.orbitLines.get(p.name);
-      ol.line.material.uniforms.uHead.value = ((jd - ol.jd0) / ol.period) % 1;
-      this.bodiesList.push({ name: p.name, kind: 'planet', world: rec.world, radius: rec.radius, idx: i });
-      // moon orbit group rides the planet
-      const og = this.moonOrbitGroups.get(p.name);
-      if (og) {
-        og.position.copy(rec.group.position);
-        og.visible = d < 3e12;
-      }
+      this.bodiesList.push({ name: p.name, kind: 'planet', world: rec.world, radius: rec.radius, idx: i, frame: rec.ringOuter || rec.radius });
     }
-    // moons
     for (let mi = 0; mi < eph.MOONS.length; mi++) {
       const m = eph.MOONS[mi];
       const rec = this.groups.get(m.name);
       const parent = this.groups.get(rec.parent);
-      const rel = this._statePos('moon', m.name, mi, jd);
-      rec.world.copy(parent.world).add(rel);
-      const dParent = parent.world.distanceTo(camWorld);
-      const vis = dParent < 3e12;
-      rec.group.visible = vis;
-      if (vis) {
-        off(rec.group, rec.world);
-        rec.mesh.quaternion.copy(basisToQuatRing(eph.moonBasis(mi, jd)));
-        this._lightUniforms(rec, camWorld);
-        const ol = this.orbitLines.get(m.name);
-        ol.line.material.uniforms.uHead.value = ((jd - ol.jd0) / ol.period) % 1;
-        this.bodiesList.push({ name: m.name, kind: 'moon', world: rec.world, radius: rec.radius, moonIdx: mi, parent: rec.parent });
+      rec.world.copy(parent.world).add(this._statePos('moon', m.name, mi, jd));
+      this.bodiesList.push({ name: m.name, kind: 'moon', world: rec.world, radius: rec.radius, moonIdx: mi, parent: rec.parent });
+    }
+    for (const tr of this.tracks) {
+      this._trackAt(tr, jd);
+      this.bodiesList.push({ name: tr.name, kind: 'craft', world: tr.world, radius: 10, frame: 2e9, note: tr.note, outside: tr.outside });
+    }
+  }
+
+  // Everything that depends on the camera. pxScale: pixels per unit tangent.
+  updateRender(jd, camWorld, camQuat, tSec, pxScale, exposureHint) {
+    const cloudLon = (jd * 0.012) % 1;
+    const park = (g, w) => g.position.set(w.x - camWorld.x, w.y - camWorld.y, w.z - camWorld.z);
+    const sunRec = this.groups.get('Sun');
+    this.helio.position.set(-camWorld.x, -camWorld.y, -camWorld.z);
+    this.pointGroup.position.copy(this.helio.position);
+
+    // how zoomed out are we? orbit ink belongs to the system view, not to close-ups
+    let nearAlt = Infinity, nearR = 1;
+    for (const b of this.bodiesList) {
+      if (b.kind === 'craft') continue;
+      const alt = b.world.distanceTo(camWorld) - b.radius;
+      if (alt / b.radius < nearAlt / nearR) { nearAlt = alt; nearR = b.radius; }
+    }
+    const systemView = THREE.MathUtils.smoothstep(Math.log10(Math.max(nearAlt / nearR, 1e-3)), 1.5, 2.5);
+    const dSun = camWorld.length();
+
+    // Sun occlusion: any resolved body in front of it hides the glare
+    let sunVis = 1;
+    {
+      const toSun = _u.copy(camWorld).negate();
+      const dS = toSun.length() || 1;
+      toSun.divideScalar(dS);
+      const sunAng = sunRec.radius / dS;
+      for (const b of this.bodiesList) {
+        if (b.kind === 'craft' || b.kind === 'star') continue;
+        _v.copy(b.world).sub(camWorld);
+        const db = _v.length();
+        if (db >= dS) continue;
+        const ca = _v.dot(toSun) / db;
+        if (ca < 0.5) continue;
+        const sep = Math.acos(Math.min(ca, 1));
+        const ang = Math.asin(Math.min(b.radius / db, 1));
+        sunVis = Math.min(sunVis, THREE.MathUtils.smoothstep(sep, ang - sunAng * 0.3, ang + sunAng * 1.3));
       }
     }
-    // glow point positions (heliocentric)
-    const gp = this.glowPts.geometry.getAttribute('position');
-    for (let i = 0; i < this.glowNames.length; i++) {
-      const rec = this.groups.get(this.glowNames[i]);
-      gp.setXYZ(i, rec.world.x, rec.world.y, rec.world.z);
+    sunRec.occlusion = sunVis;
+    updateStarObject(this.sun, sunRec.world, sunRec.radius, camWorld, camQuat, tSec, pxScale, sunVis);
+
+    // planets and moons
+    const pvis = this.pointVis;
+    const pgeo = this.points.geometry;
+    const ppos = pgeo.getAttribute('position');
+    const plum = pgeo.getAttribute('lum');
+    const pc = PC;
+    for (let i = 0; i < this.pointNames.length; i++) {
+      const name = this.pointNames[i];
+      const rec = this.groups.get(name);
+      ppos.setXYZ(i, rec.world.x, rec.world.y, rec.world.z);
+      const d = rec.world.distanceTo(camWorld);
+      const discPx = rec.radius / Math.max(d, 1) * pxScale;
+      if (name === 'Sun') {
+        plum.setX(i, Math.pow(10, -0.4 * 4.67) );
+        pvis[i] = THREE.MathUtils.smoothstep(d, 3e14, 3e15);
+        continue;
+      }
+      const rAU = Math.max(rec.world.length() / AU, 0.05);
+      const H = ABS_MAG[name] ?? 2.5 - 5 * Math.log10(Math.max(rec.radius, 1e3) / 1e6);
+      plum.setX(i, Math.pow(10, -0.4 * H) * 2.35e-9 / (rAU * rAU));
+      pvis[i] = 1 - THREE.MathUtils.smoothstep(discPx, 1.2, 4.0);
+      const vis = discPx > 0.4;
+      rec.group.visible = vis;
+      if (discPx > 0.25) this.wantTexturesWhenClose(rec, discPx);
+      if (vis) this._lightUniforms(rec, camWorld, dSun, tSec, cloudLon);
     }
-    gp.needsUpdate = true;
-    for (const th of this.trackHeads) {
-      this.bodiesList.push({ name: th.name, kind: 'craft', world: th.world, radius: 10 });
+    ppos.needsUpdate = true; plum.needsUpdate = true;
+    pgeo.getAttribute('vis').needsUpdate = true;
+
+    // orbit ink: fades in as you zoom out, fades out again far beyond the system
+    for (let i = 0; i < eph.PLANETS.length; i++) {
+      const p = eph.PLANETS[i];
+      const rec = this.groups.get(p.name);
+      const ol = this.orbitLines.get(p.name);
+      const far = 1 - THREE.MathUtils.smoothstep(Math.log10(Math.max(dSun, 1) / rec.orbitA), 1.6, 2.6);
+      // an orbit you are sitting on is a bundle of near-parallel lines, not a shape
+      const onIt = THREE.MathUtils.smoothstep(Math.abs(dSun - rec.orbitA) / rec.orbitA, 0.1, 0.6);
+      const gain = systemView * far * Math.max(onIt, THREE.MathUtils.smoothstep(Math.abs(camWorld.z) / rec.orbitA, 0.15, 0.6));
+      ol.line.visible = gain > 0.003;
+      if (ol.line.visible) {
+        const u = ol.line.material.uniforms;
+        u.uGain.value = 0.9 * gain;
+        u.uHead.value = (((jd - ol.jd0) / ol.period) % 1 + 1) % 1;
+        u.uNear.value = rec.orbitA * 0.05;
+      }
+      const og = this.moonOrbitGroups.get(p.name);
+      if (og) {
+        park(og.group, rec.world);
+        const d = rec.world.distanceTo(camWorld);
+        const show = THREE.MathUtils.smoothstep(d / og.a, 0.05, 0.4) * (1 - THREE.MathUtils.smoothstep(d / og.a, 8, 40));
+        og.group.visible = show > 0.003;
+        if (og.group.visible) {
+          for (const line of og.group.children) {
+            line.material.uniforms.uGain.value = 0.55 * show;
+            line.material.uniforms.uNear.value = og.a * 0.02;
+          }
+        }
+      }
     }
+    for (const m of eph.MOONS) {
+      const ol = this.orbitLines.get(m.name);
+      ol.line.material.uniforms.uHead.value = (((jd - ol.jd0) / ol.period) % 1 + 1) % 1;
+    }
+    for (const tr of this.tracks) {
+      tr.line.visible = systemView > 0.02;
+      const u = tr.line.material.uniforms;
+      u.uGain.value = 0.32 * systemView;
+      u.uNear.value = 1e10;
+    }
+    return { systemView };
   }
 
-  _lightUniforms(rec, camWorld) {
-    // sun direction in the mesh's object space
-    const sunDirWorld = rec.world.clone().negate().normalize();
-    const inv = rec.mesh.quaternion.clone().invert();
-    const so = sunDirWorld.clone().applyQuaternion(inv);
-    rec.mat.uniforms.uSunObj.value.copy(so);
-    if (rec.mat.uniforms.uClose) {
-      const alt = rec.world.distanceTo(camWorld) / rec.radius - 1;
-      rec.mat.uniforms.uClose.value = Math.min(Math.max(1 - alt / 9, 0), 1);
+  wantTexturesWhenClose(rec, discPx) {
+    if (!rec.wantTex && discPx > 6) this.wantTextures(rec.name);
+  }
+
+  _lightUniforms(rec, camWorld, dSun, tSec, cloudLon) {
+    const u = rec.mat.uniforms;
+    if (rec.moonIdx !== undefined) rec.mesh.quaternion.copy(basisToQuatMesh(eph.moonBasis(rec.moonIdx, this.lastJd)));
+    else rec.mesh.quaternion.copy(basisToQuatMesh(eph.bodyBasis(rec.planetIdx, this.lastJd)));
+    rec.group.position.set(rec.world.x - camWorld.x, rec.world.y - camWorld.y, rec.world.z - camWorld.z);
+    if (rec.shell) rec.shell.quaternion.copy(rec.mesh.quaternion);
+    const inv = _q.copy(rec.mesh.quaternion).invert();
+    const rSun = Math.max(rec.world.length(), 1);
+    const sunDir = _u.copy(rec.world).divideScalar(-rSun);
+    const so = _v.copy(sunDir).applyQuaternion(inv);
+    u.uSunObj.value.copy(so);
+    const camObj = _r.copy(camWorld).sub(rec.world).divideScalar(rec.radius).applyQuaternion(inv);
+    u.uCamObj.value.copy(camObj);
+    u.uTime.value = tSec;
+    const dist = rec.world.distanceTo(camWorld);
+    const alt = dist / rec.radius - 1;
+    u.uClose.value = 1 - THREE.MathUtils.smoothstep(alt, 0.02, 0.45);
+    // sunlight falls with distance, compressed as an eye adapting to the dark would
+    const sunI = 2.7 * Math.pow(AU / rSun, 0.42);
+    u.uSunI.value = sunI;
+    u.uSunAng.value = RSUN / rSun;
+    u.uCloudLon.value = cloudLon;
+    if (rec.atmoMat) {
+      const au = rec.atmoMat.uniforms;
+      au.uSunObj.value.copy(so);
+      au.uCamObj.value.copy(camObj);
+      au.uSunE.value = rec.style.atmo.e * (sunI / 2.7);
+      // outside the shell draw the near face, depth tested; inside, the far face
+      const inside = camObj.length() < rec.style.atmo.top * 1.002;
+      rec.atmoMat.side = inside ? THREE.BackSide : THREE.FrontSide;
+      rec.atmoMat.depthTest = !inside;
+      if (rec.atmoMat.userData.inside !== inside) { rec.atmoMat.userData.inside = inside; rec.atmoMat.needsUpdate = true; }
     }
-    if (rec.atmoMat) rec.atmoMat.uniforms.uSunObj.value.copy(so);
+    if (rec.cloudMat) {
+      const cu = rec.cloudMat.uniforms;
+      cu.uSunObj.value.copy(so);
+      cu.uSunI.value = sunI;
+      cu.uCloudLon.value = cloudLon;
+      cu.uClose.value = u.uClose.value;
+      rec.cloudShell.quaternion.copy(rec.mesh.quaternion);
+      // from below the deck the shell would draw its back face: never needed here
+    }
     if (rec.lightsMat) rec.lightsMat.uniforms.uSunObj.value.copy(so);
     if (rec.ring) {
-      const invR = rec.ring.quaternion.clone().invert();
-      rec.ring.material.uniforms.uSunObj.value.copy(sunDirWorld.clone().applyQuaternion(invR));
+      rec.ring.quaternion.copy(basisToQuatRing(eph.bodyBasis(rec.planetIdx, this.lastJd)));
+      const invR = _q.copy(rec.ring.quaternion).invert();
+      const ru = rec.ring.material.uniforms;
+      ru.uSunObj.value.copy(sunDir).applyQuaternion(invR);
+      ru.uCamObj.value.copy(camWorld).sub(rec.world).divideScalar(rec.radius).applyQuaternion(invR);
+      ru.uSunI.value = sunI;
+      ru.uClose.value = 1 - THREE.MathUtils.smoothstep(dist / rec.radius, 2.0, 8.0);
     }
+    this._eclipsers(rec, inv);
   }
 
-  setCamQuat(q) { this._camQuat = q; }
+  // up to four bodies that could shadow this one: its moons, or its parent + siblings
+  _eclipsers(rec, inv) {
+    const u = rec.mat.uniforms;
+    const out = u.uOcc.value;
+    let n = 0;
+    const consider = (other) => {
+      if (n >= 4 || !other || other === rec) return;
+      const v = _r.copy(other.world).sub(rec.world);
+      const toSun = v.dot(_u.copy(rec.world).negate().normalize());
+      if (toSun <= 0) return;   // only something between us and the Sun casts a shadow here
+      v.divideScalar(rec.radius).applyQuaternion(inv);
+      out[n++].set(v.x, v.y, v.z, other.radius / rec.radius);
+    };
+    if (rec.moonIdx !== undefined) {
+      const parent = this.groups.get(rec.parent);
+      consider(parent);
+      for (const r of this.groups.values()) if (r.parent === rec.parent) consider(r);
+    } else {
+      for (const r of this.groups.values()) if (r.parent === rec.name) consider(r);
+    }
+    u.uNOcc.value = n;
+  }
 
   bodies() { return this.bodiesList; }
-
-  // world position of a solar-system body at jd WITHOUT a full update — used
-  // by the frame-riding camera, so it must match what update() will compute
-  predictWorld(name, jd) {
-    if (name === 'Sun') return new THREE.Vector3();
-    const pi = eph.PLANETS.findIndex(p => p.name === name);
-    if (pi >= 0) return this._statePos('planet', name, pi, jd);
-    const mi = eph.MOONS.findIndex(m => m.name === name);
-    if (mi >= 0) {
-      const parentName = eph.PLANETS[eph.MOONS[mi].parent].name;
-      return this.predictWorld(parentName, jd).add(this._statePos('moon', name, mi, jd));
-    }
-    return null;
-  }
+  body(name) { return this.bodiesList.find(b => b.name === name) || null; }
 
   nearestSurface(camWorld) {
     let best = Infinity, bestB = null;
@@ -887,40 +925,58 @@ export class SolarSystem {
     return { dist: Math.max(best, 0.1), body: bestB };
   }
 
+  // the facts and their provenance; every row carries an evidence key
   bodyCard(b, camWorld, jd) {
+    if (b.kind === 'craft') {
+      return {
+        title: b.name, kind: 'Spacecraft, not to scale',
+        rows: [
+          { label: 'From the Sun', value: `${(b.world.length() / AU).toFixed(2)} AU`, ev: 'horizons-track' },
+          { label: 'Distance', value: prettyRange(b.world.distanceTo(camWorld)), live: 'range' },
+        ],
+        note: b.outside ? 'The cached arc does not cover this date, so the marker holds at the end of its track.' : 'Position interpolated between cached Horizons samples.',
+      };
+    }
     const rows = [];
-    const evState = this.stateCache && this.stateCache.src === 'spice'
-      ? (b.kind === 'moon' ? 'satellite-spk' : 'de440') : 'approx-elements';
-    rows.push({ label: 'radius', value: `${Math.round(b.radius / 1e3).toLocaleString()} km`, ev: 'iau-rotation' });
-    const dSun = b.world.length();
-    if (b.kind !== 'star') {
-      rows.push({ label: 'sun distance', value: `${(dSun / 1.495978707e11).toFixed(3)} AU`, ev: evState });
-    }
+    const evState = this.usingKernels(jd) ? (b.kind === 'moon' ? 'satellite-spk' : 'de440') : (b.kind === 'moon' ? 'moon-mean-elements' : 'approx-elements');
+    rows.push({ label: 'Radius', value: `${Math.round(b.radius / 1e3).toLocaleString()} km`, ev: 'physical-constants' });
+    if (b.kind !== 'star') rows.push({ label: 'From the Sun', value: `${(b.world.length() / AU).toFixed(3)} AU`, ev: evState });
     const ol = this.orbitLines.get(b.name);
-    if (ol) rows.push({ label: 'orbital period', value: ol.period > 800 ? `${(ol.period / 365.25).toFixed(2)} yr` : `${ol.period.toFixed(2)} d`, ev: evState });
-    rows.push({ label: 'camera range', value: prettyRange(b.world.distanceTo(camWorld)) });
-    const grec = this.groups.get(b.name);
-    if (grec && grec.textured) {
-      rows.push({ label: 'imagery', value: 'mission mosaics (CC-BY pack)', ev: 'surface-imagery' });
-    }
-    if (b.name === 'Earth') {
-      rows.push({ label: 'coastlines', value: 'Natural Earth 110m', ev: 'coastlines' });
-      const nightReal = grec && grec.mat.uniforms.uHasNight.value > 0.5;
-      rows.push(nightReal
-        ? { label: 'night lights', value: 'Black Marble mosaic', ev: 'surface-imagery' }
-        : { label: 'night lights', value: 'illustrative placement', ev: 'land-lights' });
+    if (ol) rows.push({ label: 'Orbit', value: ol.period > 800 ? `${(ol.period / 365.25).toFixed(1)} years` : `${ol.period.toFixed(1)} days`, ev: evState });
+    rows.push({ label: 'Distance', value: prettyRange(b.world.distanceTo(camWorld)), live: 'range' });
+    const rec = this.groups.get(b.name);
+    if (rec) {
+      if (b.name === 'Earth') {
+        if (rec.textured) rows.push({ label: 'Surface', value: 'Blue Marble mosaic', ev: 'surface-imagery' });
+        else rows.push({ label: 'Land', value: 'Natural Earth outlines, painted', ev: 'coastlines' });
+        rows.push(rec.nightReal
+          ? { label: 'Night lights', value: 'Black Marble mosaic', ev: 'surface-imagery' }
+          : { label: 'Night lights', value: 'Synthetic placement', ev: 'land-lights' });
+        if (rec.cloudsReal) rows.push({ label: 'Clouds', value: 'One saved snapshot, not today', ev: 'cloud-layer' });
+      } else if (rec.textured) {
+        rows.push({ label: 'Surface', value: b.name === 'Sun' ? 'Solar mosaic, animated' : 'Mission mosaic', ev: 'surface-imagery' });
+      } else {
+        rows.push({ label: 'Surface', value: 'Procedural, no imagery', ev: 'procedural-surface' });
+      }
+      if (rec.ring) rows.push(rec.ringReal
+        ? { label: 'Rings', value: 'Radial brightness strip', ev: 'ring-imagery' }
+        : { label: 'Rings', value: 'From published zone radii', ev: 'ring-zones' });
+      if (rec.atmoMat) rows.push({ label: 'Atmosphere', value: 'Scattering model', ev: 'atmosphere-model' });
+      if (rec.isStar) rows.push({ label: 'Corona', value: 'Illustrative', ev: 'corona-illustrative' });
+      if (rec.planetIdx !== undefined || rec.moonIdx !== undefined) {
+        if (rec.moonIdx === undefined) rows.push({ label: 'Rotation', value: 'IAU pole and meridian', ev: 'iau-rotation' });
+        else rows.push({ label: 'Rotation', value: 'Tidally locked approximation', ev: 'moon-mean-elements' });
+      }
     }
     return {
       title: b.name,
-      kind: b.kind === 'moon' ? `moon of ${b.parent}` : b.kind,
+      kind: b.kind === 'moon' ? `Moon of ${b.parent}` : b.kind === 'star' ? 'Our star' : 'Planet',
       rows,
-      note: `states: ${this.stateSrc()}`,
     };
   }
 }
 
-function prettyRange(m) {
-  const AU = 1.495978707e11;
+export function prettyRange(m) {
   if (m < 1e7) return `${(m / 1e3).toFixed(0)} km`;
   if (m < 0.1 * AU) return `${Math.round(m / 1e3).toLocaleString()} km`;
   return `${(m / AU).toFixed(3)} AU`;

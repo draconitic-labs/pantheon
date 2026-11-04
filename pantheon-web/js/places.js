@@ -1,0 +1,48 @@
+// Pantheon 3D: one-click destinations and one-line facts. `at` is where each place
+// sits on the ruler: roughly how far the camera is from Earth when it arrives (m).
+// The ruler is evenly spaced by place and logarithmic between them.
+export const PLACES = [
+  { id: 'body:Earth', name: 'Earth', at: 2.2e7 },
+  { id: 'body:Moon', name: 'Moon', at: 3.84e8 },
+  { id: 'body:Sun', name: 'Sun', at: 1.5e11 },
+  { id: 'body:Mars', name: 'Mars', at: 2.3e11, minor: true },
+  { id: 'body:Jupiter', name: 'Jupiter', at: 7.8e11 },
+  { id: 'body:Saturn', name: 'Saturn', at: 1.43e12 },
+  { id: 'body:Neptune', name: 'Neptune', at: 4.5e12, minor: true },
+  { id: 'v:solar', name: 'Solar system', at: 2.5e13 },
+  { id: 'star:α Centauri', name: 'Alpha Centauri', at: 4.1e16 },
+  { id: 'exo:TRAPPIST-1', name: 'TRAPPIST-1', at: 3.8e17, minor: true },
+  { id: 'v:nearby', name: 'Nearby stars', at: 1.2e18 },
+  { id: 'v:milkyway', name: 'Milky Way', at: 1.9e21 },
+  { id: 'gal:Andromeda (M31)', name: 'Andromeda', at: 2.4e22 },
+  { id: 'v:localgroup', name: 'Local Group', at: 6e22, minor: true },
+  { id: 'node:Virgo Cluster', name: 'Virgo Cluster', at: 5e23, minor: true },
+  { id: 'v:web', name: 'Cosmic web', at: 1.9e25 },
+];
+
+export const FACTS = {
+  Earth: 'The only world known to hold life. Night lights are real satellite imagery.',
+  Moon: 'About 384,400 km from Earth, and always showing it the same face.',
+  Sun: 'Holds about 99.8% of the mass of the solar system.',
+  Mercury: 'A year here lasts 88 Earth days.',
+  Venus: 'Hotter than Mercury, under a runaway greenhouse of carbon dioxide.',
+  Mars: 'Home to Olympus Mons, the tallest known volcano.',
+  Jupiter: 'More massive than all the other planets combined.',
+  Saturn: 'Its main rings span about 270,000 km and are mostly far under a kilometre thick.',
+  Uranus: 'Rolls around the Sun tipped almost onto its side.',
+  Neptune: 'The fastest winds measured on any planet.',
+  Pluto: 'A dwarf planet at the inner edge of the Kuiper belt. No map here yet.',
+  Titan: 'The only moon with a thick atmosphere.',
+  Europa: 'A salt-water ocean is thought to lie beneath its ice.',
+  Io: 'The most volcanically active body known.',
+  Ganymede: 'The largest moon in the solar system.',
+  'α Centauri': 'The nearest star system, 4.3 light-years from the Sun.',
+  'TRAPPIST-1': 'Seven rocky planets around a dim red star, about 40 light-years away.',
+  'Solar system': 'Orbits are real; the planets are too small to see at true scale, so they show as points.',
+  'Nearby stars': 'Every star here is a real Gaia measurement. The sky photograph fades as you leave the Sun.',
+  'Milky Way': 'A few hundred billion stars. This portrait is an illustrative model, not a survey.',
+  'Andromeda (M31)': 'About 2.5 million light-years away. Position and tilt are measured; the portrait is illustrative.',
+  'Local Group': 'The Milky Way, Andromeda, Triangulum and their dwarf companions, at catalog positions.',
+  'Virgo Cluster': 'The nearest large cluster of galaxies. Its position is catalog; the galaxies drawn here are synthetic.',
+  'Cosmic web': 'Named clusters are at catalog positions. Every filament here is synthetic.',
+};
