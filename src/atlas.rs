@@ -1806,7 +1806,7 @@ fn belts_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
         );
         let radius = |k: usize| {
             // plutinos pile up at the 3:2 resonance; the cold belt lies at 42-48 AU
-            Some(if k % 4 == 0 {
+            Some(if k.is_multiple_of(4) {
                 39.4 + (seeded(k, 31) - 0.5) * 1.1
             } else {
                 41.5 + 6.5 * seeded(k, 31)

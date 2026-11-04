@@ -60,7 +60,7 @@ fn parse_size(s: &str, require_even: bool) -> anyhow::Result<(u32, u32)> {
     );
     if require_even {
         anyhow::ensure!(
-            w % 2 == 0 && h % 2 == 0,
+            w.is_multiple_of(2) && h.is_multiple_of(2),
             "video frames need even dimensions, got {w}x{h}"
         );
     }
