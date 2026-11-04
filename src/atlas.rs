@@ -121,6 +121,8 @@ enum SurfaceSource {
 enum PositionSource {
     Kernel,
     PlanetElements,
+    /// our Moon's precessing ellipse
+    LunarModel,
     MoonElements,
 }
 
@@ -808,7 +810,8 @@ pub fn build(inp: &BuildIn, dl: &mut DrawList) -> FrameOut {
         dl.disc_tex = idx.iter().map(|&i| dl.disc_tex[i]).collect();
     }
 
-    let jd_ok = (1800.0..=2050.0).contains(&jd_year(jd));
+    // the kernels cover 1850-2150, so inside that the elements' own range doesn't matter
+    let jd_ok = (1800.0..=2050.0).contains(&jd_year(jd)) || sim::eph_is_spice(jd);
     if !jd_ok {
         out.labels.push(Label {
             pos: [(inp.w / 2.0) as f32, 90.0],
@@ -884,7 +887,8 @@ fn body_caption(src: SurfaceSource) -> (&'static str, Prov) {
         SurfaceSource::Map => ("The surface is a map built from NASA imagery, with tuned colour and some gaps filled. Atmosphere glow is illustrative.", Prov::Inferred),
         SurfaceSource::Procedural(Kernel) => ("The surface pattern is procedural: no map of this body is on this computer. Its position comes from a JPL kernel.", Prov::Procedural),
         SurfaceSource::Procedural(PlanetElements) => ("The surface pattern is procedural: no map of this body is on this computer. Its position comes from approximate orbital elements, not a JPL kernel.", Prov::Procedural),
-        SurfaceSource::Procedural(MoonElements) => ("The surface pattern is procedural: no map of this body is on this computer. No kernel for it is loaded, so its place along its orbit is chosen for legibility and isn't where it really is.", Prov::Procedural),
+        SurfaceSource::Procedural(LunarModel) => ("The surface pattern is procedural: no map of this body is on this computer. Its position comes from a simple lunar model, about a degree off, not a JPL kernel.", Prov::Procedural),
+        SurfaceSource::Procedural(MoonElements) => ("The surface pattern is procedural: no map of this body is on this computer. No kernel covers it at this date, so its place along its orbit is chosen for legibility and isn't where it really is.", Prov::Procedural),
     }
 }
 
@@ -1669,6 +1673,8 @@ fn moons_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mut
             } else {
                 let position = if sim::moon_is_spice(mi, jd) {
                     PositionSource::Kernel
+                } else if is_luna {
+                    PositionSource::LunarModel
                 } else {
                     PositionSource::MoonElements
                 };

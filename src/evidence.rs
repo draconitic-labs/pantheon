@@ -159,7 +159,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             source: "JPL satellite mean elements (embedded)",
             citation: "circular-inclined approximation",
             frame: "parent IAU equator + per-moon inclination",
-            note: "fallback when no satellite kernel covers the moon",
+            note: "used when no satellite kernel covers this moon. tools/fetch_data.py downloads none for Uranus, so its moons always use this",
             dataset: None,
         },
         Ev::LunaModel => EvidenceRec {
@@ -223,7 +223,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             source: "illustrative rendering",
             citation: "deterministic procedural sampling",
             frame: "—",
-            note: "used when no satellite kernel covers this moon. tools/fetch_data.py downloads none for Uranus, so its moons always use this",
+            note: "shows that something is there, not what exactly; positions of named objects come from a catalog",
             dataset: None,
         },
         Ev::NBodyIsland => EvidenceRec {
