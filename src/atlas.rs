@@ -68,8 +68,8 @@ pub struct Island {
     pub anchor: ObjectRef,
     pub trails: Vec<Vec<DVec3>>,
     pub jd: f64,
-    /// initial scaled energy, for the drift diagnostic
-    pub e0: f64,
+    /// each moon's initial orbital energy about its planet, for the drift diagnostic
+    pub e0: Vec<f64>,
 }
 
 pub struct Label {
@@ -2255,10 +2255,7 @@ fn galaxy_layer(inp: &BuildIn, proj: &Proj, lw: f64, dl: &mut DrawList, out: &mu
     if aw > 0.01 && !inp.modes.truth {
         for (k, (name, r0)) in ARM_NAMES.iter().enumerate() {
             let az = -1.1 + k as f64 * 0.55;
-            let r = r0 * (0.2126 * az).exp();
-            // azimuth from the Sun's direction: galactocentric (-x, y) in the plane
-            let x = -r * az.cos();
-            let y = r * az.sin();
+            let (x, y) = arm_point(*r0, az);
             let p = proj.px(u.gal.center + u.gal.x * (x * KPC) + u.gal.y * (y * KPC));
             out.labels.push(Label {
                 pos: p,
@@ -2960,6 +2957,52 @@ fn focused_star_layer(
 
 // ------------------------------------------------------------ gravity view
 
+/// A point on the spiral arm that crosses the Sun's azimuth at radius `r0` (kpc), `az` radians
+/// along it, in galactocentric kpc. Azimuth is measured from the Sun's direction, growing the way
+/// the Galaxy turns, and the arms trail: radius shrinks as azimuth grows, Reid et al. 2014.
+fn arm_point(r0: f64, az: f64) -> (f64, f64) {
+    let r = r0 * (-ARM_PITCH * az).exp();
+    (-r * az.cos(), r * az.sin())
+}
+
+/// tan 12°, the same as ARM_PITCH in shaders/band.wgsl.
+const ARM_PITCH: f64 = 0.2126;
+
+/// How fast the focused body moves relative to what it orbits, per day: a moon relative to its
+/// planet, a planet relative to the Sun. A moon's heliocentric velocity is mostly its planet's.
+fn pair_relative_velocity(
+    u: &Universe,
+    focus: Option<ObjectRef>,
+    jd: f64,
+    island: Option<&Island>,
+) -> DVec3 {
+    let Some(obj) = focus else {
+        return DVec3::ZERO;
+    };
+    let rel = |t: f64| {
+        let primary = match obj {
+            ObjectRef::Moon(mi) => obj_pos(u, ObjectRef::Planet(MOONS[mi].planet), t, island),
+            _ => DVec3::ZERO,
+        };
+        obj_pos(u, obj, t, island) - primary
+    };
+    let dtd = 0.01;
+    (rel(jd + dtd) - rel(jd - dtd)) / (2.0 * dtd)
+}
+
+/// The five Lagrange points of a secondary at `pb` around a primary at `pa`, in the pair's real
+/// orbital plane. L4 leads the secondary along its motion, and L5 trails it.
+fn lagrange_markers(pa: DVec3, pb: DVec3, vrel: DVec3, mu: f64) -> [DVec3; 5] {
+    let sep_m = (pb - pa).length().max(1.0);
+    let e1w = (pb - pa) / sep_m;
+    let mut nrm = e1w.cross(vrel.normalize_or_zero());
+    if nrm.length_squared() < 1e-6 {
+        nrm = DVec3::Z;
+    }
+    let e2w = nrm.normalize().cross(e1w);
+    lagrange_points(mu).map(|l| pa + e1w * ((l[0] + mu) * sep_m) + e2w * (l[1] * sep_m))
+}
+
 fn gravity_layer(inp: &BuildIn, proj: &Proj, dl: &mut DrawList, out: &mut FrameOut) {
     let (u, jd, truth) = (inp.u, inp.clock.jd, inp.modes.truth);
     // choose the pair: focused moon → (planet, moon); focused planet → (Sun, planet)
@@ -2996,20 +3039,8 @@ fn gravity_layer(inp: &BuildIn, proj: &Proj, dl: &mut DrawList, out: &mut FrameO
     // Lagrange point markers in the true 3D orbital plane
     // (the plane basis comes from the pair's relative angular momentum, then
     // projects — correct under any camera tilt).
-    let sep_m = (pb - pa).length().max(1.0);
-    let e1w = (pb - pa) / sep_m;
-    let dtd = 0.01; // days, for the relative velocity direction
-    let obj_b = inp.focus.unwrap_or(ObjectRef::Sun);
-    let vrel = (obj_pos(u, obj_b, jd + dtd, inp.island) - obj_pos(u, obj_b, jd - dtd, inp.island))
-        / (2.0 * dtd);
-    let mut nrm = e1w.cross(vrel.normalize_or_zero());
-    if nrm.length_squared() < 1e-6 {
-        nrm = DVec3::Z;
-    }
-    let nrm = nrm.normalize();
-    let e2w = nrm.cross(e1w);
-    for (k, l) in lagrange_points(mu).iter().enumerate() {
-        let world = pa + e1w * ((l[0] + mu) * sep_m) + e2w * (l[1] * sep_m);
+    let vrel = pair_relative_velocity(u, inp.focus, jd, inp.island);
+    for (k, world) in lagrange_markers(pa, pb, vrel, mu).into_iter().enumerate() {
         let px = proj.px(world);
         let c = ink([0.9, 0.75, 0.4], 0.9, truth, Prov::Modeled);
         dl.circle(px, 5.0, StrokeStyle::new(c, 1.0));
@@ -3072,6 +3103,88 @@ mod tests {
     use std::cell::Cell;
 
     type Runs = Vec<Vec<(f64, f64, f64)>>;
+
+    /// The arms wind as measured, and the names sit on them. The shader's formula is
+    /// repeated here, and checked to still be what the shader says.
+    #[test]
+    fn the_spiral_arms_trail_and_their_names_sit_on_them() {
+        let wgsl = include_str!("../shaders/band.wgsl");
+        assert!(
+            wgsl.contains("let phase = 4.0 * (th + log(max(r, 0.5) / 5.0) / ARM_PITCH);"),
+            "the shader's arms should wind so that radius shrinks as azimuth grows"
+        );
+        let phase = |x: f64, y: f64| {
+            let (th, r) = (y.atan2(-x), x.hypot(y));
+            4.0 * (th + (r.max(0.5) / 5.0).ln() / ARM_PITCH)
+        };
+        for (_, r0) in ARM_NAMES.iter() {
+            let (x0, y0) = arm_point(*r0, 0.0);
+            let crest = phase(x0, y0);
+            for az in [-1.1, -0.5, 0.5, 1.1] {
+                let (x, y) = arm_point(*r0, az);
+                assert!(
+                    (phase(x, y) - crest).abs() < 1e-9,
+                    "a name left its arm at {az}"
+                );
+                // trailing: further along the rotation, closer to the centre
+                let (x1, y1) = arm_point(*r0, az + 0.1);
+                assert!(x1.hypot(y1) < x.hypot(y));
+            }
+        }
+    }
+
+    /// L4 ahead of the motion and L5 behind it, in the real orbital plane, for moons and
+    /// planets, over many dates.
+    #[test]
+    fn lagrange_markers_lead_and_trail_in_the_real_plane() {
+        let u = Universe::load();
+        let bodies = [
+            ("Moon", ObjectRef::Moon(0)),
+            ("Phobos", ObjectRef::Moon(1)),
+            ("Titan", ObjectRef::Moon(12)),
+            ("Charon", ObjectRef::Moon(20)),
+            ("Mars", ObjectRef::Planet(3)),
+        ];
+        assert_eq!(MOONS[12].name, "Titan");
+        assert_eq!(MOONS[20].name, "Charon");
+        for (name, obj) in bodies {
+            let primary = |t: f64| match obj {
+                ObjectRef::Moon(mi) => obj_pos(&u, ObjectRef::Planet(MOONS[mi].planet), t, None),
+                _ => DVec3::ZERO,
+            };
+            let (mut swapped, mut worst_plane) = (0, 0.0f64);
+            let dates = 800;
+            for k in 0..dates {
+                // a little over 18 years, off any multiple of these periods
+                let jd = 2_455_197.5 + k as f64 * 8.37;
+                let (pa, pb) = (primary(jd), obj_pos(&u, obj, jd, None));
+                let vrel = pair_relative_velocity(&u, Some(obj), jd, None);
+                let [_, _, _, l4, l5] = lagrange_markers(pa, pb, vrel, 1e-4);
+                // the real motion and plane, measured independently over a small arc
+                let h = 0.002;
+                let r0 = obj_pos(&u, obj, jd - h, None) - primary(jd - h);
+                let r1 = obj_pos(&u, obj, jd + h, None) - primary(jd + h);
+                let (r, v) = ((r0 + r1) * 0.5, r1 - r0);
+                let normal = r.cross(v).normalize();
+                let ahead = normal.cross(r).normalize();
+                if (l4 - pa).dot(ahead) <= 0.0 || (l5 - pa).dot(ahead) >= 0.0 {
+                    swapped += 1;
+                }
+                let n = (l4 - pa).cross(l5 - pa).normalize();
+                worst_plane =
+                    worst_plane.max(n.dot(normal).abs().clamp(0.0, 1.0).acos().to_degrees());
+            }
+            println!("{name:8} L4/L5 swapped on {swapped} of {dates} dates, plane off by up to {worst_plane:.2}°");
+            assert_eq!(
+                swapped, 0,
+                "{name}: L4 and L5 swapped on {swapped} of {dates} dates"
+            );
+            assert!(
+                worst_plane < 1.0,
+                "{name}: the plane is off by up to {worst_plane}°"
+            );
+        }
+    }
 
     /// Run the tessellator over a curve, returning the runs and how often it was evaluated.
     fn tessellate(f: &dyn Fn(f64) -> DVec3) -> (Runs, u32) {

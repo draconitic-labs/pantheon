@@ -100,10 +100,12 @@ fn sky_color(px: vec2<f32>) -> vec3<f32> {
 const ARM_PITCH: f32 = 0.2126; // tan 12 deg
 
 // Four-arm logarithmic spiral. Radii along the Sun's azimuth (5.0, 7.0, 9.8,
-// 13.7 kpc) put Sol between the Sagittarius and Perseus arms. Stylized.
+// 13.7 kpc) put Sol between the Sagittarius and Perseus arms. Stylized, but winding
+// as measured: ln(R/Rref) = -(az-azref) tan(pitch), Reid et al. 2014, with azimuth growing
+// the way the Galaxy turns, so the arms trail.
 fn arm_field(g: vec2<f32>, r: f32) -> vec3<f32> {
     let th = atan2(g.y, -g.x); // azimuth measured from the Sun's direction
-    let phase = 4.0 * (th - log(max(r, 0.5) / 5.0) / ARM_PITCH);
+    let phase = 4.0 * (th + log(max(r, 0.5) / 5.0) / ARM_PITCH);
     // angular crest + a dust lane offset toward the inner edge of each arm
     let crest = 0.5 + 0.5 * cos(phase);
     let lane = 0.5 + 0.5 * cos(phase + 0.85);
