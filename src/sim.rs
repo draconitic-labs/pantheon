@@ -371,6 +371,29 @@ pub fn planet_orbit(i: usize, jd: f64, n: usize) -> Vec<DVec3> {
         .collect()
 }
 
+/// One point of the osculating orbit ellipse at eccentric anomaly `ea`.
+pub fn planet_orbit_point(i: usize, jd: f64, ea: f64) -> DVec3 {
+    let p = &PLANETS[i];
+    let t = (jd - J2000) / 36_525.0;
+    let a = (p.el[0] + p.rate[0] * t) * AU;
+    let e = (p.el[1] + p.rate[1] * t).max(0.0);
+    let inc = (p.el[2] + p.rate[2] * t).to_radians();
+    let lp = (p.el[4] + p.rate[4] * t).to_radians();
+    let node = (p.el[5] + p.rate[5] * t).to_radians();
+    perifocal_to_ecl(node, inc, lp - node)
+        * DVec3::new(a * (ea.cos() - e), a * (1.0 - e * e).sqrt() * ea.sin(), 0.0)
+}
+
+/// Eccentric anomaly of the planet on its osculating orbit at `jd`.
+pub fn planet_eccentric_anomaly(i: usize, jd: f64) -> f64 {
+    let p = &PLANETS[i];
+    let t = (jd - J2000) / 36_525.0;
+    let e = (p.el[1] + p.rate[1] * t).max(0.0);
+    let l = (p.el[3] + p.rate[3] * t).to_radians();
+    let lp = (p.el[4] + p.rate[4] * t).to_radians();
+    kepler_solve((l - lp) % std::f64::consts::TAU, e)
+}
+
 // ------------------------------------------------------------- moons
 
 pub struct MoonDef {

@@ -87,7 +87,59 @@ pub struct CamAnim {
     pub c1: DVec3,
     pub lm0: f64,
     pub lm1: f64,
-    pub bump: f64, // extra log10-mpp lift at midpoint for long lateral hops
+    /// the zoom-and-pan path (van Wijk & Nuij 2003): pull back just enough that
+    /// the on-screen motion stays readable, however far the hop
+    path: ZoomPan,
+    /// user tilt and yaw glide with the flight (shortest arc for yaw)
+    pub tilt0: f64,
+    pub tilt1: f64,
+    pub yaw0: f64,
+    pub yaw1: f64,
+}
+
+const PATH_RHO: f64 = 1.3;
+
+#[derive(Clone, Copy)]
+struct ZoomPan {
+    w0: f64,
+    r0: f64,
+    /// total path length; 0 means start and end coincide
+    s_total: f64,
+    /// nonzero when there is no lateral move: pure exponential zoom
+    pure_k: f64,
+    u1: f64,
+}
+
+impl ZoomPan {
+    fn new(w0: f64, w1: f64, u1: f64) -> Self {
+        let rho = PATH_RHO;
+        if u1 < 1e-9 * w0.min(w1) {
+            let s = (w1 / w0).ln().abs() / rho;
+            let k = if w1 >= w0 { 1.0 } else { -1.0 };
+            return Self { w0, r0: 0.0, s_total: s, pure_k: k, u1 };
+        }
+        let r2 = rho * rho;
+        // b = (w1^2 - w0^2 +- rho^4 u^2) / (2 w rho^2 u), written in ratios so it
+        // stays finite across 20 orders of magnitude
+        let b0 = (w1 / w0) * (w1 / u1) / (2.0 * r2) - (w0 / u1) / (2.0 * r2) + r2 * (u1 / w0) / 2.0;
+        let b1 = (w1 / u1) / (2.0 * r2) - (w0 / w1) * (w0 / u1) / (2.0 * r2) - r2 * (u1 / w1) / 2.0;
+        let r0 = -b0.asinh();
+        let r1 = -b1.asinh();
+        Self { w0, r0, s_total: ((r1 - r0) / rho).max(0.0), pure_k: 0.0, u1 }
+    }
+
+    /// (lateral travel fraction 0..=1, view width) at path position s.
+    fn at(&self, s: f64) -> (f64, f64) {
+        let rho = PATH_RHO;
+        if self.pure_k != 0.0 {
+            return (0.0, self.w0 * (self.pure_k * rho * s).exp());
+        }
+        let c = (rho * s + self.r0).cosh();
+        // cosh(r0) tanh(rho s + r0) - sinh(r0), rewritten without cancellation
+        let u = self.w0 / (rho * rho) * (rho * s).sinh() / c;
+        let w = self.w0 * self.r0.cosh() / c;
+        ((u / self.u1).clamp(0.0, 1.0), w)
+    }
 }
 
 /// FRAMEGRAPH-003: the camera is attached to a frame. `center` is a LOCAL
@@ -103,11 +155,18 @@ pub struct Camera {
     /// root-frame origin of the attached frame
     pub frame_origin: DVec3,
     pub mpp: f64,
+    /// user tilt about the screen x axis, radians (0 = looking straight down)
     pub tilt: f64,
+    /// user rotation of the map about its own normal, radians
+    pub yaw: f64,
+    /// presentation offset added close to a body: three-quarter lit, north up.
+    /// Fades to zero as the view widens, so maps stay plan-view.
+    pub pres_tilt: f64,
+    pub pres_yaw: f64,
     pub anim: Option<CamAnim>,
 }
 
-pub const MPP_MIN: f64 = 0.02;
+pub const MPP_MIN: f64 = 4.0;
 pub const MPP_MAX: f64 = 2.0e22; // ~ 1e25 m across a 1600 px window
 
 impl Camera {
@@ -117,6 +176,9 @@ impl Camera {
             frame_origin: DVec3::ZERO,
             mpp: 2.0e9,
             tilt: 0.0,
+            yaw: 0.0,
+            pres_tilt: 0.0,
+            pres_yaw: 0.0,
             anim: None,
         }
     }
@@ -144,15 +206,14 @@ impl Camera {
         (self.mpp * screen_w).log10()
     }
 
-    /// Fly to an absolute (root-frame) target; `screen_w` px decides the
-    /// mid-zoom-out bump. The animation itself runs in local coordinates.
+    /// Fly to an absolute (root-frame) target. The animation runs in local
+    /// coordinates; `screen_w` px converts metres per pixel to a view width.
     pub fn fly_to(&mut self, center: DVec3, mpp: f64, screen_w: f64, dur: f64) {
         let target_local = center - self.frame_origin;
         let lm0 = self.mpp.log10();
         let lm1 = mpp.clamp(MPP_MIN, MPP_MAX).log10();
         let dist = (target_local - self.center).length();
-        let need = (dist / (0.30 * screen_w)).max(1e-30).log10();
-        let bump = (need - lm0.max(lm1)).max(0.0);
+        let path = ZoomPan::new(10f64.powf(lm0) * screen_w, 10f64.powf(lm1) * screen_w, dist);
         self.anim = Some(CamAnim {
             t: 0.0,
             dur: dur.max(0.05),
@@ -160,27 +221,57 @@ impl Camera {
             c1: target_local,
             lm0,
             lm1,
-            bump,
+            path,
+            tilt0: self.tilt,
+            tilt1: self.tilt,
+            yaw0: self.yaw,
+            yaw1: self.yaw,
         });
     }
 
+    /// A pleasant duration for a hop to this view, in seconds.
+    pub fn flight_seconds(&self, center: DVec3, mpp: f64, screen_w: f64) -> f64 {
+        let dist = (center - self.frame_origin - self.center).length();
+        let s = ZoomPan::new(self.mpp * screen_w, mpp.clamp(MPP_MIN, MPP_MAX) * screen_w, dist).s_total;
+        (0.75 + 0.1 * s).clamp(0.75, 4.5)
+    }
+
+    /// Same flight, also gliding the user tilt and yaw to new values.
+    pub fn fly_to_view(&mut self, center: DVec3, mpp: f64, tilt: f64, yaw: f64, screen_w: f64, dur: f64) {
+        self.fly_to(center, mpp, screen_w, dur);
+        if let Some(a) = &mut self.anim {
+            a.tilt1 = tilt;
+            a.yaw1 = shortest_arc(a.yaw0, yaw);
+        }
+    }
+
     /// Advance animation; returns true while animating.
-    pub fn tick(&mut self, dt: f64) -> bool {
+    pub fn tick(&mut self, dt: f64, screen_w: f64) -> bool {
         let Some(a) = &mut self.anim else { return false };
         a.t += dt;
         let s = (a.t / a.dur).clamp(0.0, 1.0);
         let e = s * s * (3.0 - 2.0 * s);
-        let lm = a.lm0 + (a.lm1 - a.lm0) * e + a.bump * 4.0 * e * (1.0 - e);
-        self.mpp = 10f64.powf(lm);
-        self.center = a.c0 + (a.c1 - a.c0) * e;
+        let (frac, width) = a.path.at(a.path.s_total * e);
+        self.mpp = (width / screen_w).max(1e-6);
+        self.center = a.c0 + (a.c1 - a.c0) * frac;
+        self.tilt = a.tilt0 + (a.tilt1 - a.tilt0) * e;
+        self.yaw = a.yaw0 + (a.yaw1 - a.yaw0) * e;
         if s >= 1.0 {
             self.center = a.c1;
             self.mpp = 10f64.powf(a.lm1);
+            self.tilt = a.tilt1;
+            self.yaw = a.yaw1;
             self.anim = None;
             return false;
         }
         true
     }
+}
+
+/// `to`, shifted by whole turns so it is the nearest equivalent angle to `from`.
+pub fn shortest_arc(from: f64, to: f64) -> f64 {
+    let tau = std::f64::consts::TAU;
+    from + (to - from + std::f64::consts::PI).rem_euclid(tau) - std::f64::consts::PI
 }
 
 /// A resolved projection: world (root, m) or frame-local (m) → screen px.
@@ -215,8 +306,17 @@ impl Proj {
         q = q.slerp(q_sg, t2);
         let m = DMat3::from_quat(q);
         let (mut right, mut up, mut out) = (m.col(0), m.col(1), m.col(2));
-        if cam.tilt.abs() > 1e-6 {
-            let rot = DQuat::from_axis_angle(right, -cam.tilt);
+        let yaw = cam.yaw + cam.pres_yaw;
+        if yaw.abs() > 1e-9 {
+            let rot = DQuat::from_axis_angle(out, yaw);
+            right = rot * right;
+            up = rot * up;
+        }
+        // positive tilt swings the camera toward the bottom of the screen, so the
+        // top of the map recedes. Past 90 degrees the camera is under the plane.
+        let tilt = (cam.tilt + cam.pres_tilt).clamp(-2.5, 2.5);
+        if tilt.abs() > 1e-6 {
+            let rot = DQuat::from_axis_angle(right, tilt);
             up = rot * up;
             out = rot * out;
         }
@@ -378,6 +478,73 @@ mod tests {
         cam.rebase(DVec3::ZERO);
         assert!((cam.center_root() - before).length() < 100.0);
         assert!(cam.frame_origin.length() < 1e-9);
+    }
+
+    #[test]
+    fn yaw_then_tilt_puts_camera_at_requested_ecliptic_direction() {
+        let mut cam = Camera::new();
+        let lon = 2.1f64;
+        let elev = 0.4f64;
+        for elev in [elev, -elev] {
+            cam.tilt = std::f64::consts::FRAC_PI_2 - elev;
+            cam.yaw = lon + std::f64::consts::FRAC_PI_2;
+            let proj = Proj::new(&cam, 1600.0, 900.0, &galactic_frame());
+            let want = DVec3::new(elev.cos() * lon.cos(), elev.cos() * lon.sin(), elev.sin());
+            assert!((proj.out - want).length() < 1e-9, "out = {:?}", proj.out);
+            // ecliptic north stays on the upper half of the screen, from either side
+            assert!(proj.up.z > 0.0);
+        }
+    }
+
+    #[test]
+    fn flight_lands_exactly_and_stays_finite_across_all_scales() {
+        // Earth close-up to the cosmic web and back: 18 orders of magnitude
+        let far = DVec3::new(3.0e24, -1.0e24, 5.0e23);
+        let mut cam = Camera::new();
+        cam.center = DVec3::new(1.5e11, 2.0e9, 0.0);
+        cam.mpp = 2.0e4;
+        for (target, mpp) in [(far, 5.0e21), (DVec3::new(1.5e11, 2.0e9, 0.0), 2.0e4)] {
+            cam.fly_to(target, mpp, 1600.0, 2.0);
+            let mut widest = 0.0f64;
+            let mut prev = cam.center;
+            for _ in 0..200 {
+                cam.tick(0.01, 1600.0);
+                assert!(cam.mpp.is_finite() && cam.mpp > 0.0, "mpp {}", cam.mpp);
+                assert!(cam.center.is_finite());
+                widest = widest.max(cam.mpp);
+                prev = cam.center;
+            }
+            let _ = prev;
+            assert!(cam.anim.is_none());
+            assert_eq!(cam.center, target);
+            assert!((cam.mpp - mpp).abs() / mpp < 1e-9);
+            // it pulled back at least to the coarser end of the hop
+            assert!(widest >= mpp * 0.99);
+        }
+    }
+
+    #[test]
+    fn flight_without_lateral_motion_is_a_pure_zoom() {
+        let mut cam = Camera::new();
+        cam.center = DVec3::new(1.0e11, 0.0, 0.0);
+        cam.mpp = 1.0e5;
+        cam.fly_to(cam.center, 1.0e9, 1600.0, 1.0);
+        let c = cam.center;
+        let mut last = cam.mpp;
+        for _ in 0..100 {
+            cam.tick(0.0101, 1600.0);
+            assert_eq!(cam.center, c);
+            assert!(cam.mpp >= last * 0.9999, "zoom must be monotonic");
+            last = cam.mpp;
+        }
+        assert!((cam.mpp - 1.0e9).abs() / 1.0e9 < 1e-9);
+    }
+
+    #[test]
+    fn shortest_arc_never_turns_the_long_way() {
+        let tau = std::f64::consts::TAU;
+        assert!((shortest_arc(0.1, tau - 0.1) - (-0.1)).abs() < 1e-12);
+        assert!((shortest_arc(3.0, 3.2) - 3.2).abs() < 1e-12);
     }
 
     #[test]
