@@ -20,7 +20,8 @@ apps running. The on-screen labels already say most of this where it applies.
   libration.
 - **Rotation.** IAU rotation elements, with the small periodic terms left out.
 - **Gravity view.** Contours are computed in the screen plane, so they are exact only when
-  the system is seen face-on. The Lagrange point markers are correct in 3D.
+  the system is seen face-on. The Lagrange point markers are correct in 3D, on a date or from
+  the simulated bodies' own motion in a simulation.
 - **Cosmic distances.** Straight lines from the Sun in a flat space. There is no cosmology.
 - **Star motion.** Proper motion is linear, with no perspective acceleration or binary motion,
   and it stops being meaningful over thousands of years.

@@ -2983,7 +2983,8 @@ const ARM_PITCH: f64 = 0.2126;
 
 /// How fast the focused body moves relative to what it orbits, per day: a moon relative to its
 /// planet, a planet relative to the Sun. A moon's heliocentric velocity is mostly its planet's.
-fn pair_relative_velocity(
+/// In a simulation that's the simulated bodies' own motion, which no date can tell you.
+pub(crate) fn pair_relative_velocity(
     u: &Universe,
     focus: Option<ObjectRef>,
     jd: f64,
@@ -2992,20 +2993,24 @@ fn pair_relative_velocity(
     let Some(obj) = focus else {
         return DVec3::ZERO;
     };
-    let rel = |t: f64| {
-        let primary = match obj {
-            ObjectRef::Moon(mi) => obj_pos(u, ObjectRef::Planet(MOONS[mi].planet), t, island),
-            _ => DVec3::ZERO,
-        };
-        obj_pos(u, obj, t, island) - primary
+    let primary = match obj {
+        ObjectRef::Moon(mi) => ObjectRef::Planet(MOONS[mi].planet),
+        _ => ObjectRef::Sun,
     };
+    if let Some(isl) = island {
+        let vel = |o: ObjectRef| isl.ids.iter().position(|i| *i == o).map(|k| isl.sim.vel[k]);
+        if let (Some(va), Some(vb)) = (vel(primary), vel(obj)) {
+            return (vb - va) * crate::frames::DAY;
+        }
+    }
+    let rel = |t: f64| obj_pos(u, obj, t, island) - obj_pos(u, primary, t, island);
     let dtd = 0.01;
     (rel(jd + dtd) - rel(jd - dtd)) / (2.0 * dtd)
 }
 
 /// The five Lagrange points of a secondary at `pb` around a primary at `pa`, in the pair's real
 /// orbital plane. L4 leads the secondary along its motion, and L5 trails it.
-fn lagrange_markers(pa: DVec3, pb: DVec3, vrel: DVec3, mu: f64) -> [DVec3; 5] {
+pub(crate) fn lagrange_markers(pa: DVec3, pb: DVec3, vrel: DVec3, mu: f64) -> [DVec3; 5] {
     let sep_m = (pb - pa).length().max(1.0);
     let e1w = (pb - pa) / sep_m;
     let mut nrm = e1w.cross(vrel.normalize_or_zero());
@@ -3031,7 +3036,8 @@ fn gravity_layer(inp: &BuildIn, proj: &Proj, dl: &mut DrawList, out: &mut FrameO
         }
         Some(ObjectRef::Planet(i)) => {
             let pp = obj_pos(u, ObjectRef::Planet(i), jd, inp.island);
-            Some((DVec3::ZERO, GM_SUN, pp, PLANETS[i].gm, pp.length()))
+            let sun = obj_pos(u, ObjectRef::Sun, jd, inp.island);
+            Some((sun, GM_SUN, pp, PLANETS[i].gm, (pp - sun).length()))
         }
         _ => None,
     };

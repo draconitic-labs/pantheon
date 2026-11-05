@@ -141,6 +141,44 @@ fn island_gm(o: ObjectRef) -> f64 {
     }
 }
 
+/// A simulation of a planet's system as it stands on this date: Sun, planet, then its moons.
+fn build_island(u: &Universe, pi: usize, jd: f64) -> Island {
+    let mut ids = vec![ObjectRef::Sun, ObjectRef::Planet(pi)];
+    for (mi, m) in MOONS.iter().enumerate() {
+        if m.planet == pi {
+            ids.push(ObjectRef::Moon(mi));
+        }
+    }
+    let dt = 60.0;
+    let mut gm = Vec::new();
+    let mut pos = Vec::new();
+    let mut vel = Vec::new();
+    for o in &ids {
+        let p0 = obj_pos(u, *o, jd - dt / 86_400.0, None);
+        let p1 = obj_pos(u, *o, jd + dt / 86_400.0, None);
+        pos.push(obj_pos(u, *o, jd, None));
+        vel.push((p1 - p0) / (2.0 * dt));
+        gm.push(island_gm(*o));
+    }
+    let n = ids.len();
+    let mut sim = NBody {
+        gm,
+        pos,
+        vel,
+        label: format!("{} system", PLANETS[pi].name),
+    };
+    sim.zero_momentum();
+    let e0 = sim.moon_orbit_energies(ISLAND_PLANET);
+    Island {
+        sim,
+        ids,
+        anchor: ObjectRef::Planet(pi),
+        trails: vec![Vec::new(); n],
+        jd,
+        e0,
+    }
+}
+
 pub struct Pantheon {
     pub gpu: GpuContext,
     pub pipes: Pipelines,
@@ -931,41 +969,7 @@ impl Pantheon {
                 return;
             }
         };
-        let jd = self.clock.jd;
-        let mut ids = vec![ObjectRef::Sun, ObjectRef::Planet(pi)];
-        for (mi, m) in MOONS.iter().enumerate() {
-            if m.planet == pi {
-                ids.push(ObjectRef::Moon(mi));
-            }
-        }
-        let dt = 60.0;
-        let mut gm = Vec::new();
-        let mut pos = Vec::new();
-        let mut vel = Vec::new();
-        for o in &ids {
-            let p0 = obj_pos(&self.u, *o, jd - dt / 86_400.0, None);
-            let p1 = obj_pos(&self.u, *o, jd + dt / 86_400.0, None);
-            pos.push(obj_pos(&self.u, *o, jd, None));
-            vel.push((p1 - p0) / (2.0 * dt));
-            gm.push(island_gm(*o));
-        }
-        let n = ids.len();
-        let mut sim = NBody {
-            gm,
-            pos,
-            vel,
-            label: format!("{} system", PLANETS[pi].name),
-        };
-        sim.zero_momentum();
-        let e0 = sim.moon_orbit_energies(ISLAND_PLANET);
-        self.island = Some(Island {
-            sim,
-            ids,
-            anchor: ObjectRef::Planet(pi),
-            trails: vec![Vec::new(); n],
-            jd,
-            e0,
-        });
+        self.island = Some(build_island(&self.u, pi, self.clock.jd));
         self.modes.living = true;
         self.clock.playing = true;
         // a legible default rate: moons visibly orbit, nothing teleports
@@ -2544,6 +2548,8 @@ mod tests {
         a.cam.anim = None;
     }
 
+    const TEST_DATE: f64 = 2_461_349.5; // 2026-11-05
+
     #[test]
     fn scrolling_out_of_an_exoplanet_system_and_back_is_continuous() {
         let Some(mut h) = host() else { return };
@@ -2785,6 +2791,66 @@ mod tests {
             "{}",
             a.cam.mpp
         );
+    }
+
+    /// The Lagrange markers with a simulation running, against the simulated bodies' own motion.
+    #[test]
+    fn lagrange_markers_follow_the_simulated_motion() {
+        let u = Universe::load();
+        for (name, sample_days) in [
+            ("Moon", 2.0),
+            ("Phobos", 0.03),
+            ("Titan", 0.8),
+            ("Titania", 0.4),
+            ("Triton", 0.3),
+            ("Charon", 0.3),
+        ] {
+            let mi = MOONS.iter().position(|m| m.name == name).unwrap();
+            let moon = ObjectRef::Moon(mi);
+            let pi = MOONS[mi].planet;
+            let mut isl = build_island(&u, pi, TEST_DATE);
+            let k_moon = isl.ids.iter().position(|o| *o == moon).unwrap();
+            let period = isl
+                .ids
+                .iter()
+                .filter_map(|o| match o {
+                    ObjectRef::Moon(m) => Some(MOONS[*m].period_d.abs()),
+                    _ => None,
+                })
+                .fold(f64::MAX, f64::min);
+            let h = period * 86_400.0 / 600.0;
+            let steps = (sample_days * 86_400.0 / h).ceil() as usize;
+            let (mut swapped, mut worst) = (0, 0.0f64);
+            let samples = 800;
+            let rel = |isl: &Island| isl.sim.pos[k_moon] - isl.sim.pos[1];
+            for _ in 0..samples {
+                for _ in 0..steps {
+                    isl.sim.step(h);
+                }
+                // the real motion and plane, from where the bodies actually go
+                let r0 = rel(&isl);
+                let vrel = crate::atlas::pair_relative_velocity(&u, Some(moon), 0.0, Some(&isl));
+                let pa = isl.sim.pos[1];
+                let pb = isl.sim.pos[k_moon];
+                let [_, _, _, l4, l5] = crate::atlas::lagrange_markers(pa, pb, vrel, 1e-4);
+                let mut probe = isl.sim.clone();
+                probe.step(h);
+                let r1 = probe.pos[k_moon] - probe.pos[1];
+                let normal = r0.cross(r1).normalize();
+                let ahead = normal.cross(r0).normalize();
+                if (l4 - pa).dot(ahead) <= 0.0 || (l5 - pa).dot(ahead) >= 0.0 {
+                    swapped += 1;
+                }
+                let n = (l4 - pa).cross(l5 - pa).normalize();
+                worst = worst.max(n.dot(normal).abs().clamp(0.0, 1.0).acos().to_degrees());
+            }
+            println!("{name:8} swapped on {swapped} of {samples}, plane off by up to {worst:.2}°");
+            assert_eq!(
+                swapped, 0,
+                "{name}: L4 and L5 swapped on {swapped} of {samples}"
+            );
+            assert!(worst < 1.0, "{name}: the plane is off by up to {worst}°");
+        }
     }
 
     #[test]
