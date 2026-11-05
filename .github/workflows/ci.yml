@@ -49,7 +49,7 @@ jobs:
           test -s "$RUNNER_TEMP/shots/earth.png"
 
       - name: Clippy
-        run: cargo clippy --locked --lib --bins -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
 
       - name: Check the Python tools and installer
         run: |

@@ -1468,16 +1468,16 @@ mod far_date_tests {
     #[test]
     fn every_position_is_finite_at_any_date() {
         for jd in far_dates() {
-            for i in 0..PLANETS.len() {
-                assert!(planet_pos(i, jd).is_finite(), "{} at {jd}", PLANETS[i].name);
-                assert!(body_pos(i, jd).is_finite(), "{} at {jd}", PLANETS[i].name);
-                assert!(planet_vel(i, jd).is_finite(), "{} at {jd}", PLANETS[i].name);
+            for (i, planet) in PLANETS.iter().enumerate() {
+                assert!(planet_pos(i, jd).is_finite(), "{} at {jd}", planet.name);
+                assert!(body_pos(i, jd).is_finite(), "{} at {jd}", planet.name);
+                assert!(planet_vel(i, jd).is_finite(), "{} at {jd}", planet.name);
                 assert!(planet_orbit_point(i, jd, 1.0).is_finite());
                 assert!(planet_eccentric_anomaly(i, jd).is_finite());
                 assert!(planet_orbit(i, jd, 8).iter().all(|p| p.is_finite()));
             }
-            for mi in 0..MOONS.len() {
-                assert!(moon_rel(mi, jd).is_finite(), "{} at {jd}", MOONS[mi].name);
+            for (mi, moon) in MOONS.iter().enumerate() {
+                assert!(moon_rel(mi, jd).is_finite(), "{} at {jd}", moon.name);
             }
         }
     }
