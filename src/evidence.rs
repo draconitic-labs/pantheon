@@ -231,7 +231,7 @@ pub fn rec(e: Ev) -> EvidenceRec {
             source: "local N-body island (leapfrog)",
             citation: "authoritative GMs, momentum-zeroed init",
             frame: "heliocentric inertial",
-            note: "the card shows the largest change so far in any moon's orbital energy, or with no moons the planet's own about the Sun. Normal, from start dates 1950-2050: 1% to 2.2% for our Moon, from the Sun's tide, and 0.2% or less for every other system. Far more means steps too coarse for the orbits: a step 100 times too long reads 9% or more where there are moons. It measures an orbit's size and not where a moon is along it, so the card also counts frames too slow for the full steps, and a moon's place can drift with little change here",
+            note: "the card shows the largest change so far in any moon's orbital energy, or with no moons the planet's own about the Sun. Normal, from start dates 1950-2050: 1% to 2.2% for our Moon, from the Sun's tide, and 0.2% or less for every other system. Far more means steps too coarse for the orbits: a step 100 times too long reads about 9% or more where there are moons. It measures an orbit's size and not where a moon is along it, so the card also counts frames too slow for the full steps, and a moon's place can drift with little change here",
             dataset: None,
         },
         Ev::MoonPhase => EvidenceRec {
