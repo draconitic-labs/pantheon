@@ -2463,6 +2463,21 @@ pub fn run_bench(w: u32, h: u32, which: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A recording stores the width of the window it was made in. Only a hand edit can make that
+/// something no window was, and it would silently render at the zoom limits.
+fn check_view_widths(keys: &[PathKey]) -> anyhow::Result<()> {
+    for (i, key) in keys.iter().enumerate() {
+        if let Some(w) = key.view_w {
+            anyhow::ensure!(
+                (1.0..=65536.0).contains(&w),
+                "path file: keyframe {} has view_w {w}, which isn't a window width (1 to 65536 pixels)",
+                i + 1
+            );
+        }
+    }
+    Ok(())
+}
+
 pub fn run_path(
     path: &std::path::Path,
     w: u32,
@@ -2472,6 +2487,7 @@ pub fn run_path(
 ) -> anyhow::Result<()> {
     let keys: Vec<PathKey> = serde_json::from_str(&std::fs::read_to_string(path)?)?;
     anyhow::ensure!(!keys.is_empty(), "path file has no keyframes");
+    check_view_widths(&keys)?;
     let mut host = Headless::new()?;
     host.app.cinema = true;
     host.app.view_w = w as f64;
@@ -2811,6 +2827,38 @@ mod tests {
             "{}",
             a.cam.mpp
         );
+    }
+
+    #[test]
+    fn a_recording_with_an_impossible_width_is_refused() {
+        let key = |view_w| PathKey {
+            center: [0.0; 3],
+            mpp: 1000.0,
+            view_w,
+            tilt: 0.0,
+            yaw: 0.0,
+            jd: sim::J2000,
+            dur: 0.1,
+            hold: 0.0,
+            at: None,
+            host: None,
+        };
+        for good in [None, Some(1.0), Some(840.0), Some(3840.0), Some(65536.0)] {
+            assert!(check_view_widths(&[key(good)]).is_ok(), "{good:?}");
+        }
+        for bad in [
+            0.0,
+            -1680.0,
+            0.5,
+            1e308,
+            f64::NAN,
+            f64::INFINITY,
+            -f64::INFINITY,
+        ] {
+            let e = check_view_widths(&[key(Some(1680.0)), key(Some(bad))]).unwrap_err();
+            let e = e.to_string();
+            assert!(e.contains("keyframe 2") && e.contains("view_w"), "{e}");
+        }
     }
 
     /// The Lagrange markers with a simulation running, against the simulated bodies' own motion.
