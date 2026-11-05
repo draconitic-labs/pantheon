@@ -2575,14 +2575,46 @@ pub fn run_path(
 mod tests {
     use super::*;
 
-    /// A real app, without a window. With nothing here that can render, the test skips and says
-    /// so, unless `PANTHEON_REQUIRE_GPU` is set, as CI sets it, and then it fails.
-    fn host() -> Option<Headless> {
+    /// A real app, without a window, one test at a time. Each creates and destroys a Vulkan
+    /// device, and with several doing so at once the test process segfaults now and then, in
+    /// the Vulkan loader's `loader_get_icd_and_device` as wgpu names an object, while other
+    /// threads are in `vkCreateDevice` and `vkDestroyDevice`.
+    struct Host {
+        // first, so the device is gone before the next test starts
+        headless: Headless,
+        _one_at_a_time: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl std::ops::Deref for Host {
+        type Target = Headless;
+        fn deref(&self) -> &Headless {
+            &self.headless
+        }
+    }
+
+    impl std::ops::DerefMut for Host {
+        fn deref_mut(&mut self) -> &mut Headless {
+            &mut self.headless
+        }
+    }
+
+    static RENDERER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// With nothing here that can render, the test skips and says so, unless
+    /// `PANTHEON_REQUIRE_GPU` is set, as CI sets it, and then it fails.
+    fn host() -> Option<Host> {
+        // a failed test only poisons this lock: the renderer it guards is its own
+        let one_at_a_time = RENDERER
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         match Headless::new() {
             Ok(mut h) => {
                 h.app.view_w = 1600.0;
                 h.app.view_h = 900.0;
-                Some(h)
+                Some(Host {
+                    headless: h,
+                    _one_at_a_time: one_at_a_time,
+                })
             }
             Err(e) => {
                 assert!(
