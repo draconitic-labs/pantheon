@@ -68,8 +68,13 @@ pub struct Island {
     pub anchor: ObjectRef,
     pub trails: Vec<Vec<DVec3>>,
     pub jd: f64,
-    /// each moon's initial orbital energy about its planet, for the drift diagnostic
+    /// each orbit's initial energy, for the drift diagnostic
     pub e0: Vec<f64>,
+    /// the largest drift in any of those energies so far
+    pub peak_drift: f64,
+    /// frames too slow for the full number of substeps, and how much coarser the worst one's were
+    pub coarse_frames: u32,
+    pub coarsest: f64,
 }
 
 pub struct Label {

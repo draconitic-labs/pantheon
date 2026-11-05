@@ -194,7 +194,7 @@ const REG = {
     'local N-body island (leapfrog)',
     'authoritative GMs, momentum-zeroed init',
     'heliocentric inertial',
-    'the card shows the largest change in any moon\'s orbital energy since the start. Tides from the Sun and other moons move it a little: about 1% for our Moon is normal', false],
+    'the card shows the largest change so far in any moon\'s orbital energy, or with no moons the planet\'s own about the Sun. Normal, from start dates 1950-2050: 1% to 2.2% for our Moon, from the Sun\'s tide, and 0.2% or less for every other system. Far more means steps too coarse for the orbits: a step 100 times too long reads 9% or more where there are moons. It measures an orbit\'s size and not where a moon is along it, so the card also counts frames too slow for the full steps, and a moon\'s place can drift with little change here', false],
   'gravity-model': [MO,
     'CR3BP effective potential + L-points',
     'circular restricted three-body approximation',

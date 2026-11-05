@@ -26,7 +26,10 @@ apps running. The on-screen labels already say most of this where it applies.
 - **Star motion.** Proper motion is linear, with no perspective acceleration or binary motion,
   and it stops being meaningful over thousands of years.
 - **N-body islands.** The substep is a fixed fraction of the shortest moon period, not an
-  adaptive scheme. When time runs too fast for it, the simulation ends and says so.
+  adaptive scheme. A frame too slow for the full number of substeps takes coarser ones, and the
+  card counts those frames. When time runs too fast for that, the simulation ends and says so.
+  The energy row measures each orbit's size, not where a moon is along it: one slow frame at
+  1 year/s can leave Phobos far from where it would have been, with the row barely moving.
 
 ## Data
 

@@ -1222,30 +1222,33 @@ pub struct NBody {
 }
 
 impl NBody {
-    /// Each moon's orbital energy per unit mass about its planet, the body at `planet`: what a
-    /// moon's orbit keeps constant, apart from tides from the Sun and the other moons. The
-    /// system's total energy can't show this: the Sun's term swamps everything, and a large moon
-    /// swamps a small one.
-    pub fn moon_orbit_energies(&self, planet: usize) -> Vec<f64> {
-        ((planet + 1)..self.pos.len())
+    /// Each orbit's energy about what it circles: every moon about `planet`, or with no moons,
+    /// the planet about the Sun (body 0). Total energy can't stand in for this: it's dominated by
+    /// the planet around the Sun, and a large moon hides a small one.
+    pub fn orbit_energies(&self, planet: usize) -> Vec<f64> {
+        let (primary, first) = if self.pos.len() > planet + 1 {
+            (planet, planet + 1)
+        } else {
+            (0, planet)
+        };
+        (first..self.pos.len())
             .map(|i| {
                 let (dr, dv) = (
-                    self.pos[i] - self.pos[planet],
-                    self.vel[i] - self.vel[planet],
+                    self.pos[i] - self.pos[primary],
+                    self.vel[i] - self.vel[primary],
                 );
-                0.5 * dv.length_squared() - self.gm[planet] / dr.length().max(1.0)
+                0.5 * dv.length_squared() - self.gm[primary] / dr.length().max(1.0)
             })
             .collect()
     }
 
-    /// The largest relative change in any moon's orbital energy since `start`. `None` if
-    /// there are no moons.
-    pub fn moon_energy_drift(&self, planet: usize, start: &[f64]) -> Option<f64> {
-        self.moon_orbit_energies(planet)
+    /// The largest relative change right now in any of those energies since `start`.
+    pub fn orbit_energy_drift(&self, planet: usize, start: &[f64]) -> f64 {
+        self.orbit_energies(planet)
             .iter()
             .zip(start)
             .map(|(e, e0)| ((e - e0) / e0).abs())
-            .reduce(f64::max)
+            .fold(0.0, f64::max)
     }
 
     /// Remove the total momentum so the island barycenter stays put
@@ -1668,13 +1671,13 @@ mod energy_tests {
     fn drift(pi: usize, step_factor: f64, spans: f64) -> f64 {
         let jd = cal_to_jd(2026, 11, 4.5);
         let (mut s, substep) = system(pi, jd);
-        let e0 = s.moon_orbit_energies(1);
+        let e0 = s.orbit_energies(1);
         let h = substep * step_factor;
         let steps = (spans * 600.0 / step_factor) as usize;
         let mut worst = 0.0f64;
         for _ in 0..steps {
             s.step(h);
-            worst = worst.max(s.moon_energy_drift(1, &e0).unwrap());
+            worst = worst.max(s.orbit_energy_drift(1, &e0));
         }
         worst
     }
@@ -1700,10 +1703,10 @@ mod energy_tests {
     fn the_energy_drift_sees_one_moon_thrown_out() {
         for pi in [2usize, 3, 4, 5] {
             let (mut s, _) = system(pi, cal_to_jd(2026, 11, 4.5));
-            let e0 = s.moon_orbit_energies(1);
+            let e0 = s.orbit_energies(1);
             let (planet_v, k) = (s.vel[1], 2);
             s.vel[k] = planet_v + (s.vel[k] - planet_v) * 2.0;
-            let change = s.moon_energy_drift(1, &e0).unwrap();
+            let change = s.orbit_energy_drift(1, &e0);
             println!(
                 "{:8} doubling one moon's speed reads {change:.3}",
                 PLANETS[pi].name
@@ -1713,8 +1716,14 @@ mod energy_tests {
     }
 
     #[test]
-    fn a_system_with_no_moons_has_no_drift() {
-        let (s, _) = system(0, cal_to_jd(2026, 11, 4.5));
-        assert!(s.moon_energy_drift(1, &s.moon_orbit_energies(1)).is_none());
+    fn a_system_with_no_moons_measures_the_planet_itself() {
+        let (mut s, _) = system(0, cal_to_jd(2026, 11, 4.5));
+        let e0 = s.orbit_energies(1);
+        assert_eq!(e0.len(), 1);
+        // Mercury about the Sun: bound
+        assert!(e0[0] < 0.0);
+        assert_eq!(s.orbit_energy_drift(1, &e0), 0.0);
+        s.vel[1] *= 1.2;
+        assert!(s.orbit_energy_drift(1, &e0) > 0.1);
     }
 }

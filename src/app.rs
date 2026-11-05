@@ -168,7 +168,7 @@ fn build_island(u: &Universe, pi: usize, jd: f64) -> Island {
         label: format!("{} system", PLANETS[pi].name),
     };
     sim.zero_momentum();
-    let e0 = sim.moon_orbit_energies(ISLAND_PLANET);
+    let e0 = sim.orbit_energies(ISLAND_PLANET);
     Island {
         sim,
         ids,
@@ -176,6 +176,9 @@ fn build_island(u: &Universe, pi: usize, jd: f64) -> Island {
         trails: vec![Vec::new(); n],
         jd,
         e0,
+        peak_drift: 0.0,
+        coarse_frames: 0,
+        coarsest: 1.0,
     }
 }
 
@@ -578,8 +581,16 @@ impl Pantheon {
                     Some(0) => {}
                     Some(n) => {
                         let h = dt_sim / n as f64;
+                        let coarse = h.abs() / dt_sub;
+                        if coarse > 1.001 {
+                            isl.coarse_frames += 1;
+                            isl.coarsest = isl.coarsest.max(coarse);
+                        }
                         for s in 0..n {
                             isl.sim.step(h);
+                            isl.peak_drift = isl
+                                .peak_drift
+                                .max(isl.sim.orbit_energy_drift(ISLAND_PLANET, &isl.e0));
                             if s % 4 == 0 {
                                 for (k, p) in isl.sim.pos.iter().enumerate() {
                                     isl.trails[k].push(*p);
@@ -1520,14 +1531,23 @@ impl Pantheon {
                     provs.push(("Horizons cross-check".into(), Ev::HorizonsVectors));
                     provs.push(("residual interpolation".into(), Ev::HorizonsInterp));
                 }
-                let drift = self
-                    .island_of(obj)
-                    .and_then(|isl| isl.sim.moon_energy_drift(ISLAND_PLANET, &isl.e0));
-                if let Some(drift) = drift {
+                if let Some(isl) = self.island_of(obj) {
+                    let what = if isl.ids.len() > 2 { "moon" } else { "orbit" };
                     rows.push((
-                        "moon energy drift, worst".into(),
-                        format!("{:.2}%", drift * 100.0),
+                        format!("{what} energy drift, largest so far"),
+                        format!("{:.2}%", isl.peak_drift * 100.0),
                     ));
+                    if isl.coarse_frames > 0 {
+                        rows.push((
+                            "coarser steps".into(),
+                            format!(
+                                "{} slow frame{}, up to {:.1}x",
+                                isl.coarse_frames,
+                                if isl.coarse_frames == 1 { "" } else { "s" },
+                                isl.coarsest
+                            ),
+                        ));
+                    }
                     provs.push(("island diagnostics".into(), Ev::NBodyIsland));
                 }
                 if sim::eph_is_spice(jd) {
@@ -2851,6 +2871,138 @@ mod tests {
             );
             assert!(worst < 1.0, "{name}: the plane is off by up to {worst}°");
         }
+    }
+
+    /// What the note says is normal, against what the app's own simulations do.
+    #[test]
+    fn the_energy_note_states_what_the_row_reads() {
+        let u = Universe::load();
+        let note = crate::evidence::rec(crate::evidence::Ev::NBodyIsland).note;
+        assert!(note.contains("1% to 2.2% for our Moon"), "{note}");
+        assert!(note.contains("0.2% or less for every other"), "{note}");
+        let peak = |pi: usize, jd: f64, years: f64| {
+            let mut isl = build_island(&u, pi, jd);
+            let shortest = MOONS
+                .iter()
+                .filter(|m| m.planet == pi)
+                .map(|m| m.period_d.abs())
+                .fold(f64::MAX, f64::min);
+            let h = if shortest == f64::MAX {
+                3600.0
+            } else {
+                shortest * 86_400.0 / 600.0
+            };
+            let mut worst = 0.0f64;
+            for _ in 0..(years * 365.25 * 86_400.0 / h) as usize {
+                isl.sim.step(h);
+                worst = worst.max(isl.sim.orbit_energy_drift(ISLAND_PLANET, &isl.e0));
+            }
+            worst * 100.0
+        };
+        // every 2.5 years, 1950 to 2050: this start date matters, and the worst is near the top
+        for k in 0..40 {
+            let jd = 2_433_282.5 + k as f64 * 913.1;
+            let p = peak(2, jd, 3.0);
+            assert!((1.0..=2.2).contains(&p), "our Moon from JD {jd}: {p}%");
+        }
+        for pi in [3, 4, 5, 6, 7, 8] {
+            let p = peak(pi, TEST_DATE, 1.0);
+            assert!(p <= 0.2, "{}: {p}%", PLANETS[pi].name);
+        }
+        for pi in [0, 1] {
+            let p = peak(pi, TEST_DATE, 3.0);
+            assert!(p < 0.005, "{}: {p}% wouldn't read 0.00%", PLANETS[pi].name);
+        }
+    }
+
+    #[test]
+    fn the_energy_row_reads_the_largest_change_so_far() {
+        let Some(mut h) = host() else { return };
+        let a = &mut h.app;
+        a.clock.jd = TEST_DATE;
+        a.dive_to(ObjectRef::Planet(2));
+        land(a);
+        a.awaken();
+        a.clock.rate = 86_400.0;
+        let (mut peak, mut fell) = (0.0f64, false);
+        for _ in 0..1500 {
+            a.tick(FRAME);
+            let isl = a.island.as_ref().unwrap();
+            let now = isl.sim.orbit_energy_drift(ISLAND_PLANET, &isl.e0);
+            assert!(isl.peak_drift >= peak, "the reading went down");
+            assert!(
+                isl.peak_drift >= now,
+                "the reading is below the current value"
+            );
+            fell |= now < 0.9 * isl.peak_drift;
+            peak = isl.peak_drift;
+        }
+        assert!(peak > 0.0);
+        assert!(fell, "the current value never fell, so this shows nothing");
+        h.frame(800, 450, FRAME, false).unwrap();
+    }
+
+    #[test]
+    fn a_slow_frame_says_it_took_coarser_steps() {
+        let Some(mut h) = host() else { return };
+        let a = &mut h.app;
+        a.clock.jd = TEST_DATE;
+        a.dive_to(ObjectRef::Planet(3));
+        land(a);
+        a.awaken();
+        a.clock.rate = 2.63e6;
+        a.tick(FRAME);
+        assert_eq!(
+            a.island.as_ref().unwrap().coarse_frames,
+            0,
+            "a normal frame"
+        );
+        let rows = card_rows(a);
+        assert!(!rows.iter().any(|(k, _)| k == "coarser steps"), "{rows:?}");
+        a.tick(0.08);
+        let isl = a.island.as_ref().unwrap();
+        assert_eq!(isl.coarse_frames, 1);
+        // 80 ms at this rate wants about 4,600 substeps of 46 s, and gets 4,000
+        assert!(isl.coarsest > 1.1 && isl.coarsest < 1.3, "{}", isl.coarsest);
+        let rows = card_rows(a);
+        let row = rows.iter().find(|(k, _)| k == "coarser steps");
+        assert_eq!(
+            row.map(|(_, v)| v.as_str()),
+            Some("1 slow frame, up to 1.1x")
+        );
+    }
+
+    #[test]
+    fn a_planet_with_no_moons_reads_its_own_orbit() {
+        let Some(mut h) = host() else { return };
+        let a = &mut h.app;
+        a.clock.jd = TEST_DATE;
+        for pi in [0, 1] {
+            a.island = None;
+            a.clock.playing = false;
+            a.dive_to(ObjectRef::Planet(pi));
+            land(a);
+            a.awaken();
+            a.clock.rate = 86_400.0;
+            for _ in 0..300 {
+                a.tick(FRAME);
+            }
+            let rows = card_rows(a);
+            let row = rows.iter().find(|(k, _)| k.contains("energy drift"));
+            let (k, v) = row.unwrap_or_else(|| panic!("no reading: {rows:?}"));
+            assert_eq!(k, "orbit energy drift, largest so far");
+            assert_eq!(v, "0.00%", "{}: {v}", PLANETS[pi].name);
+            let isl = a.island.as_mut().unwrap();
+            // the reading can move: double the planet's speed about the Sun
+            isl.sim.vel[1] *= 2.0;
+            isl.sim.step(60.0);
+            assert!(isl.sim.orbit_energy_drift(ISLAND_PLANET, &isl.e0) > 1.0);
+        }
+    }
+
+    /// The rows of the focused object's card.
+    fn card_rows(a: &Pantheon) -> Vec<(String, String)> {
+        a.card_data(a.focus.unwrap()).2
     }
 
     #[test]
