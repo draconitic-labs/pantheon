@@ -240,10 +240,10 @@ function orbitLine(samples, color, gain = 1) {
   return line;
 }
 
-// The ellipse a moon's state defines about its parent (m and m/day, relative to the parent), as
-// n + 1 points starting from the moon, equally spaced in time. Null if the state isn't a bound
-// orbit. `period` and `a` give the pair's total GM: a moon's own mass matters for Charon.
-function ellipseThrough(pos, vel, period, a0, n) {
+// The ellipse a moon's state defines about its parent (m and m/day, relative to the parent). Null
+// if the state isn't a bound orbit. `period` and `a0` give the pair's total GM: a moon's own mass
+// matters for Charon.
+function fitEllipse(pos, vel, period, a0) {
   const TAU = Math.PI * 2, day = 86400;
   const gm = (TAU / (period * day)) ** 2 * a0 ** 3;
   const r = new THREE.Vector3(pos[0], pos[1], pos[2]);
@@ -260,12 +260,13 @@ function ellipseThrough(pos, vel, period, a0, n) {
   const nu = Math.atan2(r.dot(py), r.dot(px));
   const ea0 = Math.atan2(Math.sqrt(1 - e * e) * Math.sin(nu), e + Math.cos(nu));
   const m0 = ea0 - e * Math.sin(ea0);
-  const b = a * Math.sqrt(1 - e * e), out = [];
-  for (let k = 0; k <= n; k++) {
-    const ea = eph.keplerE((m0 + TAU * k / n) % TAU, e);
-    out.push(px.clone().multiplyScalar(a * (Math.cos(ea) - e)).addScaledVector(py, b * Math.sin(ea)));
-  }
-  return out;
+  return { px, py, a, b: a * Math.sqrt(1 - e * e), e, m0, n: TAU / Math.abs(period) };
+}
+
+// Where that ellipse has the moon `dj` days after its state.
+function onEllipse(f, dj) {
+  const ea = eph.keplerE((f.m0 + f.n * dj) % (Math.PI * 2), f.e);
+  return f.px.clone().multiplyScalar(f.a * (Math.cos(ea) - f.e)).addScaledVector(f.py, f.b * Math.sin(ea));
 }
 
 function pointInRings(lon, lat, rings) {
@@ -680,35 +681,50 @@ export class SolarSystem {
     if (states) {
       this._stateIdx = new Map();
       for (const b of states.bodies || []) this._stateIdx.set('p:' + b.name, b);
-      for (const m of states.moons || []) this._stateIdx.set('m:' + m.name, m);
-      this._fitMoonLines(states.jd);
+      for (const m of states.moons || []) {
+        this._stateIdx.set('m:' + m.name, m);
+        const mean = eph.MOONS[this.groups.get(m.name).moonIdx];
+        if (m.src === 'spice') m.fit = fitEllipse(m.pos, m.vel, mean.period, mean.a);
+      }
     }
   }
 
-  // A moon on a kernel sits on the ellipse its own state defines. The mean-element ellipse can be
-  // far from it: Iapetus's fixed node puts it 25 degrees off. A moon back on mean elements, on a
-  // date outside its kernel, gets the mean ellipse back.
-  _fitMoonLines(jd) {
-    for (let mi = 0; mi < eph.MOONS.length; mi++) {
-      const m = eph.MOONS[mi];
-      const ol = this.orbitLines.get(m.name);
-      const e = this._stateIdx.get('m:' + m.name);
-      const attr = ol.line.geometry.getAttribute('position');
-      const n = attr.count - 1;
-      const fit = e && e.src === 'spice' ? ellipseThrough(e.pos, e.vel, m.period, m.a, n) : null;
-      if (!fit && !ol.fitted) continue;
-      const samples = fit || Array.from({ length: n + 1 }, (_, k) => eph.moonRel(mi, jd + m.period * (k % n) / n));
-      for (let k = 0; k <= n; k++) attr.setXYZ(k, samples[k].x, samples[k].y, samples[k].z);
-      attr.needsUpdate = true;
-      ol.jd0 = jd;
-      ol.fitted = !!fit;
+  // A moon's line is the path the moon is on right now. On a kernel, that's the ellipse its own
+  // state defines: the mean ellipse can be far from it, Iapetus's fixed node puts it 25 degrees
+  // off. On mean elements, whether from the date or from time outrunning the states, it's the
+  // mean ellipse, kept up with the Moon's precessing model and with its planet's pole.
+  _keepMoonLine(mi, m, jd) {
+    const ol = this.orbitLines.get(m.name);
+    const e = this._stateIdx && this._stateIdx.get('m:' + m.name);
+    const fit = this.moonUsesKernel(m.name, jd) && e.fit ? e.fit : null;
+    const dj0 = jd - ol.jd0;
+    // the Moon's model isn't a closed ellipse: its line is good from when it was drawn for a period
+    const fresh = m.name === 'Moon' ? dj0 >= 0 && dj0 < m.period : Math.abs(dj0) < 100;
+    if (fit ? ol.fit === fit : !ol.fit && fresh) return;
+    const from = fit ? this.stateCache.jd : jd;
+    const attr = ol.line.geometry.getAttribute('position');
+    const n = attr.count - 1;
+    for (let k = 0; k <= n; k++) {
+      const dj = m.period * (k % n) / n;
+      const p = fit ? onEllipse(fit, dj) : eph.moonRel(mi, from + dj);
+      attr.setXYZ(k, p.x, p.y, p.z);
     }
+    attr.needsUpdate = true;
+    ol.fit = fit;
+    ol.jd0 = from;
   }
 
-  // SPICE state carried forward along its instantaneous circular arc: stays on the
-  // orbit at any time rate, where straight-line extrapolation made moons jump.
+  // A moon on a kernel goes round the ellipse of its last state, the line that's drawn for it; on
+  // mean elements, it's simply there. A planet's state is carried forward along its instantaneous
+  // circular arc: stays on the orbit at any time rate, where straight-line extrapolation made
+  // bodies jump.
   _statePos(kind, name, idx, jd) {
     const c = this.stateCache;
+    if (kind === 'moon') {
+      const fit = this.moonUsesKernel(name, jd) && this._stateIdx.get('m:' + name).fit;
+      if (fit) return onEllipse(fit, jd - c.jd);
+      if (!this.moonUsesKernel(name, jd)) return eph.moonRel(idx, jd);
+    }
     if (c && this._stateIdx) {
       const e = this._stateIdx.get((kind === 'planet' ? 'p:' : 'm:') + name);
       const dj = jd - c.jd;
@@ -766,6 +782,7 @@ export class SolarSystem {
       const rec = this.groups.get(m.name);
       const parent = this.groups.get(rec.parent);
       rec.world.copy(parent.world).add(this._statePos('moon', m.name, mi, jd));
+      this._keepMoonLine(mi, m, jd);
       this.bodiesList.push({ name: m.name, kind: 'moon', world: rec.world, radius: rec.radius, moonIdx: mi, parent: rec.parent });
     }
     for (const tr of this.tracks) {
