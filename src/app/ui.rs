@@ -1468,7 +1468,7 @@ impl Pantheon {
         self.panel_rects.push(card_rect);
         if close {
             self.focus = None;
-            self.follow = None;
+            self.stop_following();
         }
         if awaken {
             if self.island_of(obj).is_some() {

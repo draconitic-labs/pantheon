@@ -182,6 +182,35 @@ fn build_island(u: &Universe, pi: usize, jd: f64) -> Island {
     }
 }
 
+/// What a wheel zoom holds still. One rule: the zoom point moves with the thing it's on.
+#[derive(Clone, Copy)]
+struct ZoomPoint {
+    /// What it's on: the named thing under the pointer, or with nothing named there what you're
+    /// following, or with nothing followed, nothing at all.
+    on: Option<ObjectRef>,
+    /// The point itself when it's on nothing, in the camera's frame.
+    fixed: DVec3,
+    /// Where on the screen it's held.
+    screen: [f64; 2],
+    /// Where the thing it's on sits from there, in metres along the screen's axes, so that only
+    /// the zoom changes how far that looks: neither time nor the presentation tilt can.
+    gap: [f64; 2],
+    /// It's near enough the camera's plane for the camera to come to its depth, which matters
+    /// to what the camera counts as near. A star that only lines up with the pointer isn't.
+    to_its_depth: bool,
+    /// A click here would have selected it, so the camera stays with it when the zoom ends.
+    aimed: bool,
+}
+
+/// The way back from a scroll out: what it held, from what scale, and where the pointer was at
+/// the last notch.
+#[derive(Clone, Copy)]
+struct ScrolledOut {
+    point: ZoomPoint,
+    from_mpp: f64,
+    pointer: [f32; 2],
+}
+
 pub struct Pantheon {
     pub gpu: GpuContext,
     pub pipes: Pipelines,
@@ -238,11 +267,9 @@ pub struct Pantheon {
     // ---- motion state
     /// log10(mpp) still to be applied by the smooth zoom
     zoom_pending: f64,
-    /// the screen point and frame-local world point a zoom holds fixed
-    zoom_anchor: Option<(f64, f64, DVec3)>,
-    /// The point the last scroll out held under the pointer, and the scale it started from:
-    /// scrolling back with the pointer still on it retraces the way out.
-    scrolled_out: Option<(DVec3, f64)>,
+    zoom_anchor: Option<ZoomPoint>,
+    /// Scrolling back with the pointer still there retraces the way out.
+    scrolled_out: Option<ScrolledOut>,
     /// release velocity of a drag, px/s
     pan_vel: [f64; 2],
     drag_vel: [f64; 2],
@@ -457,7 +484,7 @@ impl Pantheon {
 
     /// A wheel notch or pinch at the pointer, or at the middle of the view with no pointer.
     fn wheel_zoom(&mut self, s: Option<[f32; 2]>, dex: f64, proj: &crate::frames::Proj) {
-        self.zoom_anchor = s.map(|s| self.zoom_anchor_at(s, dex, proj));
+        self.zoom_anchor = s.map(|s| self.zoom_point_at(s, dex, proj));
         self.zoom_pending += dex;
         self.cam.anim = None;
         self.play = None;
@@ -465,63 +492,135 @@ impl Pantheon {
         self.dismiss_intro();
     }
 
-    /// The point a wheel or pinch zoom holds still under the pointer at `s`.
-    ///
-    /// What's under the pointer always wins. Diving in, the anchor leans toward the nearest thing
+    /// A wheel or pinch's zoom point at the pointer. Diving in, it leans toward the nearest thing
     /// with a name, so repeated scrolling converges on it instead of demanding pixel-perfect aim
-    /// across 20 decades. Only with nothing named near the pointer does it lean toward the
-    /// selection. Scrolling out and back without moving the pointer retraces the way out, so you
-    /// return to where you were whatever came into view at the far end.
-    fn zoom_anchor_at(
-        &mut self,
-        s: [f32; 2],
-        dex: f64,
-        proj: &crate::frames::Proj,
-    ) -> (f64, f64, DVec3) {
-        // a resting hand moves the pointer a little without meaning anything by it
-        const RETRACE_PX: f32 = 4.0;
+    /// across 20 decades, and only with nothing named near the pointer toward the selection.
+    /// Scrolling back from a scroll out retraces it, so you return to where you were whatever
+    /// came into view at the far end. A resting hand moves a little between notches, so only a
+    /// deliberate move ends that: past `DELIBERATE_PX`, or onto something else with a name.
+    fn zoom_point_at(&mut self, s: [f32; 2], dex: f64, proj: &crate::frames::Proj) -> ZoomPoint {
+        const DELIBERATE_PX: f32 = 12.0;
         let (sx, sy) = (s[0] as f64, s[1] as f64);
-        let held = self.scrolled_out.filter(|(world, _)| {
-            let px = proj.px_local(*world);
-            (px[0] - s[0]).hypot(px[1] - s[1]) < RETRACE_PX
-        });
-        let hold = |world: DVec3| {
-            let px = proj.px_local(world);
-            (px[0] as f64, px[1] as f64, world)
-        };
-        // local anchor math: full precision inside attached frames
-        let mut world = proj.unproject_local(sx, sy);
-        if dex > 0.0 {
-            let out = held.unwrap_or((world, proj.mpp));
-            self.scrolled_out = Some(out);
-            return hold(out.0);
-        }
-        if let Some((point, from_mpp)) = held {
-            if proj.mpp > from_mpp * 1.001 {
-                return hold(point);
-            }
-        }
-        self.scrolled_out = None;
-        let distance = |obj: ObjectRef| {
-            let px = proj.px(obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref()));
-            (px[0] - s[0]).hypot(px[1] - s[1])
-        };
         let nearest = self
             .picks
             .iter()
             .map(|pk| ((pk.pos[0] - s[0]).hypot(pk.pos[1] - s[1]), pk.obj))
             .filter(|(d, _)| *d < 150.0)
             .min_by(|a, b| a.0.total_cmp(&b.0));
-        let selected = self
-            .focus
-            .map(|obj| (distance(obj), obj))
-            .filter(|(d, _)| *d < 150.0);
-        if let Some((d, obj)) = nearest.or(selected) {
-            let poi = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref()) - proj.origin;
-            let k = (0.45 * (1.0 - (d as f64 / 150.0))).clamp(0.0, 0.45);
-            world = world + (poi - world) * k;
+        if let Some(mut back) = self.scrolled_out {
+            let moved = (back.pointer[0] - s[0]).hypot(back.pointer[1] - s[1]);
+            let onto_another =
+                nearest.is_some_and(|(d, obj)| Some(obj) != back.point.on && d < moved / 2.0);
+            let still_out = dex > 0.0 || proj.mpp > back.from_mpp * 1.001;
+            if moved <= DELIBERATE_PX && !onto_another && still_out {
+                back.pointer = s;
+                // the same gap all the way back, unless time has moved things meanwhile: measured
+                // again at a far scale it would lose what precision it has for the near one
+                let p = back.point;
+                let now = self.zoom_point(p.on, p.fixed, p.screen, 1.0, proj);
+                let drift = (now.gap[0] - p.gap[0]).hypot(now.gap[1] - p.gap[1]) / proj.mpp;
+                if drift > 0.5 {
+                    back.point = now;
+                }
+                self.scrolled_out = Some(back);
+                return back.point;
+            }
         }
-        (sx, sy, world)
+        self.scrolled_out = None;
+        let selected = self.focus.map(|obj| {
+            let px = proj.px(obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref()));
+            ((px[0] - s[0]).hypot(px[1] - s[1]), obj)
+        });
+        let named = nearest.or(selected.filter(|(d, _)| *d < 150.0));
+        let (on, keep) = match named {
+            Some((d, obj)) if dex < 0.0 => (
+                Some(obj),
+                1.0 - (0.45 * (1.0 - d as f64 / 150.0)).clamp(0.0, 0.45),
+            ),
+            Some((_, obj)) => (Some(obj), 1.0),
+            None => (self.follow.map(|(obj, _)| obj), 1.0),
+        };
+        // local anchor math: full precision inside attached frames
+        let here = proj.unproject_local(sx, sy);
+        let mut point = self.zoom_point(on, here, [sx, sy], keep, proj);
+        if dex > 0.0 {
+            self.scrolled_out = Some(ScrolledOut {
+                point,
+                from_mpp: proj.mpp,
+                pointer: s,
+            });
+        } else {
+            point.aimed = named.is_some_and(|(_, obj)| self.hover == Some(obj));
+        }
+        point
+    }
+
+    /// A zoom point held at `screen`, with what it's on where it is now. `keep` below 1 draws
+    /// that thing toward `screen` as the zoom starts.
+    fn zoom_point(
+        &self,
+        on: Option<ObjectRef>,
+        fixed: DVec3,
+        screen: [f64; 2],
+        keep: f64,
+        proj: &crate::frames::Proj,
+    ) -> ZoomPoint {
+        let at = proj.screen_local(self.zoom_base(on, fixed));
+        ZoomPoint {
+            on,
+            fixed,
+            screen,
+            gap: [
+                (at[0] - screen[0]) * proj.mpp * keep,
+                (at[1] - screen[1]) * proj.mpp * keep,
+            ],
+            to_its_depth: (self.zoom_base(on, fixed) - proj.center)
+                .dot(proj.out)
+                .abs()
+                < proj.mpp * proj.w,
+            aimed: false,
+        }
+    }
+
+    /// Where a zoom point's thing is now, simulated if it's simulated, in the camera's frame.
+    fn zoom_base(&self, on: Option<ObjectRef>, fixed: DVec3) -> DVec3 {
+        on.map_or(fixed, |obj| {
+            obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref()) - self.cam.frame_origin
+        })
+    }
+
+    /// Put the camera where the zoom point sits where it should, through the projection as it
+    /// is this frame, with time moved on. It runs until the view has stopped turning too, since
+    /// the presentation tilt outlasts the zoom.
+    fn hold_zoom_point(&mut self) {
+        let Some(z) = self.zoom_anchor else {
+            return;
+        };
+        if self.cam.anim.is_some() {
+            self.zoom_anchor = None;
+            return;
+        }
+        let proj = crate::frames::Proj::new(&self.cam, self.view_w, self.view_h, &self.u.gal);
+        let m = self.cam.mpp;
+        let base = self.zoom_base(z.on, z.fixed);
+        let depth = if z.to_its_depth {
+            0.0
+        } else {
+            (self.cam.center - base).dot(proj.out)
+        };
+        self.cam.center = base
+            - proj.right * ((z.screen[0] - proj.w * 0.5) * m + z.gap[0])
+            - proj.up * ((proj.h * 0.5 - z.screen[1]) * m - z.gap[1])
+            + proj.out * depth;
+        self.sync_follow();
+        if self.zoom_pending != 0.0 || self.pres_moving {
+            return;
+        }
+        self.zoom_anchor = None;
+        if let (true, Some(obj)) = (z.aimed, z.on) {
+            let p = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref());
+            self.follow = Some((obj, self.cam.center_root() - p));
+        }
     }
 
     /// End a flight where the camera is now. A follow left pointing at the destination
@@ -647,10 +746,7 @@ impl Pantheon {
         if self.cam.anim.is_none() {
             if let Some((obj, off)) = self.follow {
                 let p = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref());
-                let want = (p + off) - self.cam.frame_origin;
-                // a zoom in progress holds its point still relative to what you're following
-                self.shift_zoom_points(want - self.cam.center);
-                self.cam.center = want;
+                self.cam.center = (p + off) - self.cam.frame_origin;
             }
         }
         // camera frame attachment: inside an exoplanet
@@ -661,8 +757,14 @@ impl Pantheon {
             .map(|ei| self.u.exos[ei].pos)
             .unwrap_or(DVec3::ZERO);
         if (want_origin - self.cam.frame_origin).length() > 1e-3 {
-            // a zoom in progress holds a point in the old frame's coordinates
-            self.shift_zoom_points(self.cam.frame_origin - want_origin);
+            // a zoom point on nothing is held in the old frame's coordinates
+            let delta = self.cam.frame_origin - want_origin;
+            if let Some(z) = &mut self.zoom_anchor {
+                z.fixed += delta;
+            }
+            if let Some(back) = &mut self.scrolled_out {
+                back.point.fixed += delta;
+            }
             self.cam.rebase(want_origin);
         }
 
@@ -682,6 +784,7 @@ impl Pantheon {
             }
         }
         self.update_presentation(dt);
+        self.hold_zoom_point();
         // exoplanet pocket persists until the camera actually leaves it. A flight there
         // starts far away, so distance means nothing until it has landed; a flight anywhere
         // else leaves when it leaves.
@@ -710,15 +813,6 @@ impl Pantheon {
             if self.anim_t > until {
                 self.status = None;
             }
-        }
-    }
-
-    fn shift_zoom_points(&mut self, delta: DVec3) {
-        if let Some(anchor) = &mut self.zoom_anchor {
-            anchor.2 += delta;
-        }
-        if let Some(out) = &mut self.scrolled_out {
-            out.0 += delta;
         }
     }
 
@@ -791,6 +885,26 @@ impl Pantheon {
         }
     }
 
+    /// A click on the canvas selects what it hit, and means you've finished with the way back.
+    fn click_canvas(&mut self, hit: Option<ObjectRef>) {
+        self.pan_vel = [0.0, 0.0];
+        self.focus = hit;
+        self.learned_click |= hit.is_some();
+        self.scrolled_out = None;
+        // following continues only for the thing already being followed
+        if self.follow.map(|(o, _)| Some(o) != hit).unwrap_or(false) {
+            self.stop_following();
+        }
+    }
+
+    /// Stop following, and stop holding anything on the screen once a zoom is over.
+    pub(crate) fn stop_following(&mut self) {
+        self.follow = None;
+        if self.zoom_pending == 0.0 {
+            self.zoom_anchor = None;
+        }
+    }
+
     /// Smooth zoom: wheel notches feed `zoom_pending`, which drains over ~0.1 s
     /// around a fixed anchor, so a burst of notches glides instead of stepping.
     fn apply_smooth_zoom(&mut self, dt: f64) {
@@ -814,17 +928,10 @@ impl Pantheon {
             self.zoom_pending = 0.0;
         }
         self.cam.mpp = new;
-        if let Some((sx, sy, world)) = self.zoom_anchor {
-            // solved against the NEW basis, which can rotate with scale
-            let proj = crate::frames::Proj::new(&self.cam, self.view_w, self.view_h, &self.u.gal);
-            self.cam.center = world
-                - proj.right * ((sx - proj.w * 0.5) * new)
-                - proj.up * ((proj.h * 0.5 - sy) * new);
+        // a zoom point sets the camera at the end of the frame, with everything moved
+        if self.zoom_anchor.is_none() {
+            self.sync_follow();
         }
-        if self.zoom_pending == 0.0 {
-            self.zoom_anchor = None;
-        }
-        self.sync_follow();
     }
 
     /// A flung drag coasts and settles.
@@ -832,6 +939,10 @@ impl Pantheon {
         let held = self.key_pan != [0.0, 0.0];
         if self.pan_vel == [0.0, 0.0] && !held {
             return;
+        }
+        if held {
+            self.zoom_anchor = None;
+            self.scrolled_out = None;
         }
         let proj = crate::frames::Proj::new(&self.cam, self.view_w, self.view_h, &self.u.gal);
         let (vx, vy) = (
@@ -900,6 +1011,7 @@ impl Pantheon {
     }
 
     fn apply_key(&mut self, key: &PathKey) {
+        self.scrolled_out = None;
         if let Some(host) = &key.host {
             if let Some(ei) = self.u.find_system(host) {
                 self.focus = Some(ObjectRef::ExoHost(ei));
@@ -1162,6 +1274,8 @@ impl Pantheon {
             self.cam.tilt = (self.cam.tilt + d.y as f64 * 0.005).clamp(-1.2, 1.45);
             self.cam.yaw -= d.x as f64 * 0.005;
             self.stop_flight_here();
+            self.zoom_anchor = None;
+            self.scrolled_out = None;
             self.pan_vel = [0.0, 0.0];
         } else if resp.dragged_by(egui::PointerButton::Primary) {
             let d = resp.drag_delta();
@@ -1172,6 +1286,7 @@ impl Pantheon {
             self.pan_vel = [0.0, 0.0];
             self.zoom_pending = 0.0;
             self.zoom_anchor = None;
+            self.scrolled_out = None;
             self.sync_follow();
             // track release velocity; ignore frames where the hand stopped
             let inst = [d.x as f64 / dt.max(1e-3), d.y as f64 / dt.max(1e-3)];
@@ -1212,18 +1327,13 @@ impl Pantheon {
                     None => {
                         let world = proj.unproject(s[0] as f64, s[1] as f64);
                         self.follow = None;
+                        self.scrolled_out = None;
                         let mpp = self.cam.mpp / 2.5;
                         self.cam.fly_to(world, mpp, rect.width() as f64, 0.7);
                     }
                 }
             } else if resp.clicked() {
-                self.pan_vel = [0.0, 0.0];
-                self.focus = hit;
-                self.learned_click |= hit.is_some();
-                // following continues only for the thing already being followed
-                if self.follow.map(|(o, _)| Some(o) != hit).unwrap_or(false) {
-                    self.follow = None;
-                }
+                self.click_canvas(hit);
             }
         }
 
@@ -1300,7 +1410,10 @@ impl Pantheon {
         if held.2 != 0.0 {
             self.zoom_pending += held.2 * 1.35 * dt;
             let (cx, cy) = (rect.width() as f64 * 0.5, rect.height() as f64 * 0.5);
-            self.zoom_anchor = Some((cx, cy, proj.unproject_local(cx, cy)));
+            let on = self.follow.map(|(obj, _)| obj);
+            let middle = proj.unproject_local(cx, cy);
+            self.zoom_anchor = Some(self.zoom_point(on, middle, [cx, cy], 1.0, &proj));
+            self.scrolled_out = None;
             self.cam.anim = None;
             self.dismiss_intro();
         }
@@ -1319,7 +1432,7 @@ impl Pantheon {
                     self.show_layers = false;
                 } else {
                     self.focus = None;
-                    self.follow = None;
+                    self.stop_following();
                 }
             }
             KeyAction::TogglePlay => {
@@ -2654,6 +2767,11 @@ mod tests {
     /// One wheel notch with the pointer at `s`, through the same code the window uses.
     fn wheel_at(a: &mut Pantheon, s: [f32; 2], dex: f64) {
         let proj = crate::frames::Proj::new(&a.cam, a.view_w, a.view_h, &a.u.gal);
+        let rect = Rect::from_min_size(
+            egui::pos2(0.0, 0.0),
+            egui::vec2(a.view_w as f32, a.view_h as f32),
+        );
+        a.hover = a.pick_at(s, rect);
         a.wheel_zoom(Some(s), dex, &proj);
     }
 
@@ -2789,27 +2907,22 @@ mod tests {
         a.cam.mpp = 1e7;
         let proj = crate::frames::Proj::new(&a.cam, a.view_w, a.view_h, &a.u.gal);
         let pointer = [900.0f32, 450.0]; // 100 px from Earth
-        let under = proj.unproject_local(900.0, 450.0);
-        // nothing named near the pointer: it leans toward the selection
+                                         // nothing named near the pointer: it leans toward the selection
         a.picks.clear();
-        let (_, _, leaned) = a.zoom_anchor_at(pointer, -NOTCH, &proj);
-        assert!(
-            (leaned - under).length() > 1.0,
-            "no lean toward the selection"
-        );
-        // something named at the pointer: no lean at all toward the selection
+        let z = a.zoom_point_at(pointer, -NOTCH, &proj);
+        assert!(z.on == Some(earth), "no lean toward the selection");
+        // 100 px off, and the lean takes 15% of that
+        let gap = (z.gap[0].hypot(z.gap[1]) / a.cam.mpp - 85.0).abs();
+        assert!(gap < 0.5, "{gap}");
+        // something named at the pointer: the zoom point is on that
         let moon = ObjectRef::Moon(0);
         a.picks.push(crate::atlas::Pickable {
             pos: pointer,
             r: 5.0,
             obj: moon,
         });
-        let (_, _, world) = a.zoom_anchor_at(pointer, -NOTCH, &proj);
-        let moon_at = obj_pos(&a.u, moon, a.clock.jd, None) - proj.origin;
-        assert!(
-            ((world - under) - (moon_at - under) * 0.45).length() < 1.0,
-            "it should lean only toward the Moon"
-        );
+        let z = a.zoom_point_at(pointer, -NOTCH, &proj);
+        assert!(z.on == Some(moon), "it should be on the Moon");
     }
 
     /// Scroll out at `pointer` and back without moving it: the view returns to where it was.
@@ -2854,7 +2967,7 @@ mod tests {
     }
 
     #[test]
-    fn moving_the_pointer_after_scrolling_out_aims_at_the_new_place() {
+    fn a_deliberate_move_after_scrolling_out_aims_at_the_new_place() {
         let Some(mut h) = host() else { return };
         let a = &mut h.app;
         a.clock.jd = TEST_DATE;
@@ -2867,16 +2980,529 @@ mod tests {
         for _ in 0..30 {
             a.tick(FRAME);
         }
-        // far from the point scrolled out from, and nothing named close by
         a.picks.clear();
         a.focus = None;
-        let pointer = [1100.0, 200.0];
+        assert!(a.scrolled_out.is_some());
+        // a resting hand: the way back holds
         let proj = crate::frames::Proj::new(&a.cam, a.view_w, a.view_h, &a.u.gal);
-        let under = proj.unproject_local(1100.0, 200.0);
-        let (sx, sy, world) = a.zoom_anchor_at(pointer, -NOTCH, &proj);
-        assert_eq!((sx, sy), (1100.0, 200.0));
-        assert_eq!(world, under);
+        let nudged = [(a.view_w * 0.5) as f32 + 12.0, (a.view_h * 0.5) as f32];
+        let z = a.zoom_point_at(nudged, -NOTCH, &proj);
+        assert_eq!(z.screen, [a.view_w * 0.5, a.view_h * 0.5]);
+        assert!(a.scrolled_out.is_some());
+        // more than that, since the last notch: this is somewhere else
+        let pointer = [nudged[0] + 12.5, nudged[1]];
+        let z = a.zoom_point_at(pointer, -NOTCH, &proj);
+        assert_eq!(z.screen, [pointer[0] as f64, pointer[1] as f64]);
         assert!(a.scrolled_out.is_none());
+    }
+
+    #[test]
+    fn a_click_ends_the_way_back() {
+        let Some(mut h) = host() else { return };
+        let a = &mut h.app;
+        scroll(a, NOTCH);
+        assert!(a.scrolled_out.is_some());
+        a.click_canvas(None);
+        assert!(a.scrolled_out.is_none());
+    }
+
+    /// `obj` followed in the middle of a view `lw` wide, with no presentation tilt yet.
+    fn view_of(a: &mut Pantheon, obj: ObjectRef, lw: f64) {
+        a.focus = Some(obj);
+        a.follow = Some((obj, DVec3::ZERO));
+        a.cam.anim = None;
+        a.cam.center = obj_pos(&a.u, obj, a.clock.jd, a.island.as_ref()) - a.cam.frame_origin;
+        a.cam.mpp = 10f64.powf(lw) / a.view_w;
+        a.cam.pres_tilt = 0.0;
+        a.cam.pres_yaw = 0.0;
+        a.zoom_anchor = None;
+        a.zoom_pending = 0.0;
+        a.scrolled_out = None;
+        a.history.clear();
+    }
+
+    /// The opening view is this wide, and each notch out from it adds a NOTCH.
+    const OPENING_LW: f64 = 7.547;
+
+    /// Rounded to a pixel, as a pointer is.
+    fn pointer_on(a: &Pantheon, obj: ObjectRef) -> [f32; 2] {
+        let p = screen_of(a, obj);
+        [p[0].round(), p[1].round()]
+    }
+
+    /// Scroll in at `pointer`, `ticks` frames between notches, and return the worst distance of
+    /// `target` from it. A real frame before each notch gives the wheel fresh picks.
+    fn dive(
+        h: &mut Host,
+        target: ObjectRef,
+        pointer: [f32; 2],
+        notches: usize,
+        ticks: usize,
+    ) -> f64 {
+        let (w, ht) = (h.app.view_w as u32, h.app.view_h as u32);
+        let mut worst = 0.0f64;
+        for _ in 0..notches {
+            h.frame(w, ht, FRAME, false).unwrap();
+            worst = worst.max(px_apart(screen_of(&h.app, target), pointer));
+            wheel_at(&mut h.app, pointer, -NOTCH);
+            for _ in 0..ticks {
+                h.app.tick(FRAME);
+                worst = worst.max(px_apart(screen_of(&h.app, target), pointer));
+            }
+        }
+        // and for as long again after the last one: the zoom has ended, the target hasn't
+        for _ in 0..150 {
+            h.app.tick(FRAME);
+            worst = worst.max(px_apart(screen_of(&h.app, target), pointer));
+        }
+        worst
+    }
+
+    /// Scroll out at the middle of the view, with the picks a real frame gives the wheel.
+    fn out_from_the_middle(h: &mut Host, notches: usize) {
+        let (w, ht) = (h.app.view_w as u32, h.app.view_h as u32);
+        for _ in 0..notches {
+            h.frame(w, ht, FRAME, false).unwrap();
+            scroll(&mut h.app, NOTCH);
+            for _ in 0..3 {
+                h.app.tick(FRAME);
+            }
+        }
+        for _ in 0..90 {
+            h.app.tick(FRAME);
+        }
+    }
+
+    /// One row of the time-running table: Earth followed, the pointer on `target`.
+    struct TimeRow {
+        target: &'static str,
+        rate: f64,
+        outs: f64,
+        ticks: usize,
+        notches: usize,
+        simulate: bool,
+    }
+
+    fn time_row(row: &TimeRow) {
+        let Some(mut h) = host() else { return };
+        h.app.clock.jd = TEST_DATE;
+        h.app.immediate = false;
+        let earth = ObjectRef::Planet(2);
+        h.app.focus = Some(earth);
+        if row.simulate {
+            h.app.awaken();
+        }
+        h.app.clock.playing = true;
+        h.app.clock.rate = row.rate;
+        let target = h.app.find_object(row.target).unwrap();
+        view_of(&mut h.app, earth, OPENING_LW + row.outs * NOTCH);
+        h.frame(1600, 900, FRAME, false).unwrap();
+        let pointer = pointer_on(&h.app, target);
+        let worst = dive(&mut h, target, pointer, row.notches, row.ticks);
+        let what = format!(
+            "{} at rate {}, {} frames between notches, simulated {}",
+            row.target, row.rate, row.ticks, row.simulate
+        );
+        println!("{what}: worst {worst:.1} px from the pointer");
+        if row.simulate {
+            assert!(h.app.island.is_some(), "{what}: the simulation ended");
+        }
+        assert!(worst < 6.0, "{what}: {worst:.0} px from the pointer");
+    }
+
+    macro_rules! time_rows {
+        ($($name:ident: $target:expr, $rate:expr, $outs:expr, $ticks:expr, $notches:expr, $sim:expr;)*) => {
+            $(#[test]
+            fn $name() {
+                time_row(&TimeRow {
+                    target: $target,
+                    rate: $rate,
+                    outs: $outs,
+                    ticks: $ticks,
+                    notches: $notches,
+                    simulate: $sim,
+                });
+            })*
+        };
+    }
+
+    // 60 frames a second, so 27 frames is a notch every 0.45 s
+    time_rows! {
+        sun_at_a_day_a_second_every_450_ms: "Sun", 86_400.0, 21.0, 27, 16, false;
+        sun_at_a_day_a_second_every_200_ms: "Sun", 86_400.0, 21.0, 12, 16, false;
+        sun_at_a_day_a_second_every_100_ms: "Sun", 86_400.0, 21.0, 6, 16, false;
+        sun_at_a_day_a_second_burst_of_16: "Sun", 86_400.0, 21.0, 2, 16, false;
+        sun_at_an_hour_a_second_every_450_ms: "Sun", 3_600.0, 21.0, 27, 16, false;
+        sun_at_a_month_a_second_every_200_ms: "Sun", 2.63e6, 21.0, 12, 16, false;
+        sun_in_a_simulation_at_a_day_a_second: "Sun", 86_400.0, 21.0, 27, 14, true;
+        moon_at_a_day_a_second_every_450_ms: "Moon", 86_400.0, 9.0, 27, 8, false;
+        moon_at_a_day_a_second_slowly: "Moon", 86_400.0, 9.0, 60, 8, false;
+        moon_in_a_simulation_at_a_day_a_second: "Moon", 86_400.0, 9.0, 27, 8, true;
+        mars_at_a_day_a_second_every_450_ms: "Mars", 86_400.0, 21.0, 27, 16, false;
+        jupiter_at_a_day_a_second_every_450_ms: "Jupiter", 86_400.0, 24.0, 27, 16, false;
+    }
+
+    #[test]
+    fn the_star_with_a_planet_followed_and_time_running() {
+        let Some(mut h) = host() else { return };
+        h.app.clock.jd = TEST_DATE;
+        h.app.immediate = false;
+        let ei = h.app.u.find_system("TRAPPIST-1").unwrap();
+        h.frame(1600, 900, FRAME, false).unwrap();
+        h.app.dive_to(ObjectRef::ExoPlanet(ei, 3));
+        land(&mut h.app);
+        out_from_the_middle(&mut h, 13);
+        h.app.clock.playing = true;
+        h.app.clock.rate = 86_400.0;
+        h.frame(1600, 900, FRAME, false).unwrap();
+        let star = ObjectRef::ExoHost(ei);
+        let pointer = pointer_on(&h.app, star);
+        let worst = dive(&mut h, star, pointer, 10, 27);
+        assert!(worst < 6.0, "{worst:.0} px from the pointer");
+    }
+
+    /// A moon aimed at from close to its planet, time paused: the presentation tilt turns the
+    /// view as the zoom goes in, and the moon stays under the pointer through it.
+    fn moon_row(planet: &str, moon: &str, outs: usize) {
+        let Some(mut h) = host() else { return };
+        h.app.immediate = false;
+        let (pl, mo) = (
+            h.app.find_object(planet).unwrap(),
+            h.app.find_object(moon).unwrap(),
+        );
+        let ObjectRef::Moon(mi) = mo else { panic!() };
+        let mut ran = 0;
+        let mut worst = 0.0f64;
+        // around its orbit: how far it stands off the camera's plane depends on where it is
+        for quarter in 0..4 {
+            h.app.clock.jd = TEST_DATE + quarter as f64 * MOONS[mi].period_d.abs() / 4.0;
+            h.frame(1600, 900, FRAME, false).unwrap();
+            h.app.scrolled_out = None;
+            h.app.dive_to(pl);
+            land(&mut h.app);
+            for _ in 0..120 {
+                h.app.tick(FRAME);
+            }
+            out_from_the_middle(&mut h, outs);
+            h.frame(1600, 900, FRAME, false).unwrap();
+            if !h.app.picks.iter().any(|p| p.obj == mo) {
+                continue;
+            }
+            ran += 1;
+            let pointer = pointer_on(&h.app, mo);
+            worst = worst.max(dive(&mut h, mo, pointer, 10, 30));
+            println!("{moon} around its orbit, {quarter}/4: worst so far {worst:.1} px");
+            // back to the planet for the next one
+            h.app.view_w = 1600.0;
+        }
+        assert!(ran > 0, "{moon} was never in view");
+        assert!(worst < 6.0, "{moon}: {worst:.0} px from the pointer");
+    }
+
+    #[test]
+    fn phobos_stays_under_the_pointer() {
+        moon_row("Mars", "Phobos", 2);
+    }
+
+    #[test]
+    fn deimos_stays_under_the_pointer() {
+        moon_row("Mars", "Deimos", 2);
+    }
+
+    #[test]
+    fn io_stays_under_the_pointer() {
+        moon_row("Jupiter", "Io", 3);
+    }
+
+    #[test]
+    fn europa_stays_under_the_pointer() {
+        moon_row("Jupiter", "Europa", 3);
+    }
+
+    #[test]
+    fn titan_stays_under_the_pointer() {
+        moon_row("Saturn", "Titan", 3);
+    }
+
+    /// With time running close to a body the view keeps turning, and the zoom point keeps being
+    /// held. It must not stand in the way of anything else that moves the camera.
+    #[test]
+    fn a_held_zoom_point_gives_way() {
+        let Some(mut h) = host() else { return };
+        let earth = ObjectRef::Planet(2);
+        h.app.clock.jd = TEST_DATE;
+        h.app.immediate = false;
+        h.frame(1600, 900, FRAME, false).unwrap();
+        h.app.dive_to(earth);
+        land(&mut h.app);
+        h.app.clock.playing = true;
+        h.app.clock.rate = 86_400.0;
+        h.frame(1600, 900, FRAME, false).unwrap();
+        let settled = |h: &mut Host| {
+            wheel_at(&mut h.app, [1060.0, 280.0], -FINE);
+            for _ in 0..90 {
+                h.app.tick(FRAME);
+            }
+            assert!(h.app.zoom_anchor.is_some(), "the view has stopped turning");
+            assert_eq!(h.app.zoom_pending, 0.0);
+        };
+        // the arrow keys move the view
+        settled(&mut h);
+        let a = &mut h.app;
+        let (e0, m) = (screen_of(a, earth), a.cam.mpp);
+        a.key_pan = [520.0, 0.0];
+        a.tick(FRAME);
+        a.tick(FRAME);
+        a.key_pan = [0.0, 0.0];
+        assert!(a.zoom_anchor.is_none());
+        assert!(
+            px_apart(screen_of(a, earth), e0) > 5.0,
+            "the keys did nothing"
+        );
+        assert_eq!(a.cam.mpp, m);
+        // a flight goes where it's going
+        settled(&mut h);
+        let a = &mut h.app;
+        a.dive_to(ObjectRef::Planet(3));
+        a.tick(FRAME);
+        assert!(a.zoom_anchor.is_none());
+        land(a);
+        assert!(px_apart(screen_of(a, ObjectRef::Planet(3)), [800.0, 450.0]) < 1.0);
+        // and letting go of what you follow lets go of it
+        a.dive_to(earth);
+        land(a);
+        h.frame(1600, 900, FRAME, false).unwrap();
+        settled(&mut h);
+        let a = &mut h.app;
+        a.click_canvas(None);
+        assert!(a.zoom_anchor.is_none());
+        let before = a.cam.center_root();
+        a.tick(FRAME);
+        assert_eq!(a.cam.center_root(), before, "still riding Earth");
+    }
+
+    /// Out of TRAPPIST-1 and back, with what a hand does to the pointer in between.
+    fn retrace_row(moved_at_far_end: f32, drift_every_5: f32) {
+        let Some(mut h) = host() else { return };
+        h.app.immediate = false;
+        let (w, ht) = (640, 360);
+        let ei = h.app.u.find_system("TRAPPIST-1").unwrap();
+        h.frame(w, ht, FRAME, false).unwrap();
+        h.app.dive_to(ObjectRef::ExoHost(ei));
+        land(&mut h.app);
+        for _ in 0..30 {
+            h.app.tick(FRAME);
+        }
+        let start = h.app.cam.center_root();
+        let start_mpp = h.app.cam.mpp;
+        let mut pointer = [440.0f32, 112.0];
+        for way in [NOTCH, -NOTCH] {
+            for n in 0..55 {
+                if n % 5 == 4 {
+                    pointer[if way > 0.0 { 0 } else { 1 }] += drift_every_5;
+                }
+                h.frame(w, ht, FRAME, false).unwrap();
+                wheel_at(&mut h.app, pointer, way);
+                for _ in 0..5 {
+                    h.app.tick(FRAME);
+                }
+            }
+            for _ in 0..60 {
+                h.app.tick(FRAME);
+            }
+            if way > 0.0 {
+                pointer[0] += moved_at_far_end;
+            }
+        }
+        let view = h.app.cam.mpp * h.app.view_w;
+        let off = (h.app.cam.center_root() - start).length() / view;
+        let what = format!("moved {moved_at_far_end}, drift {drift_every_5}");
+        assert!(off < 0.02, "{what}: came back {off} of a view away");
+        assert!(
+            (h.app.cam.mpp / start_mpp - 1.0).abs() < 0.05,
+            "{what}: at {} of the scale",
+            h.app.cam.mpp / start_mpp
+        );
+        assert_eq!(
+            h.app.scene_exo,
+            Some(ei),
+            "{what}: the system should be back"
+        );
+    }
+
+    #[test]
+    fn scrolling_back_with_a_still_hand_returns() {
+        retrace_row(0.0, 0.0);
+    }
+
+    #[test]
+    fn scrolling_back_after_3_px_at_the_far_end_returns() {
+        retrace_row(3.0, 0.0);
+    }
+
+    #[test]
+    fn scrolling_back_after_6_px_at_the_far_end_returns() {
+        retrace_row(6.0, 0.0);
+    }
+
+    #[test]
+    fn scrolling_back_with_a_slow_drift_returns() {
+        retrace_row(0.0, 1.0);
+    }
+
+    /// The tilt eases on the opening view, and that can't take the way back away.
+    #[test]
+    fn scrolling_back_on_the_opening_view_returns_though_the_view_turned() {
+        let Some(mut h) = host() else { return };
+        h.app.clock.jd = TEST_DATE;
+        h.app.immediate = false;
+        h.frame(1600, 900, FRAME, false).unwrap();
+        let earth = ObjectRef::Planet(2);
+        view_of(&mut h.app, earth, OPENING_LW);
+        for _ in 0..180 {
+            h.app.tick(FRAME);
+        }
+        let (start, tilt0) = (screen_of(&h.app, earth), h.app.cam.pres_tilt);
+        let pointer = [1060.0, 280.0];
+        let mut turned = 0.0f64;
+        for way in [NOTCH, -NOTCH] {
+            for _ in 0..6 {
+                h.frame(1600, 900, FRAME, false).unwrap();
+                wheel_at(&mut h.app, pointer, way);
+                for _ in 0..27 {
+                    h.app.tick(FRAME);
+                    turned = turned.max((h.app.cam.pres_tilt - tilt0).abs());
+                }
+            }
+        }
+        for _ in 0..120 {
+            h.app.tick(FRAME);
+        }
+        let end = screen_of(&h.app, earth);
+        println!("the view turned by {turned:.2} rad, Earth {start:?} to {end:?}");
+        assert!(turned > 0.1, "this should have turned the view: {turned}");
+        assert!(
+            px_apart(start, end) < 2.0,
+            "Earth {start:?} ended at {end:?}"
+        );
+    }
+
+    /// Scroll well out on Earth, and the Sun's a pixel or two away: move onto it and it's the Sun.
+    #[test]
+    fn a_target_right_next_to_where_you_scrolled_out_from_still_wins() {
+        let Some(mut h) = host() else { return };
+        h.app.clock.jd = TEST_DATE;
+        h.app.immediate = false;
+        h.frame(1600, 900, FRAME, false).unwrap();
+        let earth = ObjectRef::Planet(2);
+        view_of(&mut h.app, earth, OPENING_LW);
+        out_from_the_middle(&mut h, 26);
+        h.frame(1600, 900, FRAME, false).unwrap();
+        let sun = ObjectRef::Sun;
+        let pointer = pointer_on(&h.app, sun);
+        let apart = px_apart(screen_of(&h.app, sun), screen_of(&h.app, earth));
+        assert!(apart < 3.0, "the Sun is {apart} px from Earth");
+        let worst = dive(&mut h, sun, pointer, 10, 27);
+        assert!(worst < 6.0, "the Sun ended {worst:.0} px from the pointer");
+    }
+
+    /// What `98a22ae` did with a wheel notch: a point on the camera plane fixed in the world,
+    /// leaning toward the nearest thing with a name.
+    fn old_wheel(a: &mut Pantheon, s: [f32; 2], dex: f64) {
+        let proj = crate::frames::Proj::new(&a.cam, a.view_w, a.view_h, &a.u.gal);
+        let (sx, sy) = (s[0] as f64, s[1] as f64);
+        let mut world = proj.unproject_local(sx, sy);
+        if dex < 0.0 {
+            let best = a
+                .picks
+                .iter()
+                .map(|pk| ((pk.pos[0] - s[0]).hypot(pk.pos[1] - s[1]), pk.obj))
+                .filter(|(d, _)| *d < 150.0)
+                .min_by(|p, q| p.0.total_cmp(&q.0));
+            if let Some((d, obj)) = best {
+                let poi = obj_pos(&a.u, obj, a.clock.jd, None) - proj.origin;
+                let k = (0.45 * (1.0 - (d as f64 / 150.0))).clamp(0.0, 0.45);
+                world = world + (poi - world) * k;
+            }
+        }
+        let mut z = a.zoom_point(None, world, [sx, sy], 1.0, &proj);
+        z.gap = [0.0, 0.0];
+        a.zoom_anchor = Some(z);
+        a.zoom_pending += dex;
+        a.cam.anim = None;
+    }
+
+    /// Time paused: the same path as `98a22ae`, frame by frame, for Earth and for the thing aimed at.
+    fn paused_row(what: &str, target: &str, outs: f64, aim_off: [f32; 2]) {
+        let Some(mut h) = host() else { return };
+        h.app.clock.jd = TEST_DATE;
+        h.app.immediate = false;
+        let earth = ObjectRef::Planet(2);
+        let tgt = h.app.find_object(target).unwrap();
+        let mut paths: Vec<Vec<[f32; 4]>> = Vec::new();
+        for old in [true, false] {
+            view_of(&mut h.app, earth, OPENING_LW + outs * NOTCH);
+            h.app.cam.pres_tilt = 0.0;
+            h.frame(1600, 900, FRAME, false).unwrap();
+            let on = pointer_on(&h.app, tgt);
+            let pointer = [on[0] + aim_off[0], on[1] + aim_off[1]];
+            let mut path = Vec::new();
+            for _ in 0..8 {
+                h.frame(1600, 900, FRAME, false).unwrap();
+                if old {
+                    old_wheel(&mut h.app, pointer, -NOTCH);
+                } else {
+                    wheel_at(&mut h.app, pointer, -NOTCH);
+                }
+                for _ in 0..30 {
+                    h.app.tick(FRAME);
+                }
+                let (t, e) = (screen_of(&h.app, tgt), screen_of(&h.app, earth));
+                path.push([t[0], t[1], e[0], e[1]]);
+            }
+            paths.push(path);
+        }
+        for (n, (o, s)) in paths[0].iter().zip(&paths[1]).enumerate() {
+            // Earth can be a long way off by now, and then a pixel is nothing
+            let target_px = (o[0] - s[0]).hypot(o[1] - s[1]) as f64;
+            let earth_px = (o[2] - s[2]).hypot(o[3] - s[3]) as f64;
+            let scale = (o[2] as f64 - 800.0).hypot(o[3] as f64 - 450.0).max(1.0);
+            println!(
+                "{what} notch {}: target {target_px:.1} px, Earth {earth_px:.1} px off",
+                n + 1
+            );
+            assert!(
+                target_px < 8.0,
+                "{what} notch {}: target {target_px:.1} px",
+                n + 1
+            );
+            assert!(
+                earth_px < 8.0 + 0.02 * scale,
+                "{what} notch {}: Earth {earth_px:.1} px",
+                n + 1
+            );
+        }
+    }
+
+    #[test]
+    fn paused_on_the_moon_as_before() {
+        paused_row("Moon", "Moon", 9.0, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn paused_on_mars_as_before() {
+        paused_row("Mars", "Mars", 21.0, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn paused_on_a_label_as_before() {
+        // a label sits just above its dot
+        paused_row("a label", "Moon", 9.0, [0.0, -13.0]);
+    }
+
+    #[test]
+    fn paused_on_empty_space_as_before() {
+        paused_row("empty space", "Earth", 9.0, [400.0, -260.0]);
     }
 
     /// Frame Earth from far enough out that the presentation tilt, which turns the view close
@@ -2892,9 +3518,9 @@ mod tests {
         a.cam.pres_yaw = 0.0;
     }
 
-    /// One notch at `pointer`: Earth's distance from the pointer changes only with scale, to
-    /// within `slack` of it, and the camera doesn't let go.
-    fn zoom_while_following(a: &mut Pantheon, pointer: [f32; 2], dex: f64, slack: f64, what: &str) {
+    /// One notch at `pointer` in empty space: Earth's distance from the pointer changes only
+    /// with scale, and the camera doesn't let go.
+    fn zoom_while_following(a: &mut Pantheon, pointer: [f32; 2], dex: f64, what: &str) {
         let earth = ObjectRef::Planet(2);
         let (mpp0, gap0) = (a.cam.mpp, px_apart(screen_of(a, earth), pointer));
         wheel_at(a, pointer, dex);
@@ -2903,7 +3529,7 @@ mod tests {
             let want = gap0 * mpp0 / a.cam.mpp;
             let gap = px_apart(screen_of(a, earth), pointer);
             assert!(
-                (gap - want).abs() <= 2.0 + slack * want,
+                (gap - want).abs() <= 2.0,
                 "{what}, frame {frame}: Earth {gap:.0} px from the pointer, not {want:.0}"
             );
             assert!(a.follow.is_some(), "{what}: the camera let go of Earth");
@@ -2927,14 +3553,14 @@ mod tests {
                     follow_earth_from_afar(a);
                     a.tick(FRAME);
                     let what = format!("Play at {rate}, pointer {pointer:?}, notch {dex}");
-                    zoom_while_following(a, pointer, dex, 0.0, &what);
+                    zoom_while_following(a, pointer, dex, &what);
                 }
             }
         }
     }
 
     /// The view you get on landing, where the reported notch threw Earth 77,000 px away. The
-    /// presentation tilt turns the view at this scale, hence the slack.
+    /// presentation tilt turns the view at this scale, and that makes no difference.
     #[test]
     fn a_notch_with_time_running_keeps_a_planet_you_flew_to() {
         let Some(mut h) = host() else { return };
@@ -2953,7 +3579,7 @@ mod tests {
                         a.tick(FRAME);
                     }
                     let what = format!("Play at {rate}, pointer {pointer:?}, notch {dex}");
-                    zoom_while_following(a, pointer, dex, 0.15, &what);
+                    zoom_while_following(a, pointer, dex, &what);
                 }
             }
         }
@@ -2975,7 +3601,7 @@ mod tests {
                     follow_earth_from_afar(a);
                     a.tick(FRAME);
                     let what = format!("Simulating at {rate}, pointer {pointer:?}, notch {dex}");
-                    zoom_while_following(a, pointer, dex, 0.0, &what);
+                    zoom_while_following(a, pointer, dex, &what);
                     assert!(a.island.is_some(), "{what}: the simulation ended");
                 }
             }
@@ -3039,9 +3665,9 @@ mod tests {
         // things with names crowd the middle of the view
         let notches = 120;
         for _ in 0..notches {
-            scroll(&mut h.app, 0.1);
             // a real frame fills in the picks a wheel zoom leans toward
             h.frame(w, ht, FRAME, false).unwrap();
+            scroll(&mut h.app, 0.1);
             for _ in 0..5 {
                 h.app.tick(FRAME);
                 watch(&h.app, "going out");
@@ -3058,8 +3684,8 @@ mod tests {
         assert_eq!(h.app.scene_exo, None, "should have left the system");
         // and all the way back
         for _ in 0..notches {
-            scroll(&mut h.app, -0.1);
             h.frame(w, ht, FRAME, false).unwrap();
+            scroll(&mut h.app, -0.1);
             for _ in 0..5 {
                 h.app.tick(FRAME);
                 watch(&h.app, "coming back");

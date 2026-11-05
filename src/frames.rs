@@ -400,6 +400,15 @@ impl Proj {
         ]
     }
 
+    /// Frame-local position → screen px, in full.
+    pub fn screen_local(&self, local: DVec3) -> [f64; 2] {
+        let rel = local - self.center;
+        [
+            self.w * 0.5 + rel.dot(self.right) / self.mpp,
+            self.h * 0.5 - rel.dot(self.up) / self.mpp,
+        ]
+    }
+
     pub fn screen_local_z(&self, local: DVec3) -> f64 {
         (local - self.center).dot(self.out)
     }
