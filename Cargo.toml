@@ -24,7 +24,7 @@ audio = ["dep:cpal"]
 cpal = { version = "0.15", optional = true }
 eframe = { version = "0.32", default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }
 egui = "0.32"
-wgpu = "25"
+wgpu = "30"
 glam = { version = "0.30", features = ["bytemuck"] }
 bytemuck = { version = "1", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
