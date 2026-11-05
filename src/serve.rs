@@ -696,14 +696,14 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::OnceLock;
 
-    /// A throwaway web root and asset folder with a secret beside them. Teardown removes
+    /// A throwaway web root and asset folder with a canary file beside them. Teardown removes
     /// exactly what this made, one path at a time.
     struct Fixture {
         root: PathBuf,
         made: Vec<PathBuf>,
     }
 
-    const SECRET: &str = "secret that must stay put";
+    const CANARY: &str = "canary that must stay put";
 
     impl Fixture {
         fn new() -> Fixture {
@@ -737,25 +737,25 @@ mod tests {
                 fx.made.push(path);
             }
             for (file, text) in [
-                ("outside.txt", SECRET),
+                ("outside.txt", CANARY),
                 ("web/index.html", "<title>page</title>"),
                 ("web/js/a.js", "// a"),
                 ("web/js/scene/b.js", "// b"),
                 ("web/css/style.css", "/* css */"),
                 ("web/lib/three.js", "// three"),
-                ("web/secret.txt", SECRET),
-                ("web/notes.md", SECRET),
+                ("web/canary.txt", CANARY),
+                ("web/notes.md", CANARY),
                 ("assets/data/stars.csv", "ra,dec"),
                 ("assets/data/land.geojson", "{}"),
-                ("assets/data/fetch_log.txt", SECRET),
-                ("assets/data/provenance.json", SECRET),
-                ("assets/data/spice/kernel.bsp", SECRET),
-                ("assets/data/spice/kernel.csv", SECRET),
-                ("assets/data/spacecraft/voyager1.txt", SECRET),
+                ("assets/data/fetch_log.txt", CANARY),
+                ("assets/data/provenance.json", CANARY),
+                ("assets/data/spice/kernel.bsp", CANARY),
+                ("assets/data/spice/kernel.csv", CANARY),
+                ("assets/data/spacecraft/voyager1.txt", CANARY),
                 ("assets/data/textures/earth.jpg", "jpeg bytes"),
                 ("assets/data/textures/rings.png", "png bytes"),
                 ("assets/fonts/serif.ttf", "font bytes"),
-                ("assets/fonts/OFL.txt", SECRET),
+                ("assets/fonts/OFL.txt", CANARY),
             ] {
                 let path = fx.root.join(file);
                 std::fs::write(&path, text).unwrap();
@@ -859,7 +859,7 @@ mod tests {
 
     fn assert_refused(reply: &Reply, what: &str) {
         assert_eq!(reply.code, 403, "{what}: {}", reply.head);
-        assert!(!reply.text().contains(SECRET), "{what} leaked the secret");
+        assert!(!reply.text().contains(CANARY), "{what} leaked the canary");
     }
 
     #[test]
@@ -945,14 +945,14 @@ mod tests {
     fn absolute_paths_are_refused() {
         let fx = Fixture::new();
         let port = fx.serve(false);
-        let secret = fx.root.join("outside.txt");
-        let secret = secret.display();
+        let outside = fx.root.join("outside.txt");
+        let outside = outside.display();
         for path in [
-            format!("/{secret}"),
-            format!("/data/{secret}"),
-            format!("/fonts/{secret}"),
-            format!("/js/{secret}"),
-            format!("/data/textures/{secret}"),
+            format!("/{outside}"),
+            format!("/data/{outside}"),
+            format!("/fonts/{outside}"),
+            format!("/js/{outside}"),
+            format!("/data/textures/{outside}"),
             "/data//etc/passwd".to_string(),
             "/fonts//etc/passwd".to_string(),
             "//etc/passwd".to_string(),
@@ -1025,7 +1025,7 @@ mod tests {
             "/data/fetch_log.txt",
             "/data/provenance.json",
             "/fonts/OFL.txt",
-            "/secret.txt",
+            "/canary.txt",
             "/notes.md",
             "/data/textures/earth.txt",
             "/data/textures",
