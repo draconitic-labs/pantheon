@@ -647,7 +647,10 @@ impl Pantheon {
         if self.cam.anim.is_none() {
             if let Some((obj, off)) = self.follow {
                 let p = obj_pos(&self.u, obj, self.clock.jd, self.island.as_ref());
-                self.cam.center = (p + off) - self.cam.frame_origin;
+                let want = (p + off) - self.cam.frame_origin;
+                // a zoom in progress holds its point still relative to what you're following
+                self.shift_zoom_points(want - self.cam.center);
+                self.cam.center = want;
             }
         }
         // camera frame attachment: inside an exoplanet
@@ -2842,6 +2845,141 @@ mod tests {
         assert_eq!((sx, sy), (1100.0, 200.0));
         assert_eq!(world, under);
         assert!(a.scrolled_out.is_none());
+    }
+
+    /// Frame Earth from far enough out that the presentation tilt, which turns the view close
+    /// to a body, plays no part, and follow it.
+    fn follow_earth_from_afar(a: &mut Pantheon) {
+        let earth = ObjectRef::Planet(2);
+        a.focus = Some(earth);
+        a.follow = Some((earth, DVec3::ZERO));
+        a.cam.anim = None;
+        a.cam.center = obj_pos(&a.u, earth, a.clock.jd, a.island.as_ref()) - a.cam.frame_origin;
+        a.cam.mpp = 1e7;
+        a.cam.pres_tilt = 0.0;
+        a.cam.pres_yaw = 0.0;
+    }
+
+    /// One notch at `pointer`: Earth's distance from the pointer changes only with scale, to
+    /// within `slack` of it, and the camera doesn't let go.
+    fn zoom_while_following(a: &mut Pantheon, pointer: [f32; 2], dex: f64, slack: f64, what: &str) {
+        let earth = ObjectRef::Planet(2);
+        let (mpp0, gap0) = (a.cam.mpp, px_apart(screen_of(a, earth), pointer));
+        wheel_at(a, pointer, dex);
+        for frame in 0..40 {
+            a.tick(FRAME);
+            let want = gap0 * mpp0 / a.cam.mpp;
+            let gap = px_apart(screen_of(a, earth), pointer);
+            assert!(
+                (gap - want).abs() <= 2.0 + slack * want,
+                "{what}, frame {frame}: Earth {gap:.0} px from the pointer, not {want:.0}"
+            );
+            assert!(a.follow.is_some(), "{what}: the camera let go of Earth");
+        }
+        assert_eq!(a.zoom_pending, 0.0, "{what}");
+    }
+
+    const POINTERS: [[f32; 2]; 3] = [[800.0, 450.0], [1210.0, 180.0], [200.0, 770.0]];
+
+    #[test]
+    fn a_notch_with_time_running_holds_still_relative_to_what_you_follow() {
+        let Some(mut h) = host() else { return };
+        let a = &mut h.app;
+        a.clock.jd = TEST_DATE;
+        a.immediate = false;
+        a.clock.playing = true;
+        for rate in [3_600.0, 86_400.0, 2.63e6, 3.156e7] {
+            a.clock.rate = rate;
+            for pointer in POINTERS {
+                for dex in [NOTCH, -NOTCH] {
+                    follow_earth_from_afar(a);
+                    a.tick(FRAME);
+                    let what = format!("Play at {rate}, pointer {pointer:?}, notch {dex}");
+                    zoom_while_following(a, pointer, dex, 0.0, &what);
+                }
+            }
+        }
+    }
+
+    /// The view you get on landing, where the reported notch threw Earth 77,000 px away. The
+    /// presentation tilt turns the view at this scale, hence the slack.
+    #[test]
+    fn a_notch_with_time_running_keeps_a_planet_you_flew_to() {
+        let Some(mut h) = host() else { return };
+        let a = &mut h.app;
+        a.clock.jd = TEST_DATE;
+        a.immediate = false;
+        for rate in [3_600.0, 86_400.0] {
+            for pointer in POINTERS {
+                for dex in [NOTCH, -NOTCH] {
+                    a.clock.playing = false;
+                    a.dive_to(ObjectRef::Planet(2));
+                    land(a);
+                    a.clock.playing = true;
+                    a.clock.rate = rate;
+                    for _ in 0..240 {
+                        a.tick(FRAME);
+                    }
+                    let what = format!("Play at {rate}, pointer {pointer:?}, notch {dex}");
+                    zoom_while_following(a, pointer, dex, 0.15, &what);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_notch_in_a_simulation_holds_still_relative_to_what_you_follow() {
+        let Some(mut h) = host() else { return };
+        let a = &mut h.app;
+        a.clock.jd = TEST_DATE;
+        a.immediate = false;
+        for rate in [3_600.0, 86_400.0] {
+            for pointer in POINTERS {
+                for dex in [NOTCH, -NOTCH] {
+                    a.island = None;
+                    a.focus = Some(ObjectRef::Planet(2));
+                    a.awaken();
+                    a.clock.rate = rate;
+                    follow_earth_from_afar(a);
+                    a.tick(FRAME);
+                    let what = format!("Simulating at {rate}, pointer {pointer:?}, notch {dex}");
+                    zoom_while_following(a, pointer, dex, 0.0, &what);
+                    assert!(a.island.is_some(), "{what}: the simulation ended");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn scrolling_out_and_back_with_time_running_returns_to_the_planet() {
+        let Some(mut h) = host() else { return };
+        let a = &mut h.app;
+        a.clock.jd = TEST_DATE;
+        a.immediate = false;
+        a.clock.playing = true;
+        a.clock.rate = 86_400.0;
+        follow_earth_from_afar(a);
+        a.tick(FRAME);
+        let (earth, pointer) = (ObjectRef::Planet(2), [1210.0, 180.0]);
+        let start = px_apart(screen_of(a, earth), pointer);
+        let start_mpp = a.cam.mpp;
+        for dex in [NOTCH, -NOTCH] {
+            for _ in 0..5 {
+                wheel_at(a, pointer, dex);
+                for _ in 0..25 {
+                    a.tick(FRAME);
+                }
+            }
+        }
+        while a.zoom_pending != 0.0 {
+            a.tick(FRAME);
+        }
+        let end = px_apart(screen_of(a, earth), pointer);
+        assert!((a.cam.mpp / start_mpp - 1.0).abs() < 1e-3);
+        assert!(
+            (end - start).abs() < 2.0,
+            "{start:.0} px became {end:.0} px"
+        );
     }
 
     #[test]
