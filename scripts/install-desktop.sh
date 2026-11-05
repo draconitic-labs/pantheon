@@ -23,8 +23,8 @@ apps="$HOME/.local/share/applications"
 hicolor="$HOME/.local/share/icons/hicolor"
 icons="$hicolor/256x256/apps"
 
-# Pantheon 3D's entry is named after the window's app id (identifier in tauri.conf.json):
-# on Wayland that name is how the desktop finds the window's icon and launcher.
+# Each entry is named after its window's Wayland app id, which is how the desktop finds
+# the window's icon and launcher. That id is the binary's name: pantheon and pantheon-3d.
 #
 # An entry is ours if it runs a Pantheon binary from a checkout's build folders, the
 # only Exec line this script writes. That still matches after the checkout has moved.
@@ -103,7 +103,7 @@ refresh_caches() {
 
 if [ "$uninstall" = 1 ]; then
   remove_entry "$apps/pantheon.desktop"
-  remove_entry "$apps/app.pantheon.atlas3d.desktop"
+  remove_entry "$apps/pantheon-3d.desktop"
   remove_icon "$icons/pantheon.png" "$repo/assets/icon.png"
   remove_icon "$icons/pantheon-3d.png" "$repo/assets/icon-3d.png"
   refresh_caches
@@ -128,10 +128,10 @@ fi
 
 # Before any build, so a clash doesn't cost a long compile first
 refuse_foreign_entry "$apps/pantheon.desktop"
-refuse_foreign_entry "$apps/app.pantheon.atlas3d.desktop"
+refuse_foreign_entry "$apps/pantheon-3d.desktop"
 refuse_foreign_icon "$icons/pantheon.png" "$repo/assets/icon.png" "$apps/pantheon.desktop"
 if [ "$with_3d" = 1 ]; then
-  refuse_foreign_icon "$icons/pantheon-3d.png" "$repo/assets/icon-3d.png" "$apps/app.pantheon.atlas3d.desktop"
+  refuse_foreign_icon "$icons/pantheon-3d.png" "$repo/assets/icon-3d.png" "$apps/pantheon-3d.desktop"
 fi
 
 if [ "$build" = 1 ]; then
@@ -174,7 +174,7 @@ DESKTOP
 
 if [ "$with_3d" = 1 ] && [ -x "$flight_bin" ]; then
   install -m 644 "$repo/assets/icon-3d.png" "$icons/pantheon-3d.png"
-  cat >"$apps/app.pantheon.atlas3d.desktop" <<DESKTOP
+  cat >"$apps/pantheon-3d.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
 Name=Pantheon 3D
@@ -189,7 +189,7 @@ Keywords=universe;space;planets;stars;galaxy;3d;
 StartupWMClass=pantheon-3d
 DESKTOP
 else
-  remove_entry "$apps/app.pantheon.atlas3d.desktop"
+  remove_entry "$apps/pantheon-3d.desktop"
   remove_icon "$icons/pantheon-3d.png" "$repo/assets/icon-3d.png"
   [ "$with_3d" = 1 ] && echo "Skipping Pantheon 3D: $flight_bin was not found." >&2
 fi
