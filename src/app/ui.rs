@@ -489,7 +489,7 @@ impl Pantheon {
     }
 
     /// The solid body the view is about, if the view is near one.
-    fn near_subject(&self) -> Option<ObjectRef> {
+    pub(super) fn near_subject(&self) -> Option<ObjectRef> {
         let c = self.cam.center_root();
         let view = self.cam.mpp * self.view_w;
         let jd = self.clock.jd;
@@ -1254,18 +1254,7 @@ impl Pantheon {
             });
         self.scrub_held = scrub.is_some();
         if let Some(v) = scrub {
-            let subject = self
-                .scrub
-                .map(|(_, o)| o)
-                .or_else(|| self.near_subject())
-                .unwrap_or(ObjectRef::Planet(2));
-            if self.scrub.is_none() {
-                self.push_history();
-                self.stop_motion();
-                self.scene_exo = None;
-            }
-            self.scrub = Some((v, subject));
-            self.dismiss_intro();
+            self.scrub_to(v);
         }
         if let Some(v) = go {
             self.rail_go(v);

@@ -222,6 +222,8 @@ pub struct Pantheon {
     pub focus: Option<ObjectRef>,
     /// active exoplanet pocket — persists independently of selection
     pub scene_exo: Option<usize>,
+    /// The system a flight is heading to, once it has left the one it's in.
+    scene_next: Option<usize>,
     pub follow: Option<(ObjectRef, DVec3)>,
     pub island: Option<Island>,
     /// how long the simulation has been unable to keep up with the clock, in seconds
@@ -375,6 +377,7 @@ impl Pantheon {
             modes: Modes::default(),
             focus: Some(ObjectRef::Planet(2)),
             scene_exo: None,
+            scene_next: None,
             follow: Some((ObjectRef::Planet(2), DVec3::ZERO)),
             island: None,
             island_shortfall: 0.0,
@@ -475,8 +478,9 @@ impl Pantheon {
         self.stop_motion();
         self.focus = h.focus;
         self.follow = h.follow;
-        // a view outside any system: the one you're in stays until the flight leaves it
-        self.scene_exo = h.scene_exo.or(self.scene_exo);
+        if let Some(ei) = h.scene_exo {
+            self.head_for_scene(ei);
+        }
         let dur = self.cam.flight_seconds(h.center, h.mpp, self.view_w);
         self.cam
             .fly_to_view(h.center, h.mpp, h.tilt, h.yaw, self.view_w, dur);
@@ -635,6 +639,7 @@ impl Pantheon {
         self.zoom_pending = 0.0;
         self.zoom_anchor = None;
         self.scrolled_out = None;
+        self.scene_next = None;
         self.pan_vel = [0.0, 0.0];
     }
 
@@ -785,34 +790,69 @@ impl Pantheon {
         }
         self.update_presentation(dt);
         self.hold_zoom_point();
-        // exoplanet pocket persists until the camera actually leaves it. A flight there
-        // starts far away, so distance means nothing until it has landed; a flight anywhere
-        // else leaves when it leaves.
-        if let Some(ei) = self.scene_exo {
-            let host = self.u.exos[ei].pos;
-            let arriving = self.cam.anim.as_ref().is_some_and(|a| {
-                (self.cam.frame_origin + a.c1 - host).length() < crate::frames::PC
-            });
-            let lw = self.cam.log_width(self.view_w);
-            let d = (self.cam.center_root() - host).length();
-            if !arriving && (lw > 15.8 || d > crate::frames::PC) {
-                self.scene_exo = None;
-            }
-        }
-        // and comes back when you scroll back to the system you still have selected
-        if let (None, None, Some(ObjectRef::ExoHost(ei) | ObjectRef::ExoPlanet(ei, _))) =
-            (self.scene_exo, &self.cam.anim, self.focus)
-        {
-            let lw = self.cam.log_width(self.view_w);
-            let d = (self.cam.center_root() - self.u.exos[ei].pos).length();
-            if lw < 15.6 && d < 0.5 * crate::frames::PC {
-                self.scene_exo = Some(ei);
-            }
-        }
+        self.update_scene();
         if let Some((_, until)) = self.status {
             if self.anim_t > until {
                 self.status = None;
             }
+        }
+    }
+
+    /// Is a view this wide, centred here, in this system? The star's within `reach` views of it,
+    /// or the view is among the planets.
+    fn view_in_system(&self, ei: usize, center: DVec3, view_m: f64, reach: f64) -> bool {
+        let among = obj_half_extent(&self.u, ObjectRef::ExoHost(ei));
+        (center - self.u.exos[ei].pos).length() < reach * view_m.max(among)
+    }
+
+    /// An exoplanet system stays on until the camera has really left it. A flight there starts
+    /// far away, so distance means nothing until it has landed; a flight anywhere else leaves
+    /// when it leaves. And whenever the view comes to rest on a host, by any route, its system
+    /// is what's there.
+    fn update_scene(&mut self) {
+        let center = self.cam.center_root();
+        let view_m = self.cam.mpp * self.view_w;
+        let lw = view_m.log10();
+        if let Some(ei) = self.scene_exo {
+            let arriving = self.cam.anim.as_ref().is_some_and(|a| {
+                let dest = self.cam.frame_origin + a.c1;
+                self.view_in_system(ei, dest, 10f64.powf(a.lm1) * self.view_w, 3.0)
+            });
+            if !arriving && (lw > 15.8 || !self.view_in_system(ei, center, view_m, 3.0)) {
+                self.scene_exo = self.scene_next.take();
+            }
+        }
+        if self.cam.anim.is_some() {
+            return;
+        }
+        if let Some(next) = self.scene_next.take() {
+            if self.view_in_system(next, center, view_m, 3.0) {
+                self.scene_exo = Some(next);
+            }
+        }
+        if self.scene_exo.is_none() && lw < 15.6 {
+            let nearest = self
+                .u
+                .exos
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.dist_pc.is_some())
+                .map(|(ei, e)| ((center - e.pos).length_squared(), ei))
+                .min_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some((_, ei)) =
+                nearest.filter(|(_, ei)| self.view_in_system(*ei, center, view_m, 0.6))
+            {
+                self.scene_exo = Some(ei);
+            }
+        }
+    }
+
+    /// A flight's headed for this system. The one it's in, if any, stays until it has left.
+    fn head_for_scene(&mut self, ei: usize) {
+        if self.scene_exo.is_some_and(|now| now != ei) {
+            self.scene_next = Some(ei);
+        } else {
+            self.scene_exo = Some(ei);
         }
     }
 
@@ -854,9 +894,39 @@ impl Pantheon {
     fn ladder_center(&self, lw: f64, subject: ObjectRef) -> DVec3 {
         use crate::frames::smoothstep;
         let body = obj_pos(&self.u, subject, self.clock.jd, self.island.as_ref());
-        let near = body.lerp(DVec3::ZERO, smoothstep(10.2, 12.0, lw));
+        let leaves = Self::ladder_leaves(subject);
+        let near = body.lerp(DVec3::ZERO, smoothstep(leaves, leaves + 1.8, lw));
         let t = smoothstep(19.2, 20.6, lw) * (1.0 - smoothstep(22.2, 23.2, lw));
         near.lerp(self.u.gal.center, t)
+    }
+
+    /// The scale where the ladder leaves its subject for the Sun: a body in the Solar System is
+    /// lost among the planets, and an exoplanet system only ends with interstellar space.
+    fn ladder_leaves(subject: ObjectRef) -> f64 {
+        match subject {
+            ObjectRef::ExoHost(_) | ObjectRef::ExoPlanet(..) => 15.8,
+            _ => 10.2,
+        }
+    }
+
+    /// Start dragging the rail, or carry on with it. In a system, the rail is about that system.
+    fn scrub_to(&mut self, v: f64) {
+        let in_system = self.scene_exo.map(|ei| match self.focus {
+            Some(ObjectRef::ExoPlanet(e, k)) if e == ei => ObjectRef::ExoPlanet(e, k),
+            _ => ObjectRef::ExoHost(ei),
+        });
+        let subject = self
+            .scrub
+            .map(|(_, o)| o)
+            .or(in_system)
+            .or_else(|| self.near_subject())
+            .unwrap_or(ObjectRef::Planet(2));
+        if self.scrub.is_none() {
+            self.push_history();
+            self.stop_motion();
+        }
+        self.scrub = Some((v, subject));
+        self.dismiss_intro();
     }
 
     /// Dragging the rail moves through scale directly, staying on the ladder so
@@ -874,12 +944,13 @@ impl Pantheon {
         let now = lw + (target - lw) * k;
         self.cam.mpp =
             (10f64.powf(now) / self.view_w).clamp(crate::frames::MPP_MIN, crate::frames::MPP_MAX);
-        self.cam.center = self.ladder_center(now, subject) - self.cam.frame_origin;
+        let on_ladder = self.ladder_center(now, subject) - self.cam.frame_origin;
+        self.cam.center = self.cam.center.lerp(on_ladder, k);
         self.cam.anim = None;
         self.follow = None;
         if !self.scrub_held && (target - now).abs() < 0.002 {
             self.scrub = None;
-            if now < 10.2 {
+            if now < Self::ladder_leaves(subject) {
                 self.follow = Some((subject, DVec3::ZERO));
             }
         }
@@ -1086,7 +1157,7 @@ impl Pantheon {
         self.stop_motion();
         // after the history entry above, which remembers the scene being left
         if let ObjectRef::ExoHost(ei) | ObjectRef::ExoPlanet(ei, _) = obj {
-            self.scene_exo = Some(ei);
+            self.head_for_scene(ei);
         }
         self.focus = Some(obj);
         self.follow = Some((obj, DVec3::ZERO));
@@ -3505,6 +3576,182 @@ mod tests {
         paused_row("empty space", "Earth", 9.0, [400.0, -260.0]);
     }
 
+    /// In a system, the title and the scene answer to where the view actually is.
+    fn title(h: &mut Host) -> String {
+        let (w, ht) = (h.app.view_w as u32, h.app.view_h as u32);
+        h.frame(w, ht, FRAME, false).unwrap();
+        h.app.fo.as_ref().unwrap().band_name.clone()
+    }
+
+    fn into_system(h: &mut Host) -> usize {
+        h.app.immediate = false;
+        let ei = h.app.u.find_system("TRAPPIST-1").unwrap();
+        h.frame(800, 450, FRAME, false).unwrap();
+        h.app.dive_to(ObjectRef::ExoHost(ei));
+        land(&mut h.app);
+        ei
+    }
+
+    fn scroll_notches(h: &mut Host, pointer: [f32; 2], way: f64, notches: usize) {
+        for _ in 0..notches {
+            h.frame(800, 450, FRAME, false).unwrap();
+            wheel_at(&mut h.app, pointer, way);
+            for _ in 0..4 {
+                h.app.tick(FRAME);
+            }
+        }
+        for _ in 0..60 {
+            h.app.tick(FRAME);
+        }
+    }
+
+    #[test]
+    fn the_title_does_not_name_a_star_far_out_of_view() {
+        let Some(mut h) = host() else { return };
+        let ei = into_system(&mut h);
+        scroll_notches(&mut h, [550.0, 140.0], NOTCH, 25);
+        // somewhere else, about a light-year from the star at this scale, and back in
+        scroll_notches(&mut h, [502.0, 140.0], -NOTCH, 25);
+        let star = h.app.u.exos[ei].pos;
+        let d = (h.app.cam.center_root() - star).length();
+        let view = h.app.cam.mpp * h.app.view_w;
+        let name = title(&mut h);
+        println!("{name}, the star {} views away", d / view);
+        assert!(d > 3.0 * view, "this should end well away from the star");
+        assert_ne!(
+            name,
+            h.app.u.exos[ei].host,
+            "the star is {} views away",
+            d / view
+        );
+        assert_eq!(h.app.scene_exo, None);
+    }
+
+    /// However you got there, the star's spot shows the star's system.
+    fn lands_in_the_system(deselect: impl Fn(&mut Pantheon)) {
+        let Some(mut h) = host() else { return };
+        let ei = into_system(&mut h);
+        let pointer = [550.0, 140.0];
+        deselect(&mut h.app);
+        scroll_notches(&mut h, pointer, NOTCH, 30);
+        assert_eq!(h.app.scene_exo, None, "should have left");
+        scroll_notches(&mut h, pointer, -NOTCH, 30);
+        assert_eq!(h.app.scene_exo, Some(ei), "back on the star, no system");
+        let host_name = h.app.u.exos[ei].host.clone();
+        assert_eq!(title(&mut h), host_name);
+    }
+
+    #[test]
+    fn a_stray_click_then_out_and_back_lands_in_the_system() {
+        lands_in_the_system(|a| a.click_canvas(None));
+    }
+
+    #[test]
+    fn esc_then_out_and_back_lands_in_the_system() {
+        lands_in_the_system(|a| {
+            a.focus = None;
+            a.follow = None;
+        });
+    }
+
+    #[test]
+    fn dragging_the_rail_from_a_system_stays_with_it() {
+        let Some(mut h) = host() else { return };
+        let ei = into_system(&mut h);
+        let a = &mut h.app;
+        let star = a.u.exos[ei].pos;
+        let lw = a.cam.log_width(a.view_w);
+        a.scrub_held = true;
+        a.scrub_to(lw + 1.0);
+        for _ in 0..30 {
+            a.tick(FRAME);
+            let view = a.cam.mpp * a.view_w;
+            let d = (a.cam.center_root() - star).length();
+            assert!(d < 0.02 * view, "snapped {d} m in a view {view} m wide");
+            assert_eq!(a.scene_exo, Some(ei), "the system went on the first frame");
+        }
+        assert!((a.cam.log_width(a.view_w) - lw - 1.0).abs() < 0.05);
+        // on up the rail: past the system's scales it lets go, without a jump
+        let mut last = a.cam.center_root();
+        for n in 0..300 {
+            let up = lw + 1.0 + n as f64 * 0.03;
+            a.scrub_to(up);
+            a.tick(FRAME);
+            let view = a.cam.mpp * a.view_w;
+            let at = a.cam.center_root();
+            assert!((at - last).length() < view, "a jump at {up}");
+            last = at;
+        }
+        assert_eq!(a.scene_exo, None);
+    }
+
+    #[test]
+    fn flying_between_systems_keeps_the_first_until_it_has_left() {
+        let Some(mut h) = host() else { return };
+        let ei = into_system(&mut h);
+        let Some(other) = h.app.u.find_system("Proxima Cen") else {
+            crate::test_skipped("no Proxima Cen in this catalog");
+            return;
+        };
+        let a = &mut h.app;
+        a.dive_to(ObjectRef::ExoHost(other));
+        a.tick(FRAME);
+        assert_eq!(
+            a.scene_exo,
+            Some(ei),
+            "the first system went on the first frame"
+        );
+        let mut left_at = None;
+        let mut frames = 0;
+        while a.cam.anim.is_some() {
+            a.tick(FRAME);
+            frames += 1;
+            if a.scene_exo != Some(ei) && left_at.is_none() {
+                left_at = Some(frames);
+                let d = (a.cam.center_root() - a.u.exos[ei].pos).length();
+                let view = a.cam.mpp * a.view_w;
+                assert!(
+                    a.cam.log_width(a.view_w) > 15.8 || d > 3.0 * view,
+                    "let go with the star {} views away",
+                    d / view
+                );
+            }
+        }
+        assert!(left_at.is_some());
+        assert_eq!(a.scene_exo, Some(other));
+    }
+
+    #[test]
+    fn a_short_hop_to_another_star_changes_the_title() {
+        let Some(mut h) = host() else { return };
+        h.app.immediate = false;
+        let (Some(prox), Some(alpha)) = (
+            h.app.u.find_system("Proxima Cen"),
+            h.app
+                .find_object("alf Cen A")
+                .or(h.app.find_object("α Centauri")),
+        ) else {
+            crate::test_skipped("no Proxima Cen or α Centauri in this catalog");
+            return;
+        };
+        h.frame(800, 450, FRAME, false).unwrap();
+        h.app.dive_to(ObjectRef::ExoHost(prox));
+        land(&mut h.app);
+        assert_eq!(title(&mut h), "Proxima Cen");
+        h.app.dive_to(alpha);
+        land(&mut h.app);
+        for _ in 0..10 {
+            h.app.tick(FRAME);
+        }
+        let name = title(&mut h);
+        assert_ne!(
+            name,
+            "Proxima Cen",
+            "on {:?}",
+            h.app.focus.map(|o| obj_name(&h.app.u, o))
+        );
+    }
+
     /// Frame Earth from far enough out that the presentation tilt, which turns the view close
     /// to a body, plays no part, and follow it.
     fn follow_earth_from_afar(a: &mut Pantheon) {
@@ -3759,7 +4006,7 @@ mod tests {
                     // it let go because the camera left, not before
                     let d = (at - a.u.exos[ei].pos).length();
                     assert!(
-                        a.cam.log_width(a.view_w) > 15.8 || d > crate::frames::PC,
+                        a.cam.log_width(a.view_w) > 15.8 || d > 3.0 * view,
                         "{name}: let go still inside, {d} m from the star"
                     );
                     assert!(frames > 1, "{name}: let go at once");
