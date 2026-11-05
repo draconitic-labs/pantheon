@@ -244,7 +244,10 @@ frame, computed in JavaScript doubles, with a logarithmic depth buffer.
 `cargo test --lib --bins` runs the checks, including golden frame and time tests, a test
 that panels never collide at any window size, and the local server's refusals over real
 sockets. `tools/test_fetch_data.py` tests the downloader against a server that misbehaves on
-purpose. All of it works with or without the large downloads.
+purpose. All of it works with or without the large downloads: a test that needs them prints
+`SKIPPED` and why, which CI's log will show, because the runner has none. CI has no GPU either,
+so it renders on lavapipe, a software Vulkan driver, and sets `PANTHEON_REQUIRE_GPU=1` so that
+a test that can't render fails rather than skips.
 
 Pantheon is developed and tested on Linux. See the end of `KNOWN_ISSUES.md` about Windows.
 

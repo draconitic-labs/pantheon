@@ -34,8 +34,19 @@ jobs:
       - name: Build
         run: cargo build --release --locked --bin pantheon --bin pantheon-cli
 
+      # The runner has no GPU, so everything renders on lavapipe, the software Vulkan driver in
+      # mesa-vulkan-drivers. A test that can't render fails here rather than skipping. There's
+      # no data on the runner either, so tests needing the kernels print SKIPPED and why.
       - name: Test
+        env:
+          PANTHEON_REQUIRE_GPU: "1"
         run: cargo test --locked --lib --bins
+
+      - name: Render headless through the release binary
+        run: |
+          target/release/pantheon --doctor | grep '^gpu:'
+          target/release/pantheon --shot earth --size 640x360 --out "$RUNNER_TEMP/shots"
+          test -s "$RUNNER_TEMP/shots/earth.png"
 
       - name: Clippy
         run: cargo clippy --locked --lib --bins -- -D warnings

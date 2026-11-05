@@ -603,9 +603,18 @@ mod tests {
     use super::*;
     use crate::sim::J2000;
 
+    /// The kernels are an optional download, and a fresh clone or CI doesn't have them.
+    fn kernels_or_skip() -> Option<&'static SpiceSet> {
+        let s = spice();
+        if s.is_none() {
+            crate::test_skipped("no kernels here");
+        }
+        s
+    }
+
     #[test]
     fn lsk_parses_known_epochs() {
-        let Some(s) = spice() else { return }; // kernels optional in CI
+        let Some(s) = kernels_or_skip() else { return };
         let Some(lsk) = &s.lsk else {
             panic!("lsk should load")
         };
@@ -620,10 +629,10 @@ mod tests {
     /// chain). Kilometer-level agreement or the reader is wrong.
     #[test]
     fn de440_matches_cached_horizons() {
-        let Some(s) = spice() else { return };
+        let Some(s) = kernels_or_skip() else { return };
         let u = crate::data::Universe::load();
         let (Some(earth), Some(moon)) = (&u.planet_truth[2], &u.moon_truth) else {
-            eprintln!("kernels are here but the Horizons tracks aren't: gate skipped");
+            crate::test_skipped("kernels are here but the Horizons tracks aren't");
             return;
         };
         for k in [5usize, 60, 130] {
@@ -649,21 +658,23 @@ mod tests {
     /// when absent.
     #[test]
     fn satellite_kernels_match_horizons() {
-        let Some(s) = spice() else { return };
+        let Some(s) = kernels_or_skip() else { return };
         let root = crate::data::asset_root();
         for (moon_id, planet_id, file, center) in [
             (501, 599, "io_gate.txt", "Jupiter"),
             (606, 699, "titan_gate.txt", "Saturn"),
         ] {
             if !s.has(moon_id, J2000 + 9_650.0) {
-                eprintln!("kernel for {moon_id} not loaded — gate skipped");
+                crate::test_skipped(&format!("kernel for {moon_id} not loaded"));
                 continue;
             }
             // these arcs were fetched by hand to check the reader, and aren't in
             // tools/fetch_data.py, so a normal fetch doesn't have them
             let path = root.join("data/spacecraft").join(file);
             if !path.is_file() {
-                eprintln!("{file} isn't on this computer: gate for {moon_id} skipped");
+                crate::test_skipped(&format!(
+                    "{file} isn't on this computer, so no gate for {moon_id}"
+                ));
                 continue;
             }
             let track = crate::data::load_horizons_pub(&path, center)

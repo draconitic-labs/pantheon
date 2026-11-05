@@ -2491,7 +2491,8 @@ pub fn run_path(
 mod tests {
     use super::*;
 
-    /// A real app, without a window. Skips where there's no GPU adapter at all.
+    /// A real app, without a window. With nothing here that can render, the test skips and says
+    /// so, unless `PANTHEON_REQUIRE_GPU` is set, as CI sets it, and then it fails.
     fn host() -> Option<Headless> {
         match Headless::new() {
             Ok(mut h) => {
@@ -2500,10 +2501,26 @@ mod tests {
                 Some(h)
             }
             Err(e) => {
-                eprintln!("no GPU adapter here, test skipped: {e}");
+                assert!(
+                    std::env::var_os("PANTHEON_REQUIRE_GPU").is_none(),
+                    "this test must render, and can't: {e:#}"
+                );
+                crate::test_skipped(&format!("nothing here can render: {e:#}"));
                 None
             }
         }
+    }
+
+    #[test]
+    fn the_headless_path_renders_a_real_picture() {
+        let Some(mut h) = host() else { return };
+        let (w, ht) = (640, 360);
+        h.app.dive_to(ObjectRef::Planet(2));
+        land(&mut h.app);
+        let px = h.frame(w, ht, FRAME, true).unwrap();
+        assert_eq!(px.len(), (w * ht * 4) as usize);
+        let colours: std::collections::HashSet<&[u8]> = px.chunks(4).collect();
+        assert!(colours.len() > 100, "{} colours", colours.len());
     }
 
     const FRAME: f64 = 1.0 / 60.0;
