@@ -5,6 +5,19 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # These crates break their APIs between minor versions and change what's drawn, so moving
+    # them is a deliberate job with a look at the result. Patch releases still come through.
+    ignore:
+      - dependency-name: "egui*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: eframe
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "epaint*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "wgpu*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: glam
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
   - package-ecosystem: cargo
     directory: /src-tauri
     schedule:
