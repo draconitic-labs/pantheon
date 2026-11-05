@@ -240,6 +240,34 @@ function orbitLine(samples, color, gain = 1) {
   return line;
 }
 
+// The ellipse a moon's state defines about its parent (m and m/day, relative to the parent), as
+// n + 1 points starting from the moon, equally spaced in time. Null if the state isn't a bound
+// orbit. `period` and `a` give the pair's total GM: a moon's own mass matters for Charon.
+function ellipseThrough(pos, vel, period, a0, n) {
+  const TAU = Math.PI * 2, day = 86400;
+  const gm = (TAU / (period * day)) ** 2 * a0 ** 3;
+  const r = new THREE.Vector3(pos[0], pos[1], pos[2]);
+  const v = new THREE.Vector3(vel[0], vel[1], vel[2]).divideScalar(day);
+  const rl = r.length();
+  const h = new THREE.Vector3().crossVectors(r, v);
+  const a = 1 / (2 / rl - v.lengthSq() / gm);
+  const ev = new THREE.Vector3().crossVectors(v, h).divideScalar(gm).addScaledVector(r, -1 / rl);
+  const e = ev.length();
+  if (!(a > 0 && e < 0.9 && h.lengthSq() > 0)) return null;
+  // perifocal axes; on a circle the periapsis means nothing, so measure from the moon
+  const px = e > 1e-9 ? ev.clone().divideScalar(e) : r.clone().divideScalar(rl);
+  const py = new THREE.Vector3().crossVectors(h, px).normalize();
+  const nu = Math.atan2(r.dot(py), r.dot(px));
+  const ea0 = Math.atan2(Math.sqrt(1 - e * e) * Math.sin(nu), e + Math.cos(nu));
+  const m0 = ea0 - e * Math.sin(ea0);
+  const b = a * Math.sqrt(1 - e * e), out = [];
+  for (let k = 0; k <= n; k++) {
+    const ea = eph.keplerE((m0 + TAU * k / n) % TAU, e);
+    out.push(px.clone().multiplyScalar(a * (Math.cos(ea) - e)).addScaledVector(py, b * Math.sin(ea)));
+  }
+  return out;
+}
+
 function pointInRings(lon, lat, rings) {
   let inside = false;
   for (const ring of rings) {
@@ -653,6 +681,27 @@ export class SolarSystem {
       this._stateIdx = new Map();
       for (const b of states.bodies || []) this._stateIdx.set('p:' + b.name, b);
       for (const m of states.moons || []) this._stateIdx.set('m:' + m.name, m);
+      this._fitMoonLines(states.jd);
+    }
+  }
+
+  // A moon on a kernel sits on the ellipse its own state defines. The mean-element ellipse can be
+  // far from it: Iapetus's fixed node puts it 25 degrees off. A moon back on mean elements, on a
+  // date outside its kernel, gets the mean ellipse back.
+  _fitMoonLines(jd) {
+    for (let mi = 0; mi < eph.MOONS.length; mi++) {
+      const m = eph.MOONS[mi];
+      const ol = this.orbitLines.get(m.name);
+      const e = this._stateIdx.get('m:' + m.name);
+      const attr = ol.line.geometry.getAttribute('position');
+      const n = attr.count - 1;
+      const fit = e && e.src === 'spice' ? ellipseThrough(e.pos, e.vel, m.period, m.a, n) : null;
+      if (!fit && !ol.fitted) continue;
+      const samples = fit || Array.from({ length: n + 1 }, (_, k) => eph.moonRel(mi, jd + m.period * (k % n) / n));
+      for (let k = 0; k <= n; k++) attr.setXYZ(k, samples[k].x, samples[k].y, samples[k].z);
+      attr.needsUpdate = true;
+      ol.jd0 = jd;
+      ol.fitted = !!fit;
     }
   }
 
