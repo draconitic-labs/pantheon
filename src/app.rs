@@ -444,7 +444,8 @@ impl Pantheon {
         self.stop_motion();
         self.focus = h.focus;
         self.follow = h.follow;
-        self.scene_exo = h.scene_exo;
+        // a view outside any system: the one you're in stays until the flight leaves it
+        self.scene_exo = h.scene_exo.or(self.scene_exo);
         let dur = self.cam.flight_seconds(h.center, h.mpp, self.view_w);
         self.cam
             .fly_to_view(h.center, h.mpp, h.tilt, h.yaw, self.view_w, dur);
@@ -645,11 +646,16 @@ impl Pantheon {
         }
         self.update_presentation(dt);
         // exoplanet pocket persists until the camera actually leaves it. A flight there
-        // starts far away, so distance means nothing until it has landed.
-        if let (Some(ei), None) = (self.scene_exo, &self.cam.anim) {
+        // starts far away, so distance means nothing until it has landed; a flight anywhere
+        // else leaves when it leaves.
+        if let Some(ei) = self.scene_exo {
+            let host = self.u.exos[ei].pos;
+            let arriving = self.cam.anim.as_ref().is_some_and(|a| {
+                (self.cam.frame_origin + a.c1 - host).length() < crate::frames::PC
+            });
             let lw = self.cam.log_width(self.view_w);
-            let d = (self.cam.center_root() - self.u.exos[ei].pos).length();
-            if lw > 15.8 || d > crate::frames::PC {
+            let d = (self.cam.center_root() - host).length();
+            if !arriving && (lw > 15.8 || d > crate::frames::PC) {
                 self.scene_exo = None;
             }
         }
@@ -921,10 +927,9 @@ impl Pantheon {
         }
         self.stop_motion();
         // after the history entry above, which remembers the scene being left
-        self.scene_exo = match obj {
-            ObjectRef::ExoHost(ei) | ObjectRef::ExoPlanet(ei, _) => Some(ei),
-            _ => None,
-        };
+        if let ObjectRef::ExoHost(ei) | ObjectRef::ExoPlanet(ei, _) = obj {
+            self.scene_exo = Some(ei);
+        }
         self.focus = Some(obj);
         self.follow = Some((obj, DVec3::ZERO));
         let dur = self.cam.flight_seconds(pos, mpp, self.view_w);
@@ -948,7 +953,6 @@ impl Pantheon {
         self.push_history();
         self.stop_motion();
         self.follow = None;
-        self.scene_exo = None;
         let mpp = width_m / self.view_w;
         let dur = self.cam.flight_seconds(center, mpp, self.view_w);
         self.cam
@@ -2666,6 +2670,84 @@ mod tests {
         h.frame(800, 450, FRAME, false).unwrap();
         let caption = &h.app.fo.as_ref().unwrap().caption.0;
         assert!(caption.contains("Exoplanet Archive"), "{caption}");
+    }
+
+    /// The ways out of a system: it stays until the flight has left, then it's gone for good.
+    #[test]
+    fn flying_out_of_a_system_keeps_it_until_the_flight_leaves() {
+        let Some(mut h) = host() else { return };
+        let a = &mut h.app;
+        let ei = a.u.find_system("TRAPPIST-1").unwrap();
+        type Way<'a> = (&'a str, &'a dyn Fn(&mut Pantheon));
+        let ways: [Way; 4] = [
+            ("a search", &|a| a.dive_to(ObjectRef::Planet(3))),
+            ("Home", &|a| a.go_home()),
+            ("the rail", &|a| {
+                a.fly_to_place(DVec3::ZERO, 1e13, "The Solar System")
+            }),
+            ("Back", &|a| a.go_back()),
+        ];
+        for (name, leave) in ways {
+            // Back returns to where the last flight started
+            a.dive_to(ObjectRef::Planet(2));
+            land(a);
+            a.dive_to(ObjectRef::ExoHost(ei));
+            land(a);
+            assert_eq!(a.scene_exo, Some(ei));
+            let start = a.cam.center_root();
+            leave(a);
+            a.tick(FRAME);
+            assert_eq!(a.scene_exo, Some(ei), "{name}: dropped on the first frame");
+            let (mut seen_gone, mut last, mut frames) = (false, a.cam.center_root(), 0);
+            while a.cam.anim.is_some() {
+                a.tick(FRAME);
+                frames += 1;
+                let view = a.cam.mpp * a.view_w;
+                let at = a.cam.center_root();
+                if a.scene_exo.is_none() && !seen_gone {
+                    seen_gone = true;
+                    // it let go because the camera left, not before
+                    let d = (at - a.u.exos[ei].pos).length();
+                    assert!(
+                        a.cam.log_width(a.view_w) > 15.8 || d > crate::frames::PC,
+                        "{name}: let go still inside, {d} m from the star"
+                    );
+                    assert!(frames > 1, "{name}: let go at once");
+                    assert!(
+                        (at - last).length() < view,
+                        "{name}: the camera jumped as it let go"
+                    );
+                }
+                assert!(
+                    !seen_gone || a.scene_exo.is_none(),
+                    "{name}: the system came back during the flight"
+                );
+                last = at;
+            }
+            assert_eq!(a.scene_exo, None, "{name}: still in the system on landing");
+            assert!((a.cam.center_root() - start).length() > crate::frames::PC);
+        }
+    }
+
+    #[test]
+    fn flying_into_a_system_keeps_it_all_the_way() {
+        let Some(mut h) = host() else { return };
+        let a = &mut h.app;
+        let ei = a.u.find_system("TRAPPIST-1").unwrap();
+        a.dive_to(ObjectRef::Planet(2));
+        land(a);
+        a.dive_to(ObjectRef::ExoHost(ei));
+        while a.cam.anim.is_some() {
+            a.tick(FRAME);
+            assert_eq!(a.scene_exo, Some(ei), "lost it on the way in");
+        }
+        a.go_home();
+        land(a);
+        a.go_back();
+        while a.cam.anim.is_some() {
+            a.tick(FRAME);
+            assert_eq!(a.scene_exo, Some(ei), "Back lost it on the way in");
+        }
     }
 
     #[test]
