@@ -21,7 +21,7 @@ default = ["audio"]
 audio = ["dep:cpal"]
 
 [dependencies]
-cpal = { version = "0.15", optional = true }
+cpal = { version = "0.18", optional = true }
 eframe = { version = "0.32", default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }
 egui = "0.32"
 wgpu = "25"
