@@ -2514,7 +2514,7 @@ fn check_view_widths(keys: &[PathKey]) -> anyhow::Result<()> {
         if let Some(w) = key.view_w {
             anyhow::ensure!(
                 (1.0..=65536.0).contains(&w),
-                "path file: keyframe {} has view_w {w}, which isn't a window width (1 to 65536 pixels)",
+                "path file: keyframe {} has view_w {w:?}, which isn't a window width (1 to 65536 pixels)",
                 i + 1
             );
         }
