@@ -9,7 +9,8 @@
 # The entries point at the binaries in this checkout, which is also where the
 # datasets live, so moving or deleting the checkout breaks them. Run this again
 # after moving it. It refuses a checkout path with $ ` " \ or % in it, because a
-# menu entry can't name such a path reliably.
+# menu entry can't name such a path reliably. In an unpacked release, the same
+# holds for the release folder, and there is nothing to build.
 #
 # It doesn't overwrite what it didn't write: a menu entry of the same name, or an icon
 # of the same name that differs from ours with no entry of ours beside it, stops the
@@ -19,6 +20,11 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# An unpacked release has its binaries at the top, beside assets/, and no sources
+release=0
+if [ -x "$repo/pantheon" ] && [ ! -e "$repo/Cargo.toml" ]; then
+  release=1
+fi
 apps="$HOME/.local/share/applications"
 hicolor="$HOME/.local/share/icons/hicolor"
 icons="$hicolor/256x256/apps"
@@ -26,10 +32,11 @@ icons="$hicolor/256x256/apps"
 # Each entry is named after its window's Wayland app id, which is how the desktop finds
 # the window's icon and launcher. That id is the binary's name: pantheon and pantheon-3d.
 #
-# An entry is ours if it runs a Pantheon binary from a checkout's build folders, the
-# only Exec line this script writes. That still matches after the checkout has moved.
+# An entry is ours if it runs a Pantheon binary from a checkout's build folders or from
+# an unpacked release, the only Exec lines this script writes. That still matches after
+# the folder has moved.
 our_entry() {
-  grep -qE '^Exec=".*/target(-3d)?/release/pantheon(-3d)?"$' "$1"
+  grep -qE '^Exec=".*/(target(-3d)?/release/)?pantheon(-3d)?"$' "$1"
 }
 
 remove_entry() {
@@ -80,7 +87,7 @@ for arg in "$@"; do
     --no-3d) with_3d=0 ;;
     --uninstall) uninstall=1 ;;
     -h | --help)
-      sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -109,6 +116,11 @@ if [ "$uninstall" = 1 ]; then
   refresh_caches
   echo "Removed the Pantheon menu entries and icons. Your checkout and settings are untouched."
   exit 0
+fi
+
+if [ "$release" = 1 ]; then
+  build=0
+  with_3d=0
 fi
 
 # A .desktop file can't name these reliably: Exec and Path treat them as expansions or
@@ -149,6 +161,9 @@ fi
 
 atlas_bin="$repo/target/release/pantheon"
 flight_bin="$repo/target-3d/release/pantheon-3d"
+if [ "$release" = 1 ]; then
+  atlas_bin="$repo/pantheon"
+fi
 [ -x "$atlas_bin" ] || {
   echo "$atlas_bin is missing. Run this without --no-build." >&2
   exit 1
