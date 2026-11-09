@@ -9,7 +9,6 @@
     "longDescription": "Pantheon 3D shows the universe in true 3D in a native window, from a planet's surface out to the cosmic web, with real catalogs and JPL kernels where they exist and on-screen labels where they don't. The star, exoplanet and coastline catalogs are included. /usr/share/pantheon/tools/fetch_data.py downloads planet maps, spacecraft tracks and JPL kernels into ~/.local/share/pantheon.",
     "linux": {
       "deb": {
-        "depends": ["libasound2"],
         "desktopTemplate": "packaging/pantheon-3d.desktop",
         "files": {
           "/usr/share/pantheon/assets": "../assets",
@@ -21,7 +20,6 @@
         }
       },
       "rpm": {
-        "depends": ["libasound.so.2()(64bit)"],
         "desktopTemplate": "packaging/pantheon-3d.desktop",
         "files": {
           "/usr/share/pantheon/assets": "../assets",

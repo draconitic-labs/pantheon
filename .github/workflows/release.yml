@@ -76,8 +76,8 @@ jobs:
           "$app/pantheon" --doctor | tee doctor.txt
           grep '^gpu:' doctor.txt
           grep -Fx "assets:   root = $app/assets" doctor.txt
-          "$app/pantheon" --shot earth --size 640x360 --out "$check/shots"
-          test -s "$check/shots/earth.png"
+          "$app/pantheon" --shot earth --size 640x360 --out "$RUNNER_TEMP/shots-linux"
+          test -s "$RUNNER_TEMP/shots-linux/earth.png"
           python3 "$app/tools/fetch_data.py" --list | tee fetch-list.txt | head -1
           grep -Fx "data folder: $app/assets/data" fetch-list.txt
           # the menu installer writes entries that run the unpacked binaries
@@ -91,6 +91,11 @@ jobs:
           name: package-linux
           path: dist/*.tar.gz
           if-no-files-found: error
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: check-linux-shot
+          path: ${{ runner.temp }}/shots-linux
 
   pantheon-3d:
     name: Pantheon 3D packages (.deb, .rpm)
@@ -167,11 +172,14 @@ jobs:
             ${{ runner.temp }}/check-rpm
 
   windows:
-    name: Windows archive (trial)
+    name: Windows archive (pantheon, pantheon-cli)
     runs-on: windows-latest
     defaults:
       run:
         shell: bash
+    env:
+      # the C runtime linked in, so the binaries don't need the Visual C++ redistributable
+      RUSTFLAGS: -C target-feature=+crt-static
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -205,7 +213,8 @@ jobs:
 
       - name: Run the unpacked archive from an empty folder
         run: |
-          zip="$PWD/dist/$NAME.zip"
+          ws="$PWD"
+          zip="$ws/dist/$NAME.zip"
           check="$(cygpath -u "$RUNNER_TEMP")/check"
           mkdir "$check"
           cd "$check"
@@ -216,12 +225,22 @@ jobs:
           grep '^gpu:' doctor.txt
           "$app/pantheon-cli.exe" --shot earth --size 640x360 --out "$check/shots"
           test -s "$check/shots/earth.png"
+          mkdir -p "$ws/shots-windows"
+          cp "$check/shots/earth.png" "$ws/shots-windows/"
+          # the DLLs it loads: system ones only, no VCRUNTIME140.dll
+          ldd "$app/pantheon.exe" | tee dlls.txt
+          if grep -qi vcruntime dlls.txt; then exit 1; fi
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: package-windows
           path: dist/*.zip
           if-no-files-found: error
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: check-windows-shot
+          path: shots-windows
 
   release:
     name: Draft release

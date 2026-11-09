@@ -19,7 +19,7 @@ real data exists, and says so on screen when it doesn't.
 ## Download
 
 Each release's files are on the [Releases page](https://github.com/draconitic-labs/pantheon/releases),
-with their checksums in `SHA256SUMS`. They are built on Ubuntu 22.04 for x86_64 Linux.
+with their checksums in `SHA256SUMS`. The Linux files are built on Ubuntu 22.04 for x86_64.
 
 **The atlas**, `pantheon-<version>-linux-x86_64.tar.gz`, holds `pantheon`, `pantheon-cli`, the
 catalogs and fonts, and `tools/fetch_data.py`. It needs a Vulkan driver. Unpack it anywhere
@@ -47,6 +47,12 @@ python3 /usr/share/pantheon/tools/fetch_data.py --no-kernels
 From the package, `fetch_data.py` downloads into `~/.local/share/pantheon/assets`, which the
 window reads before the package's own folder. WebKit's data goes in
 `~/.local/share/pantheon/webview-data`.
+
+**The atlas on Windows**, `pantheon-<version>-windows-x86_64.zip`, has the same contents as the
+Linux archive, without the menu installer. Unzip it and run `pantheon.exe`;
+`pantheon-cli.exe --doctor` checks the GPU and data, and `python tools\fetch_data.py --no-kernels`
+adds planet maps and spacecraft tracks (it needs Python 3.9 or newer). Windows is less tested
+than Linux: see the end of `KNOWN_ISSUES.md`.
 
 ## Run it on Linux
 

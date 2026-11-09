@@ -95,7 +95,8 @@ apps running. The on-screen labels already say most of this where it applies.
 ## Windows
 
 Pantheon was first built on Windows, and the code paths remain (kernel memory mapping,
-WebView2 through Tauri), but the current tree is developed and tested only on Linux. The atlas
-passes `cargo check --target x86_64-pc-windows-gnullvm`, which only shows that it type-checks.
-Nobody has linked or run this version on Windows, and the 3D window hasn't even been
-type-checked for it, because its build script needs a Windows resource compiler.
+WebView2 through Tauri), but the current tree is developed and tested only on Linux. The release
+workflow builds the atlas on Windows, unpacks the archive into an empty folder, and runs
+`pantheon-cli --doctor` and a headless render there. That machine has no GPU, so it renders on
+Windows's software renderer (WARP). Nobody has used the interactive atlas window on Windows in
+this version. Pantheon 3D isn't built for Windows, and hasn't been type-checked for it.
