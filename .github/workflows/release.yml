@@ -12,6 +12,11 @@ on:
 permissions:
   contents: read
 
+# bash -eo pipefail, so a failing command piped into tee fails its step
+defaults:
+  run:
+    shell: bash
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -37,7 +42,13 @@ jobs:
       - name: Check the tag names this version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          for manifest in Cargo.toml src-tauri/Cargo.toml; do
+            version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$manifest" | head -1)
+            echo "$manifest: $version"
+            test "$GITHUB_REF_NAME" = "v$version"
+          done
+          version=$(python3 -c 'import json; print(json.load(open("src-tauri/tauri.conf.json"))["version"])')
+          echo "src-tauri/tauri.conf.json: $version"
           test "$GITHUB_REF_NAME" = "v$version"
 
       - name: Build
@@ -59,7 +70,7 @@ jobs:
           cp -r assets "$stage/assets"
           install -m 755 tools/fetch_data.py "$stage/tools/"
           install -m 755 scripts/install-desktop.sh "$stage/scripts/"
-          cp LICENSE NOTICE README.md "$RUNNER_TEMP/THIRD-PARTY-LICENSES.html" "$stage/"
+          cp LICENSE NOTICE README.md KNOWN_ISSUES.md "$RUNNER_TEMP/THIRD-PARTY-LICENSES.html" "$stage/"
           tar -C "$RUNNER_TEMP/stage" -czf "dist/$name.tar.gz" "$name"
           tar -tzvf "dist/$name.tar.gz" | grep -v '/assets/'
           echo "NAME=$name" >> "$GITHUB_ENV"
@@ -76,6 +87,9 @@ jobs:
           "$app/pantheon" --doctor | tee doctor.txt
           grep '^gpu:' doctor.txt
           grep -Fx "assets:   root = $app/assets" doctor.txt
+          for dataset in "stars: OK" "exoplanets: OK" "coastlines: OK" "land/night lights: OK"; do
+            grep -F "  $dataset" doctor.txt
+          done
           "$app/pantheon" --shot earth --size 640x360 --out "$RUNNER_TEMP/shots-linux"
           test -s "$RUNNER_TEMP/shots-linux/earth.png"
           python3 "$app/tools/fetch_data.py" --list | tee fetch-list.txt | head -1
@@ -174,9 +188,6 @@ jobs:
   windows:
     name: Windows archive (pantheon, pantheon-cli)
     runs-on: windows-latest
-    defaults:
-      run:
-        shell: bash
     env:
       # the C runtime linked in, so the binaries don't need the Visual C++ redistributable
       RUSTFLAGS: -C target-feature=+crt-static
@@ -207,7 +218,7 @@ jobs:
           cp target/release/pantheon.exe target/release/pantheon-cli.exe "$stage/"
           cp -r assets "$stage/assets"
           cp tools/fetch_data.py "$stage/tools/"
-          cp LICENSE NOTICE README.md "$tmp/THIRD-PARTY-LICENSES.html" "$stage/"
+          cp LICENSE NOTICE README.md KNOWN_ISSUES.md "$tmp/THIRD-PARTY-LICENSES.html" "$stage/"
           (cd "$tmp/stage" && 7z a -tzip "$OLDPWD/dist/$name.zip" "$name" >/dev/null)
           echo "NAME=$name" >> "$GITHUB_ENV"
 
@@ -223,6 +234,9 @@ jobs:
           "$app/pantheon-cli.exe" --version
           "$app/pantheon-cli.exe" --doctor | tee doctor.txt
           grep '^gpu:' doctor.txt
+          for dataset in "stars: OK" "exoplanets: OK" "coastlines: OK" "land/night lights: OK"; do
+            grep -F "  $dataset" doctor.txt
+          done
           "$app/pantheon-cli.exe" --shot earth --size 640x360 --out "$check/shots"
           test -s "$check/shots/earth.png"
           mkdir -p "$ws/shots-windows"
