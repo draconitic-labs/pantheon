@@ -70,8 +70,16 @@ struct Site {
     port: u16,
     qa: bool,
     web: PathBuf,
-    assets: PathBuf,
+    /// asset folders, searched in order: see [`crate::data::asset_roots`]
+    assets: Vec<PathBuf>,
     shot_dir: PathBuf,
+}
+
+impl Site {
+    /// `rel` in the first asset folder that has it
+    fn asset(&self, rel: &str) -> PathBuf {
+        crate::data::first_having(&self.assets, Path::new(rel))
+    }
 }
 
 /// QA mode is on only for exactly `PANTHEON_QA=1`. Empty, `0` or anything else is off.
@@ -101,7 +109,7 @@ fn run_loop(listener: TcpListener, port: u16, web: PathBuf) {
         port,
         qa: qa_requested(std::env::var_os("PANTHEON_QA").as_deref()),
         web,
-        assets: crate::data::asset_root(),
+        assets: crate::data::asset_roots(),
         shot_dir: std::env::var_os("PANTHEON_SHOT_DIR")
             .map_or_else(|| PathBuf::from("exports/webshots"), PathBuf::from),
     };
@@ -179,8 +187,11 @@ fn existing_pantheon(port: u16) -> bool {
 }
 
 fn web_root() -> anyhow::Result<PathBuf> {
-    let assets = crate::data::asset_root();
-    let mut cands = vec![assets.parent().unwrap_or(&assets).join("pantheon-web")];
+    let roots = crate::data::asset_roots();
+    let mut cands: Vec<PathBuf> = roots
+        .iter()
+        .map(|a| a.parent().unwrap_or(a).join("pantheon-web"))
+        .collect();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             cands.push(dir.join("../../pantheon-web"));
@@ -194,7 +205,7 @@ fn web_root() -> anyhow::Result<PathBuf> {
     }
     anyhow::bail!(
         "pantheon-web/index.html not found near {}",
-        assets.display()
+        roots[0].display()
     )
 }
 
@@ -374,9 +385,14 @@ fn resolve(path: &str, site: &Site) -> Served {
         ["index.html"] => (site.web.clone(), &parts[..], HTML),
         ["css", _] => (site.web.clone(), &parts[..], CSS),
         ["js" | "lib", ..] => (site.web.clone(), &parts[..], SCRIPT),
-        ["fonts", _] => (site.assets.join("fonts"), &parts[1..], FONT),
-        ["data", "textures", _] => (site.assets.join("data/textures"), &parts[2..], MAP),
-        ["data", _] => (site.assets.join("data"), &parts[1..], CATALOG),
+        ["fonts", _] => (site.asset("fonts"), &parts[1..], FONT),
+        ["data", "textures", _] => (site.asset("data/textures"), &parts[2..], MAP),
+        // a catalog may be a download or the copy a package ships, so look file by file
+        ["data", name] => {
+            let file = site.asset(&format!("data/{name}"));
+            let dir = file.parent().map(Path::to_path_buf).unwrap_or_default();
+            (dir, &parts[1..], CATALOG)
+        }
         _ => return Served::Refused,
     };
     let name = parts[parts.len() - 1];
@@ -597,7 +613,7 @@ fn api_meta(s: &mut Conn, uni: &crate::data::Universe, site: &Site) -> std::io::
         .map(|sp| sp.kernel_summary())
         .unwrap_or_else(|| "none".into());
     // the app asks for textures only if they exist: a fresh clone has none
-    let textures: Vec<String> = std::fs::read_dir(site.assets.join("data/textures"))
+    let textures: Vec<String> = std::fs::read_dir(site.asset("data/textures"))
         .map(|dir| {
             dir.flatten()
                 .filter_map(|e| e.file_name().into_string().ok())
@@ -772,13 +788,17 @@ mod tests {
 
         /// A server on a port the kernel picks, as `run_loop` would set it up.
         fn serve(&self, qa: bool) -> u16 {
+            self.serve_from(qa, vec![self.root.join("assets")])
+        }
+
+        fn serve_from(&self, qa: bool, assets: Vec<PathBuf>) -> u16 {
             let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
             let port = listener.local_addr().unwrap().port();
             let site = Site {
                 port,
                 qa,
                 web: self.root.join("web"),
-                assets: self.root.join("assets"),
+                assets,
                 shot_dir: self.root.join("shots"),
             };
             std::thread::spawn(move || accept_loop(listener, universe(), Arc::new(site)));
@@ -911,6 +931,55 @@ mod tests {
             ),
         );
         assert_eq!(r.code, 200, "{}", r.head);
+    }
+
+    /// An installed package: downloads in the user's folder, searched first, and the
+    /// package's own read-only copy after it.
+    #[test]
+    fn a_package_serves_downloads_first_and_its_own_files_after() {
+        let mut fx = Fixture::new();
+        for dir in ["user", "user/data", "user/data/textures"] {
+            let path = fx.root.join(dir);
+            std::fs::create_dir(&path).unwrap();
+            fx.made.push(path);
+        }
+        for (file, text) in [
+            ("user/data/stars.csv", "newer stars"),
+            ("user/data/textures/mars.jpg", "mars bytes"),
+        ] {
+            let path = fx.root.join(file);
+            std::fs::write(&path, text).unwrap();
+            fx.made.push(path);
+        }
+        #[cfg(unix)]
+        {
+            let path = fx.root.join("user/data/escape2.csv");
+            std::os::unix::fs::symlink(fx.root.join("outside.txt"), &path).unwrap();
+            fx.made.push(path);
+        }
+        let port = fx.serve_from(false, vec![fx.root.join("user"), fx.root.join("assets")]);
+        for (path, body) in [
+            ("/data/stars.csv", "newer stars"),
+            ("/data/land.geojson", "{}"),
+            ("/data/textures/mars.jpg", "mars bytes"),
+            ("/fonts/serif.ttf", "font bytes"),
+        ] {
+            let r = get(port, path);
+            assert_eq!((r.code, r.text().as_str()), (200, body), "{path}");
+        }
+        let meta = get(port, "/api/meta").text();
+        assert!(meta.contains("mars.jpg"), "{meta}");
+        #[cfg(unix)]
+        for path in ["/data/escape2.csv", "/data/escape.csv"] {
+            assert_refused(&get(port, path), path);
+        }
+        for path in [
+            "/data/fetch_log.txt",
+            "/data/provenance.json",
+            "/fonts/OFL.txt",
+        ] {
+            assert_refused(&get(port, path), path);
+        }
     }
 
     #[test]

@@ -211,7 +211,7 @@ fn decode(id: TexId, path: PathBuf, max_dim: u32) -> Result<Decoded, (TexId, Str
 
 impl TextureBank {
     pub fn new(gpu: &GpuContext) -> Self {
-        let root = crate::data::asset_root().join("data/textures");
+        let root = crate::data::asset_path("data/textures");
         let mut status = TexStatus::default();
         for t in ALL_TEX {
             status.present[t.index()] = root.join(t.file()).is_file();

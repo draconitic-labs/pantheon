@@ -247,7 +247,11 @@ fn doctor() -> anyhow::Result<()> {
     let (u, health) = crate::data::Universe::load_with_health();
     let mut bad = 0;
     let mut optional = 0;
-    println!("assets:   root = {}", crate::data::asset_root().display());
+    let roots = crate::data::asset_roots();
+    println!("assets:   root = {}", roots[0].display());
+    for later in &roots[1..] {
+        println!("          then {}", later.display());
+    }
     for line in &health.lines {
         println!("  {line}");
         if line.contains("MISSING") || line.contains("INVALID") {
@@ -259,7 +263,7 @@ fn doctor() -> anyhow::Result<()> {
             }
         }
     }
-    let tex = crate::data::asset_root().join("data/textures");
+    let tex = crate::data::asset_path("data/textures");
     let maps = crate::engine::textures::ALL_TEX
         .iter()
         .filter(|t| tex.join(t.file()).is_file())

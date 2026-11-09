@@ -6,7 +6,8 @@
 //!   PANTHEON_START_URL  page to open: full URL, or a path/query for the local server
 //!   PANTHEON_PORT       preferred backend port (default 8090; 0 lets the system pick)
 //!   PANTHEON_QA=1       enable the test hooks in the backend, only for exactly 1 (see serve.rs)
-//!   PANTHEON_WEBVIEW_DATA  where WebKit keeps its data (default: webview-data beside the binary)
+//!   PANTHEON_WEBVIEW_DATA  where WebKit keeps its data (default: webview-data beside the
+//!                       binary, or ~/.local/share/pantheon/webview-data for an installed package)
 //!   WEBKIT_DMABUF_RENDERER_FORCE_SHM  set by this app on NVIDIA unless you set it, or
 //!                       WEBKIT_DISABLE_DMABUF_RENDERER, yourself
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
@@ -43,12 +44,18 @@ fn start_url(port: u16) -> String {
     }
 }
 
-/// WebKit's data (the first-run flag, its cache) stays in the checkout with the
-/// binary and the datasets, so uninstalling leaves nothing in the home folder.
+/// WebKit's data (the first-run flag, its cache). A checkout or an unpacked folder keeps it
+/// beside the binary with the datasets, so removing the folder leaves nothing in the home
+/// folder. An installed package can't write beside its binary, so it uses the user's data
+/// folder, as its downloads do.
 fn webview_data_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os("PANTHEON_WEBVIEW_DATA")
-        .map(Into::into)
-        .or_else(|| Some(std::env::current_exe().ok()?.parent()?.join("webview-data")))
+    if let Some(dir) = std::env::var_os("PANTHEON_WEBVIEW_DATA") {
+        return Some(dir.into());
+    }
+    if pantheon::data::installed() {
+        return Some(pantheon::data::user_data_dir()?.join("webview-data"));
+    }
+    Some(std::env::current_exe().ok()?.parent()?.join("webview-data"))
 }
 
 fn main() {

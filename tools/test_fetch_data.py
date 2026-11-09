@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import http.server
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -179,6 +180,52 @@ class Fetch(unittest.TestCase):
         bad = ("kernels", "spice/bad.bsp", self.base + "/short", 0.01, fetch_data.KERNEL)
         self.assertEqual(self.run_main(bad), 1)
         self.assertFalse((self.data / "fetched.json").exists())
+
+    def with_env(self, **values):
+        for key, value in values.items():
+            if key in os.environ:
+                self.addCleanup(os.environ.__setitem__, key, os.environ[key])
+            else:
+                self.addCleanup(os.environ.pop, key, None)
+            os.environ[key] = value
+
+    def test_a_checkout_or_unpacked_release_fetches_beside_the_script(self):
+        root = Path(fetch_data.__file__).resolve().parent.parent
+        self.with_env(XDG_DATA_DIRS="/usr/local/share:/usr/share")
+        self.assertEqual(fetch_data.default_dest(), (root / "assets" / "data", None))
+
+    def test_an_installed_package_fetches_into_the_users_data_folder(self):
+        share = self.data / "share"
+        script = share / "pantheon" / "tools" / "fetch_data.py"
+        self.addCleanup(setattr, fetch_data, "__file__", fetch_data.__file__)
+        fetch_data.__file__ = str(script)
+        self.with_env(XDG_DATA_DIRS=f"/nonexistent:{share}", XDG_DATA_HOME="", HOME=str(self.data / "home"))
+        self.assertEqual(
+            fetch_data.default_dest(),
+            (self.data / "home/.local/share/pantheon/assets/data", share / "pantheon/assets/data"),
+        )
+        self.with_env(XDG_DATA_HOME=str(self.data / "xdg"))
+        self.assertEqual(fetch_data.default_dest()[0], self.data / "xdg/pantheon/assets/data")
+
+    def test_a_package_keeps_its_own_catalogs_and_fetches_the_rest(self):
+        user, shipped = self.data / "user", self.data / "shipped"
+        (shipped / "spice").mkdir(parents=True)
+        (shipped / "stars.csv").write_bytes(b"source_id,ra\n1,2\n")
+        (shipped / "spice" / "kernel.bsp").write_bytes(Misbehaving.body)
+        self.addCleanup(setattr, fetch_data, "default_dest", fetch_data.default_dest)
+        fetch_data.default_dest = lambda: (user, shipped)
+        catalog = ("catalogs", "stars.csv", self.base + "/nope", 0.01, b"source_id")
+        kernel = ("kernels", "spice/kernel.bsp", self.base + "/whole", 0.01, fetch_data.KERNEL)
+        self.addCleanup(setattr, fetch_data, "manifest", fetch_data.manifest)
+        fetch_data.manifest = lambda: [catalog, kernel]
+        self.addCleanup(setattr, sys, "argv", sys.argv)
+        sys.argv = ["fetch_data.py"]
+
+        self.assertEqual(fetch_data.main(), 0)
+
+        self.assertEqual((user / "spice" / "kernel.bsp").read_bytes(), Misbehaving.body)
+        self.assertFalse((user / "stars.csv").exists(), "the package's catalog was enough")
+        self.assertEqual(json.loads((user / "fetched.json").read_text()).keys(), {"spice/kernel.bsp"})
 
     def test_the_moon_track_is_around_today(self):
         url = next(item[2] for item in fetch_data.manifest() if item[1] == "spacecraft/moon_geo.txt")

@@ -2144,7 +2144,7 @@ pub fn run_gui() -> anyhow::Result<()> {
         .with_app_id("pantheon")
         .with_title("Pantheon: an atlas of the universe");
     // window/taskbar icon from the generated atlas emblem
-    let icon_path = crate::data::asset_root().join("icon.png");
+    let icon_path = crate::data::asset_path("icon.png");
     if let Ok(img) = image::open(&icon_path) {
         let rgba = img.to_rgba8();
         let (w, h) = rgba.dimensions();

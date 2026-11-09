@@ -3,7 +3,7 @@
 //! JPL Horizons, Natural Earth) or small embedded reference tables.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use glam::DVec3;
 
@@ -93,12 +93,61 @@ impl Csv {
     }
 }
 
-pub fn asset_root() -> PathBuf {
-    // an explicit location wins: for installed copies, and for testing how the
-    // app behaves on a fresh clone without the large downloads
+/// The folders that hold Pantheon's assets (`data`, `fonts`, `icon.png`), in the order
+/// they are searched. A file or folder is read from the first one that has it.
+///
+/// - `PANTHEON_ASSETS` names the only one: for testing how the app behaves on a fresh
+///   clone without the large downloads, and for assets kept elsewhere.
+/// - A checkout or an unpacked release has one `assets` folder, beside the binary, two
+///   levels up from `target/release`, or in the working directory. Then that's the only
+///   one, and `tools/fetch_data.py` downloads into it.
+/// - An installed package has none of those. It ships its assets read-only in an XDG data
+///   folder (`/usr/share/pantheon/assets`), and `tools/fetch_data.py` puts downloads in
+///   `~/.local/share/pantheon/assets`, which is searched first.
+pub fn asset_roots() -> Vec<PathBuf> {
     if let Some(dir) = std::env::var_os("PANTHEON_ASSETS") {
-        return PathBuf::from(dir);
+        return vec![PathBuf::from(dir)];
     }
+    if let Some(local) = local_root() {
+        return vec![local];
+    }
+    let installed: Vec<PathBuf> = xdg_asset_roots(
+        std::env::var_os("XDG_DATA_HOME"),
+        std::env::var_os("HOME"),
+        std::env::var_os("XDG_DATA_DIRS"),
+    )
+    .into_iter()
+    .filter(|c| c.join("data").is_dir())
+    .collect();
+    if installed.is_empty() {
+        vec![PathBuf::from("assets")]
+    } else {
+        installed
+    }
+}
+
+/// True for an installed package: its assets come from XDG data folders, so nothing
+/// beside the binary is writable or meant to be written.
+pub fn installed() -> bool {
+    std::env::var_os("PANTHEON_ASSETS").is_none() && local_root().is_none()
+}
+
+/// `rel` (a path under an asset folder) in the first root that has it, or in the
+/// first root if none does.
+pub fn asset_path(rel: impl AsRef<Path>) -> PathBuf {
+    first_having(&asset_roots(), rel.as_ref())
+}
+
+pub fn first_having(roots: &[PathBuf], rel: &Path) -> PathBuf {
+    roots
+        .iter()
+        .map(|r| r.join(rel))
+        .find(|p| p.exists())
+        .unwrap_or_else(|| roots.first().map_or_else(|| rel.into(), |r| r.join(rel)))
+}
+
+/// The `assets` folder of a checkout or an unpacked release.
+fn local_root() -> Option<PathBuf> {
     let mut cands: Vec<PathBuf> = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
@@ -108,12 +157,42 @@ pub fn asset_root() -> PathBuf {
     }
     cands.push(PathBuf::from("assets"));
     cands.push(PathBuf::from("pantheon/assets"));
-    for c in &cands {
-        if c.join("data").exists() {
-            return c.clone();
-        }
-    }
-    PathBuf::from("assets")
+    cands.into_iter().find(|c| c.join("data").exists())
+}
+
+/// Where an installed package's assets may be, most personal first, following the XDG
+/// base directory rules: `$XDG_DATA_HOME` (default `~/.local/share`), then each folder in
+/// `$XDG_DATA_DIRS` (default `/usr/local/share:/usr/share`). Relative paths are ignored.
+/// `tools/fetch_data.py` follows the same rules.
+pub fn xdg_asset_roots(
+    data_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+    data_dirs: Option<std::ffi::OsString>,
+) -> Vec<PathBuf> {
+    let dirs = data_dirs
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "/usr/local/share:/usr/share".into());
+    xdg_data_home(data_home, home)
+        .into_iter()
+        .chain(std::env::split_paths(&dirs).filter(|d| d.is_absolute()))
+        .map(|d| d.join("pantheon/assets"))
+        .collect()
+}
+
+/// `$XDG_DATA_HOME`, or `~/.local/share` if it's unset or relative.
+fn xdg_data_home(
+    data_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    let absolute = |v: Option<std::ffi::OsString>| v.map(PathBuf::from).filter(|p| p.is_absolute());
+    absolute(data_home).or_else(|| absolute(home).map(|h| h.join(".local/share")))
+}
+
+/// Pantheon's folder in the user's data home, `~/.local/share/pantheon` by default. An
+/// installed package keeps what it writes here.
+pub fn user_data_dir() -> Option<PathBuf> {
+    xdg_data_home(std::env::var_os("XDG_DATA_HOME"), std::env::var_os("HOME"))
+        .map(|d| d.join("pantheon"))
 }
 
 // ----------------------------------------------------------------- stars
@@ -230,7 +309,7 @@ const NAMED_STARS: [(&str, f64, f64, f64, f32, f32); 36] = [
 /// All the stars, how far out gaia_nearby.csv really reaches in parsecs, and how many of
 /// the stars (the first ones) came from it. That catalog is the dense sample; gaia_bright.csv
 /// adds naked-eye stars well beyond it.
-fn load_stars(root: &std::path::Path) -> (Vec<Star>, f64, usize) {
+fn load_stars(roots: &[PathBuf]) -> (Vec<Star>, f64, usize) {
     let mut stars: Vec<Star> = Vec::new();
     let mut seen: HashMap<String, usize> = HashMap::new();
     let mut reach_pc = 0.0_f64;
@@ -239,7 +318,7 @@ fn load_stars(root: &std::path::Path) -> (Vec<Star>, f64, usize) {
         if file == "gaia_bright.csv" {
             nearby = stars.len();
         }
-        let Some(csv) = Csv::load(&root.join("data").join(file)) else {
+        let Some(csv) = Csv::load(&first_having(roots, &Path::new("data").join(file))) else {
             continue;
         };
         for row in &csv.rows {
@@ -403,8 +482,8 @@ impl ExoSystem {
     }
 }
 
-fn load_exo(root: &std::path::Path) -> Vec<ExoSystem> {
-    let Some(csv) = Csv::load(&root.join("data").join("exoplanets.csv")) else {
+fn load_exo(roots: &[PathBuf]) -> Vec<ExoSystem> {
+    let Some(csv) = Csv::load(&first_having(roots, Path::new("data/exoplanets.csv"))) else {
         return Vec::new();
     };
     let mut sys: HashMap<String, ExoSystem> = HashMap::new();
@@ -734,9 +813,9 @@ impl Universe {
     /// (silent partial loads must be visible).
     pub fn load_with_health() -> (Self, DataHealth) {
         let mut health: Vec<String> = Vec::new();
-        let root = asset_root();
+        let roots = asset_roots();
         let gal = crate::frames::galactic_frame();
-        let (stars, gaia_reach_pc, nearby) = load_stars(&root);
+        let (stars, gaia_reach_pc, nearby) = load_stars(&roots);
         health.push(if stars.len() > 1000 {
             format!("stars: OK — {} sources", stars.len())
         } else {
@@ -745,7 +824,7 @@ impl Universe {
                 stars.len()
             )
         });
-        let mut exos = load_exo(&root);
+        let mut exos = load_exo(&roots);
         resolve_exo_distances(&mut exos, &stars[..nearby], gaia_reach_pc);
         health.push(if exos.len() > 500 {
             format!("exoplanets: OK — {} systems", exos.len())
@@ -760,10 +839,8 @@ impl Universe {
         let craft: Vec<Craft> = CRAFT_FILES
             .iter()
             .filter_map(|(file, name, color, note)| {
-                match load_horizons(
-                    &root.join("data/spacecraft").join(format!("{file}.txt")),
-                    "Sun",
-                ) {
+                let rel = format!("data/spacecraft/{file}.txt");
+                match load_horizons(&first_having(&roots, Path::new(&rel)), "Sun") {
                     Ok(track) => {
                         health.push(format!(
                             "craft {name}: OK — {} samples",
@@ -786,10 +863,8 @@ impl Universe {
         let planet_truth: Vec<Option<Track>> = crate::sim::PLANETS
             .iter()
             .map(|p| {
-                let path = root
-                    .join("data/spacecraft")
-                    .join(format!("planet_{}.txt", p.name.to_lowercase()));
-                match load_horizons(&path, "Sun") {
+                let rel = format!("data/spacecraft/planet_{}.txt", p.name.to_lowercase());
+                match load_horizons(&first_having(&roots, Path::new(&rel)), "Sun") {
                     Ok(t) => Some(t),
                     Err(e) => {
                         health.push(format!("truth {}: {e}", p.name));
@@ -798,20 +873,21 @@ impl Universe {
                 }
             })
             .collect();
-        let moon_truth = match load_horizons(&root.join("data/spacecraft/moon_geo.txt"), "Earth") {
+        let moon_geo = first_having(&roots, Path::new("data/spacecraft/moon_geo.txt"));
+        let moon_truth = match load_horizons(&moon_geo, "Earth") {
             Ok(t) => Some(t),
             Err(e) => {
                 health.push(format!("truth Moon: {e}"));
                 None
             }
         };
-        let coast = load_coast(&root);
+        let coast = load_coast(&roots);
         health.push(if coast.len() > 50 {
             format!("coastlines: OK — {} lines", coast.len())
         } else {
             format!("coastlines: MISSING/INVALID — {} lines", coast.len())
         });
-        let land = load_land_rings(&root);
+        let land = load_land_rings(&roots);
         let night_lights = generate_night_lights(&land);
         health.push(if night_lights.len() > 500 {
             format!(
@@ -845,7 +921,7 @@ impl Universe {
                 size_mpc: *size,
             })
             .collect();
-        let retrieved = load_retrieved(&root);
+        let retrieved = load_retrieved(&roots);
         (
             Self {
                 gal,
@@ -927,9 +1003,10 @@ fn date_map(path: &std::path::Path, key: Option<&str>) -> HashMap<String, String
 /// When each dataset was retrieved. provenance.json dates the catalogs that ship in the
 /// repository; fetched.json, written by tools/fetch_data.py, dates what was downloaded
 /// on this computer, file by file. A dataset fetched across several days shows the range.
-fn load_retrieved(root: &std::path::Path) -> std::collections::BTreeMap<&'static str, String> {
-    let mut dates = date_map(&root.join("data/provenance.json"), Some("retrieved"));
-    dates.extend(date_map(&root.join("data/fetched.json"), None));
+fn load_retrieved(roots: &[PathBuf]) -> std::collections::BTreeMap<&'static str, String> {
+    let file = |rel: &str| first_having(roots, Path::new(rel));
+    let mut dates = date_map(&file("data/provenance.json"), Some("retrieved"));
+    dates.extend(date_map(&file("data/fetched.json"), None));
     retrieved_by_dataset(&dates)
 }
 
@@ -959,8 +1036,9 @@ fn retrieved_by_dataset(
 }
 
 /// Land polygon rings (outer + holes together; even-odd containment).
-fn load_land_rings(root: &std::path::Path) -> Vec<Vec<[f64; 2]>> {
-    let Ok(text) = std::fs::read_to_string(root.join("data/ne_110m_land.geojson")) else {
+fn load_land_rings(roots: &[PathBuf]) -> Vec<Vec<[f64; 2]>> {
+    let path = first_having(roots, Path::new("data/ne_110m_land.geojson"));
+    let Ok(text) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}'))
@@ -1068,8 +1146,9 @@ fn generate_night_lights(rings: &[Vec<[f64; 2]>]) -> Vec<[f32; 2]> {
     out
 }
 
-fn load_coast(root: &std::path::Path) -> Vec<Vec<[f32; 2]>> {
-    let Ok(text) = std::fs::read_to_string(root.join("data/ne_110m_coastline.geojson")) else {
+fn load_coast(roots: &[PathBuf]) -> Vec<Vec<[f32; 2]>> {
+    let path = first_having(roots, Path::new("data/ne_110m_coastline.geojson"));
+    let Ok(text) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
@@ -1123,6 +1202,91 @@ mod tests {
     }
 
     #[test]
+    fn an_installed_package_looks_in_the_xdg_data_folders() {
+        let roots = |home: Option<&str>, data_home: Option<&str>, dirs: Option<&str>| {
+            xdg_asset_roots(
+                data_home.map(Into::into),
+                home.map(Into::into),
+                dirs.map(Into::into),
+            )
+        };
+        let p = |s: &str| PathBuf::from(s);
+        assert_eq!(
+            roots(Some("/home/u"), None, None),
+            [
+                p("/home/u/.local/share/pantheon/assets"),
+                p("/usr/local/share/pantheon/assets"),
+                p("/usr/share/pantheon/assets")
+            ]
+        );
+        assert_eq!(
+            roots(
+                Some("/home/u"),
+                Some("/data/u"),
+                Some("/opt/share:relative:")
+            ),
+            [
+                p("/data/u/pantheon/assets"),
+                p("/opt/share/pantheon/assets")
+            ]
+        );
+        // relative or empty settings are ignored, as the XDG rules say
+        assert_eq!(
+            roots(Some("/home/u"), Some("relative"), Some("")),
+            roots(Some("/home/u"), None, None)
+        );
+    }
+
+    #[test]
+    fn each_file_comes_from_the_first_folder_that_has_it() {
+        let base = std::env::temp_dir().join(format!("pantheon-roots-test-{}", std::process::id()));
+        let (user, package) = (base.join("user"), base.join("package"));
+        let header = "source_id,ra,dec,parallax,phot_g_mean_mag";
+        let files = [
+            // the package ships both catalogs; the user downloaded a newer nearby one
+            (
+                package.join("data/gaia_nearby.csv"),
+                format!("{header}\n1,10,10,100,8\n"),
+            ),
+            (
+                package.join("data/gaia_bright.csv"),
+                format!("{header}\n3,30,30,1,5\n"),
+            ),
+            (
+                user.join("data/gaia_nearby.csv"),
+                format!("{header}\n1,10,10,100,8\n2,20,20,40,9\n"),
+            ),
+        ];
+        for (path, text) in &files {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        let roots = [user.clone(), package.clone()];
+        let found = |rel: &str| first_having(&roots, Path::new(rel));
+        let (stars, _reach, nearby) = load_stars(&roots);
+        let picks = [
+            found("data/gaia_nearby.csv"),
+            found("data/gaia_bright.csv"),
+            found("data/textures"),
+        ];
+        for (path, _) in &files {
+            std::fs::remove_file(path).unwrap();
+        }
+        for dir in [user.join("data"), user, package.join("data"), package, base] {
+            std::fs::remove_dir(dir).unwrap();
+        }
+        assert_eq!(picks[0], roots[0].join("data/gaia_nearby.csv"));
+        assert_eq!(picks[1], roots[1].join("data/gaia_bright.csv"));
+        // missing everywhere: the first folder, which is where downloads go
+        assert_eq!(picks[2], roots[0].join("data/textures"));
+        assert_eq!(nearby, 2, "the user's nearby catalog");
+        assert!(
+            stars.iter().any(|s| s.dist_pc > 900.0),
+            "the package's bright one"
+        );
+    }
+
+    #[test]
     fn the_gaia_reach_comes_from_the_nearby_catalog_alone() {
         let root = std::env::temp_dir().join(format!("pantheon-data-test-{}", std::process::id()));
         let data = root.join("data");
@@ -1133,7 +1297,7 @@ mod tests {
         std::fs::write(&near, format!("{header}\n1,10,10,100,8\n2,20,20,40,9\n")).unwrap();
         // 1 mas is 1000 pc, far past the dense sample
         std::fs::write(&bright, format!("{header}\n3,30,30,1,5\n")).unwrap();
-        let (stars, reach, nearby) = load_stars(&root);
+        let (stars, reach, nearby) = load_stars(std::slice::from_ref(&root));
         std::fs::remove_file(&near).unwrap();
         std::fs::remove_file(&bright).unwrap();
         std::fs::remove_dir(&data).unwrap();

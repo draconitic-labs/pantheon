@@ -49,10 +49,10 @@ pub fn ui(size: f32) -> FontId {
 }
 
 pub fn install_fonts(ctx: &egui::Context) {
-    let root = crate::data::asset_root();
+    let fonts_dir = crate::data::asset_path("fonts");
     let mut fonts = FontDefinitions::default();
     let mut add = |name: &str, file: &str| -> bool {
-        let path = root.join("fonts").join(file);
+        let path = fonts_dir.join(file);
         if let Ok(bytes) = std::fs::read(&path) {
             fonts.font_data.insert(
                 name.to_string(),

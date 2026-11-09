@@ -6,6 +6,11 @@ the repository. This adds what's too large or too fast-changing to keep in git:
 spacecraft and planet tracks, JPL kernels (about 3 GB), and surface imagery
 (about 60 MB).
 
+In a checkout or an unpacked release, files go to assets/data beside tools/. An
+installed package keeps this script in /usr/share/pantheon/tools, which isn't
+writable, so files go to ~/.local/share/pantheon/assets/data, where the apps look
+first ($XDG_DATA_HOME/pantheon/assets/data if that's set).
+
   tools/fetch_data.py                everything still missing
   tools/fetch_data.py --list         what would be fetched, with sizes
   tools/fetch_data.py --only maps    one group: catalogs, tracks, kernels, maps
@@ -24,6 +29,7 @@ import argparse
 import datetime as dt
 import http.client
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -164,6 +170,32 @@ def manifest() -> list[tuple[str, str, str, float, bytes | None]]:
     return items
 
 
+def xdg_data_home() -> Path | None:
+    """$XDG_DATA_HOME, or ~/.local/share if it's unset or relative, as the apps read it."""
+    for value, below in ((os.environ.get("XDG_DATA_HOME"), ""), (os.environ.get("HOME"), ".local/share")):
+        if value and Path(value).is_absolute():
+            return Path(value) / below
+    return None
+
+
+def installed_root(root: Path) -> bool:
+    """True if `root` is the pantheon folder of an XDG data directory, where a package installs."""
+    dirs = os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share"
+    return any(
+        Path(d).is_absolute() and (Path(d) / "pantheon").resolve() == root.resolve()
+        for d in dirs.split(os.pathsep)
+    )
+
+
+def default_dest() -> tuple[Path, Path | None]:
+    """Where files go, and the read-only data folder of the installed package, if this is one."""
+    root = Path(__file__).resolve().parent.parent
+    home = xdg_data_home()
+    if installed_root(root) and home is not None:
+        return home / "pantheon" / "assets" / "data", root / "assets" / "data"
+    return root / "assets" / "data", None
+
+
 def defect(path: Path, rel: str, expect: bytes | None) -> str | None:
     """Why this file can't be trusted as a complete copy of `rel`, or None if it can."""
     try:
@@ -244,19 +276,32 @@ def main() -> int:
     ap.add_argument("--only", choices=["catalogs", "tracks", "kernels", "maps"], help="fetch one group")
     ap.add_argument("--no-kernels", action="store_true", help="skip the large JPL kernels")
     ap.add_argument("--force", action="store_true", help="fetch again even if the file exists")
-    ap.add_argument("--dest", type=Path, help="data directory (default: assets/data in this repository)")
+    ap.add_argument(
+        "--dest", type=Path,
+        help="data directory (default: assets/data beside tools/, or in ~/.local/share/pantheon for a package)",
+    )
     args = ap.parse_args()
 
-    data = args.dest or Path(__file__).resolve().parent.parent / "assets" / "data"
+    data, shipped = (args.dest, None) if args.dest else default_dest()
+
+    def problem(group: str, rel: str, expect: bytes | None) -> str | None:
+        """Why the apps don't have `rel` yet, or None if they do."""
+        found = defect(data / rel, rel, expect)
+        # the apps read catalogs file by file, so a package's own copy serves until replaced
+        if found and shipped and group == "catalogs" and defect(shipped / rel, rel, expect) is None:
+            return None
+        return found
+
     items = [
         it for it in manifest()
         if (args.only is None or it[0] == args.only) and not (args.no_kernels and it[0] == "kernels")
     ]
-    todo = [it for it in items if args.force or defect(data / it[1], it[1], it[4]) is not None]
+    todo = [it for it in items if args.force or problem(it[0], it[1], it[4]) is not None]
     total_mb = sum(it[3] for it in todo)
     if args.list:
+        print(f"data folder: {data}")
         for group, rel, _url, mb, expect in items:
-            state = defect(data / rel, rel, expect) or "present"
+            state = problem(group, rel, expect) or "present"
             print(f"{group:9} {rel:38} {mb:8.1f} MB  {state}")
         print(f"to fetch: {len(todo)} files, about {total_mb:.0f} MB")
         return 0
@@ -291,7 +336,7 @@ def main() -> int:
         for rel in failed:
             print(f"  {rel}")
         return 1
-    print("\nDone. Check the result with: target/release/pantheon-cli --doctor")
+    print("\nDone. Check the result with: pantheon-cli --doctor (target/release/pantheon-cli in a checkout)")
     return 0
 
 

@@ -570,7 +570,7 @@ static SPICE: std::sync::OnceLock<KernelScan> = std::sync::OnceLock::new();
 
 fn loaded() -> &'static KernelScan {
     SPICE.get_or_init(|| {
-        let scan = SpiceSet::scan(&crate::data::asset_root().join("data/spice"));
+        let scan = SpiceSet::scan(&crate::data::asset_path("data/spice"));
         for p in &scan.problems {
             log::warn!("spice: {p}");
         }
@@ -659,7 +659,7 @@ mod tests {
     #[test]
     fn satellite_kernels_match_horizons() {
         let Some(s) = kernels_or_skip() else { return };
-        let root = crate::data::asset_root();
+        let tracks = crate::data::asset_path("data/spacecraft");
         for (moon_id, planet_id, file, center) in [
             (501, 599, "io_gate.txt", "Jupiter"),
             (606, 699, "titan_gate.txt", "Saturn"),
@@ -670,7 +670,7 @@ mod tests {
             }
             // these arcs were fetched by hand to check the reader, and aren't in
             // tools/fetch_data.py, so a normal fetch doesn't have them
-            let path = root.join("data/spacecraft").join(file);
+            let path = tracks.join(file);
             if !path.is_file() {
                 crate::test_skipped(&format!(
                     "{file} isn't on this computer, so no gate for {moon_id}"
