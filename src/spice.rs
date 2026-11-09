@@ -445,9 +445,10 @@ pub struct KernelScan {
 }
 
 impl SpiceSet {
-    /// Load every kernel in `dir`. A bad file is reported and skipped; only a usable
-    /// planetary kernel makes a set, because everything else chains through it.
-    pub fn scan(dir: &Path) -> KernelScan {
+    /// Load every kernel in `dir`, and the leap-second table at `tls`. A bad file is
+    /// reported and skipped; only a usable planetary kernel makes a set, because
+    /// everything else chains through it.
+    pub fn scan(dir: &Path, tls: &Path) -> KernelScan {
         let mut spks: Vec<(String, SpkFile)> = Vec::new();
         let mut problems = Vec::new();
         let mut planetary: Option<(f64, f64)> = None;
@@ -483,8 +484,7 @@ impl SpiceSet {
             }
         }
         problems.sort();
-        let tls = dir.join("naif0012.tls");
-        let lsk = match Lsk::load(&tls) {
+        let lsk = match Lsk::load(tls) {
             Ok(lsk) => Some(lsk),
             Err(e) => {
                 if tls.exists() {
@@ -570,7 +570,11 @@ static SPICE: std::sync::OnceLock<KernelScan> = std::sync::OnceLock::new();
 
 fn loaded() -> &'static KernelScan {
     SPICE.get_or_init(|| {
-        let scan = SpiceSet::scan(&crate::data::asset_path("data/spice"));
+        // the leap-second table on its own: a package ships it, and a download may not
+        let scan = SpiceSet::scan(
+            &crate::data::asset_path("data/spice"),
+            &crate::data::asset_path("data/spice/naif0012.tls"),
+        );
         for p in &scan.problems {
             log::warn!("spice: {p}");
         }
@@ -776,7 +780,7 @@ mod tests {
         std::fs::create_dir(&dir).unwrap();
         let file = dir.join("de440s.bsp");
         std::fs::write(&file, &tiny_kernel()[..2500]).unwrap();
-        let scan = SpiceSet::scan(&dir);
+        let scan = SpiceSet::scan(&dir, &dir.join("naif0012.tls"));
         std::fs::remove_file(&file).unwrap();
         std::fs::remove_dir(&dir).unwrap();
         assert!(scan.set.is_none());
@@ -799,7 +803,7 @@ mod tests {
         std::fs::create_dir(&dir).unwrap();
         let file = dir.join("naif0012.tls");
         std::fs::write(&file, "not a leap-second table").unwrap();
-        let scan = SpiceSet::scan(&dir);
+        let scan = SpiceSet::scan(&dir, &file);
         std::fs::remove_file(&file).unwrap();
         std::fs::remove_dir(&dir).unwrap();
         assert_eq!(scan.problems.len(), 1, "{:?}", scan.problems);
@@ -817,7 +821,8 @@ mod tests {
 
     #[test]
     fn a_folder_with_no_kernels_is_not_a_problem() {
-        let scan = SpiceSet::scan(Path::new("/nonexistent/pantheon/kernels"));
+        let dir = Path::new("/nonexistent/pantheon/kernels");
+        let scan = SpiceSet::scan(dir, &dir.join("naif0012.tls"));
         assert!(scan.set.is_none());
         assert!(scan.problems.is_empty());
     }

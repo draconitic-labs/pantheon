@@ -101,24 +101,34 @@ impl Csv {
 /// - A checkout or an unpacked release has one `assets` folder, beside the binary, two
 ///   levels up from `target/release`, or in the working directory. Then that's the only
 ///   one, and `tools/fetch_data.py` downloads into it.
-/// - An installed package has none of those. It ships its assets read-only in an XDG data
-///   folder (`/usr/share/pantheon/assets`), and `tools/fetch_data.py` puts downloads in
-///   `~/.local/share/pantheon/assets`, which is searched first.
+/// - An installed package has none of those. It ships its assets read-only in
+///   `<prefix>/share/pantheon/assets` (`/usr/share/pantheon/assets`), and
+///   `tools/fetch_data.py` puts downloads in `~/.local/share/pantheon/assets`, which is
+///   searched first.
 pub fn asset_roots() -> Vec<PathBuf> {
     if let Some(dir) = std::env::var_os("PANTHEON_ASSETS") {
         return vec![PathBuf::from(dir)];
     }
-    if let Some(local) = local_root() {
+    let exe_dir = exe_dir();
+    if let Some(local) = local_root(exe_dir.as_deref()) {
         return vec![local];
     }
-    let installed: Vec<PathBuf> = xdg_asset_roots(
+    let mut installed: Vec<PathBuf> = Vec::new();
+    for c in installed_asset_roots(
         std::env::var_os("XDG_DATA_HOME"),
         std::env::var_os("HOME"),
         std::env::var_os("XDG_DATA_DIRS"),
-    )
-    .into_iter()
-    .filter(|c| c.join("data").is_dir())
-    .collect();
+        exe_dir.as_deref(),
+    ) {
+        if !c.join("data").is_dir() {
+            continue;
+        }
+        // `/usr/bin/../share` and `/usr/share` are one folder
+        let c = c.canonicalize().unwrap_or(c);
+        if !installed.contains(&c) {
+            installed.push(c);
+        }
+    }
     if installed.is_empty() {
         vec![PathBuf::from("assets")]
     } else {
@@ -126,10 +136,10 @@ pub fn asset_roots() -> Vec<PathBuf> {
     }
 }
 
-/// True for an installed package: its assets come from XDG data folders, so nothing
+/// True for an installed package: its assets come from its share folder, so nothing
 /// beside the binary is writable or meant to be written.
 pub fn installed() -> bool {
-    std::env::var_os("PANTHEON_ASSETS").is_none() && local_root().is_none()
+    std::env::var_os("PANTHEON_ASSETS").is_none() && local_root(exe_dir().as_deref()).is_none()
 }
 
 /// `rel` (a path under an asset folder) in the first root that has it, or in the
@@ -146,34 +156,56 @@ pub fn first_having(roots: &[PathBuf], rel: &Path) -> PathBuf {
         .unwrap_or_else(|| roots.first().map_or_else(|| rel.into(), |r| r.join(rel)))
 }
 
-/// The `assets` folder of a checkout or an unpacked release.
-fn local_root() -> Option<PathBuf> {
-    let mut cands: Vec<PathBuf> = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            cands.push(dir.join("assets"));
-            cands.push(dir.join("../../assets"));
-        }
-    }
-    cands.push(PathBuf::from("assets"));
-    cands.push(PathBuf::from("pantheon/assets"));
-    cands.into_iter().find(|c| c.join("data").exists())
+fn exe_dir() -> Option<PathBuf> {
+    Some(std::env::current_exe().ok()?.parent()?.to_path_buf())
 }
 
-/// Where an installed package's assets may be, most personal first, following the XDG
-/// base directory rules: `$XDG_DATA_HOME` (default `~/.local/share`), then each folder in
-/// `$XDG_DATA_DIRS` (default `/usr/local/share:/usr/share`). Relative paths are ignored.
-/// `tools/fetch_data.py` follows the same rules.
-pub fn xdg_asset_roots(
+/// The `assets` folder of a checkout or an unpacked release.
+fn local_root(exe_dir: Option<&Path>) -> Option<PathBuf> {
+    local_candidates(exe_dir)
+        .into_iter()
+        .find(|c| c.join("data").exists())
+}
+
+/// Where a checkout or an unpacked release keeps its `assets` folder: beside the binary,
+/// two levels up from `target/release`, or in the working directory. A binary a package
+/// installed skips the working directory, so a checkout that happens to be there (a menu
+/// entry starts in the home folder) can't stand in for the package.
+fn local_candidates(exe_dir: Option<&Path>) -> Vec<PathBuf> {
+    let mut cands: Vec<PathBuf> = Vec::new();
+    if let Some(dir) = exe_dir {
+        cands.push(dir.join("assets"));
+        cands.push(dir.join("../../assets"));
+    }
+    if !exe_dir.is_some_and(packaged) {
+        cands.push(PathBuf::from("assets"));
+        cands.push(PathBuf::from("pantheon/assets"));
+    }
+    cands
+}
+
+/// A binary a package installed: under `/usr`, or with `../share/pantheon/assets` beside it.
+fn packaged(exe_dir: &Path) -> bool {
+    exe_dir.starts_with("/usr") || exe_dir.join("../share/pantheon/assets").is_dir()
+}
+
+/// Where an installed package's assets may be, most personal first: the user's data
+/// folder (`$XDG_DATA_HOME`, default `~/.local/share`), the package's share folder beside
+/// the binary (`/usr/bin/../share`), then each folder in `$XDG_DATA_DIRS` (default
+/// `/usr/local/share:/usr/share`). Relative paths are ignored, as the XDG rules say.
+/// `tools/fetch_data.py` writes into the first.
+pub fn installed_asset_roots(
     data_home: Option<std::ffi::OsString>,
     home: Option<std::ffi::OsString>,
     data_dirs: Option<std::ffi::OsString>,
+    exe_dir: Option<&Path>,
 ) -> Vec<PathBuf> {
     let dirs = data_dirs
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "/usr/local/share:/usr/share".into());
     xdg_data_home(data_home, home)
         .into_iter()
+        .chain(exe_dir.map(|d| d.join("../share")))
         .chain(std::env::split_paths(&dirs).filter(|d| d.is_absolute()))
         .map(|d| d.join("pantheon/assets"))
         .collect()
@@ -1204,10 +1236,11 @@ mod tests {
     #[test]
     fn an_installed_package_looks_in_the_xdg_data_folders() {
         let roots = |home: Option<&str>, data_home: Option<&str>, dirs: Option<&str>| {
-            xdg_asset_roots(
+            installed_asset_roots(
                 data_home.map(Into::into),
                 home.map(Into::into),
                 dirs.map(Into::into),
+                Some(Path::new("/opt/pantheon/bin")),
             )
         };
         let p = |s: &str| PathBuf::from(s);
@@ -1215,6 +1248,7 @@ mod tests {
             roots(Some("/home/u"), None, None),
             [
                 p("/home/u/.local/share/pantheon/assets"),
+                p("/opt/pantheon/bin/../share/pantheon/assets"),
                 p("/usr/local/share/pantheon/assets"),
                 p("/usr/share/pantheon/assets")
             ]
@@ -1227,6 +1261,7 @@ mod tests {
             ),
             [
                 p("/data/u/pantheon/assets"),
+                p("/opt/pantheon/bin/../share/pantheon/assets"),
                 p("/opt/share/pantheon/assets")
             ]
         );
@@ -1235,6 +1270,40 @@ mod tests {
             roots(Some("/home/u"), Some("relative"), Some("")),
             roots(Some("/home/u"), None, None)
         );
+    }
+
+    #[test]
+    fn an_installed_binary_ignores_a_checkout_in_the_working_directory() {
+        let base = std::env::temp_dir().join(format!("pantheon-exe-test-{}", std::process::id()));
+        let share = base.join("share/pantheon/assets");
+        let (bin, build) = (base.join("bin"), base.join("target/release"));
+        for dir in [&share, &bin, &build] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let in_cwd = |exe: &Path| {
+            local_candidates(Some(exe))
+                .iter()
+                .any(|c| c == Path::new("assets") || c == Path::new("pantheon/assets"))
+        };
+        let looks = [
+            in_cwd(Path::new("/usr/bin")),
+            // a package unpacked somewhere else, known by the share folder beside its binary
+            in_cwd(&bin),
+            // a checkout's build folder has no such folder beside it
+            in_cwd(&build),
+        ];
+        for dir in [
+            share.clone(),
+            base.join("share/pantheon"),
+            base.join("share"),
+            bin,
+            build,
+            base.join("target"),
+            base,
+        ] {
+            std::fs::remove_dir(dir).unwrap();
+        }
+        assert_eq!(looks, [false, false, true]);
     }
 
     #[test]
@@ -1256,6 +1325,12 @@ mod tests {
                 user.join("data/gaia_nearby.csv"),
                 format!("{header}\n1,10,10,100,8\n2,20,20,40,9\n"),
             ),
+            // the user downloaded a kernel, and only the package has the leap-second table
+            (
+                package.join("data/spice/naif0012.tls"),
+                "KPL/LSK".to_string(),
+            ),
+            (user.join("data/spice/de440s.bsp"), "DAF/SPK".to_string()),
         ];
         for (path, text) in &files {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1268,17 +1343,25 @@ mod tests {
             found("data/gaia_nearby.csv"),
             found("data/gaia_bright.csv"),
             found("data/textures"),
+            found("data/spice"),
+            found("data/spice/naif0012.tls"),
         ];
         for (path, _) in &files {
             std::fs::remove_file(path).unwrap();
         }
-        for dir in [user.join("data"), user, package.join("data"), package, base] {
+        for dir in [&user, &package] {
+            std::fs::remove_dir(dir.join("data/spice")).unwrap();
+            std::fs::remove_dir(dir.join("data")).unwrap();
             std::fs::remove_dir(dir).unwrap();
         }
+        std::fs::remove_dir(&base).unwrap();
         assert_eq!(picks[0], roots[0].join("data/gaia_nearby.csv"));
         assert_eq!(picks[1], roots[1].join("data/gaia_bright.csv"));
         // missing everywhere: the first folder, which is where downloads go
         assert_eq!(picks[2], roots[0].join("data/textures"));
+        // the kernels come from the user's folder, the leap-second table from the package
+        assert_eq!(picks[3], roots[0].join("data/spice"));
+        assert_eq!(picks[4], roots[1].join("data/spice/naif0012.tls"));
         assert_eq!(nearby, 2, "the user's nearby catalog");
         assert!(
             stars.iter().any(|s| s.dist_pc > 900.0),

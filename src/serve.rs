@@ -188,8 +188,15 @@ fn existing_pantheon(port: u16) -> bool {
 
 fn web_root() -> anyhow::Result<PathBuf> {
     let roots = crate::data::asset_roots();
+    // an installed package's page comes from the package: never from the user's data
+    // folder, which only holds downloads, or from the working directory
+    let installed = crate::data::installed();
+    let user = crate::data::user_data_dir()
+        .map(|d| d.join("assets"))
+        .map(|u| u.canonicalize().unwrap_or(u));
     let mut cands: Vec<PathBuf> = roots
         .iter()
+        .filter(|a| !installed || Some(*a) != user.as_ref())
         .map(|a| a.parent().unwrap_or(a).join("pantheon-web"))
         .collect();
     if let Ok(exe) = std::env::current_exe() {
@@ -197,7 +204,9 @@ fn web_root() -> anyhow::Result<PathBuf> {
             cands.push(dir.join("../../pantheon-web"));
         }
     }
-    cands.push(PathBuf::from("pantheon-web"));
+    if !installed {
+        cands.push(PathBuf::from("pantheon-web"));
+    }
     for c in &cands {
         if c.join("index.html").exists() {
             return Ok(c.clone());

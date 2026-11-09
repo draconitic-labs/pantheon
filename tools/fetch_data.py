@@ -7,9 +7,9 @@ spacecraft and planet tracks, JPL kernels (about 3 GB), and surface imagery
 (about 60 MB).
 
 In a checkout or an unpacked release, files go to assets/data beside tools/. An
-installed package keeps this script in /usr/share/pantheon/tools, which isn't
-writable, so files go to ~/.local/share/pantheon/assets/data, where the apps look
-first ($XDG_DATA_HOME/pantheon/assets/data if that's set).
+installed package keeps this script in /usr/share/pantheon/tools, and files go to
+~/.local/share/pantheon/assets/data, where the apps look first
+($XDG_DATA_HOME/pantheon/assets/data if that's set).
 
   tools/fetch_data.py                everything still missing
   tools/fetch_data.py --list         what would be fetched, with sizes
@@ -26,6 +26,7 @@ what's already here the same way, so running this again replaces a truncated fil
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import http.client
 import json
@@ -178,22 +179,20 @@ def xdg_data_home() -> Path | None:
     return None
 
 
-def installed_root(root: Path) -> bool:
-    """True if `root` is the pantheon folder of an XDG data directory, where a package installs."""
-    dirs = os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share"
-    return any(
-        Path(d).is_absolute() and (Path(d) / "pantheon").resolve() == root.resolve()
-        for d in dirs.split(os.pathsep)
-    )
-
-
 def default_dest() -> tuple[Path, Path | None]:
-    """Where files go, and the read-only data folder of the installed package, if this is one."""
+    """Where files go, and the read-only data folder of the installed package, if this is one.
+
+    A checkout (it has Cargo.toml) or an unpacked archive (it has the pantheon binary) keeps
+    its data beside tools/. Anything else is the shared folder a package installed, such as
+    /usr/share/pantheon, so files go to the user's data folder, never beside this script.
+    """
     root = Path(__file__).resolve().parent.parent
+    if any((root / name).exists() for name in ("Cargo.toml", "pantheon", "pantheon.exe")):
+        return root / "assets" / "data", None
     home = xdg_data_home()
-    if installed_root(root) and home is not None:
-        return home / "pantheon" / "assets" / "data", root / "assets" / "data"
-    return root / "assets" / "data", None
+    if home is None:
+        raise SystemExit("Set HOME or XDG_DATA_HOME: an installed Pantheon downloads into your data folder.")
+    return home / "pantheon" / "assets" / "data", root / "assets" / "data"
 
 
 def defect(path: Path, rel: str, expect: bytes | None) -> str | None:
@@ -214,10 +213,10 @@ def defect(path: Path, rel: str, expect: bytes | None) -> str | None:
 
 
 def download(url: str, dest: Path, rel: str, expect: bytes | None) -> tuple[bool, str]:
-    dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(dest.name + ".part")
     req = urllib.request.Request(url, headers={"User-Agent": "pantheon-fetch/1 (+tools/fetch_data.py)"})
     try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
         with urllib.request.urlopen(req, timeout=600) as r, open(tmp, "wb") as f:
             total = int(r.headers.get("Content-Length") or 0)
             got = 0
@@ -232,7 +231,8 @@ def download(url: str, dest: Path, rel: str, expect: bytes | None) -> tuple[bool
                     print(f"    {got * 100 // total}% of {total // 1_000_000} MB", flush=True)
                     last = time.monotonic()
     except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError) as e:
-        tmp.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):  # the folder itself may be what failed
+            tmp.unlink(missing_ok=True)
         return False, f"{type(e).__name__}: {e}"
     # A connection that drops mid-file just looks like the end of the data to read()
     if total and got != total:
@@ -287,8 +287,9 @@ def main() -> int:
     def problem(group: str, rel: str, expect: bytes | None) -> str | None:
         """Why the apps don't have `rel` yet, or None if they do."""
         found = defect(data / rel, rel, expect)
-        # the apps read catalogs file by file, so a package's own copy serves until replaced
-        if found and shipped and group == "catalogs" and defect(shipped / rel, rel, expect) is None:
+        # The apps read catalogs file by file, so a package's own copy serves while the user
+        # has none. A damaged copy of the user's own is read first, so it's fetched again.
+        if found == "missing" and shipped and group == "catalogs" and defect(shipped / rel, rel, expect) is None:
             return None
         return found
 
@@ -309,7 +310,14 @@ def main() -> int:
         print("Nothing to fetch: everything is already here. Use --force to fetch again.")
         return 0
 
-    data.mkdir(parents=True, exist_ok=True)
+    try:
+        data.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        print(f"Can't create {data}: {e}", file=sys.stderr)
+        return 1
+    if not os.access(data, os.W_OK):
+        print(f"Can't write into {data}. Run this as a user who can, or choose a folder with --dest.", file=sys.stderr)
+        return 1
     print(f"Fetching {len(todo)} files, about {total_mb:.0f} MB, into {data}")
     log = [f"fetch started {dt.datetime.now().isoformat(timespec='seconds')}"]
     failed: list[str] = []
@@ -336,7 +344,10 @@ def main() -> int:
         for rel in failed:
             print(f"  {rel}")
         return 1
-    print("\nDone. Check the result with: pantheon-cli --doctor (target/release/pantheon-cli in a checkout)")
+    if shipped:
+        print("\nDone. Restart Pantheon to use the new files.")
+    else:
+        print("\nDone. Check the result with: pantheon-cli --doctor (target/release/pantheon-cli in a checkout)")
     return 0
 
 

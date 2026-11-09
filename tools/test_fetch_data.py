@@ -189,35 +189,62 @@ class Fetch(unittest.TestCase):
                 self.addCleanup(os.environ.pop, key, None)
             os.environ[key] = value
 
-    def test_a_checkout_or_unpacked_release_fetches_beside_the_script(self):
+    def script_in(self, root):
+        self.addCleanup(setattr, fetch_data, "__file__", fetch_data.__file__)
+        fetch_data.__file__ = str(root / "tools" / "fetch_data.py")
+
+    def test_a_checkout_fetches_beside_the_script(self):
         root = Path(fetch_data.__file__).resolve().parent.parent
-        self.with_env(XDG_DATA_DIRS="/usr/local/share:/usr/share")
+        self.assertTrue((root / "Cargo.toml").exists())
         self.assertEqual(fetch_data.default_dest(), (root / "assets" / "data", None))
 
+    def test_an_unpacked_archive_fetches_beside_the_script(self):
+        for binary in ("pantheon", "pantheon.exe"):
+            root = self.data / binary.replace(".", "-")
+            root.mkdir()
+            (root / binary).write_bytes(b"")
+            self.script_in(root)
+            self.assertEqual(fetch_data.default_dest(), (root / "assets" / "data", None))
+
     def test_an_installed_package_fetches_into_the_users_data_folder(self):
-        share = self.data / "share"
-        script = share / "pantheon" / "tools" / "fetch_data.py"
-        self.addCleanup(setattr, fetch_data, "__file__", fetch_data.__file__)
-        fetch_data.__file__ = str(script)
-        self.with_env(XDG_DATA_DIRS=f"/nonexistent:{share}", XDG_DATA_HOME="", HOME=str(self.data / "home"))
+        share = self.data / "share" / "pantheon"
+        self.script_in(share)
+        self.with_env(XDG_DATA_HOME="", HOME=str(self.data / "home"))
         self.assertEqual(
             fetch_data.default_dest(),
-            (self.data / "home/.local/share/pantheon/assets/data", share / "pantheon/assets/data"),
+            (self.data / "home/.local/share/pantheon/assets/data", share / "assets/data"),
         )
         self.with_env(XDG_DATA_HOME=str(self.data / "xdg"))
         self.assertEqual(fetch_data.default_dest()[0], self.data / "xdg/pantheon/assets/data")
 
+    def test_an_installed_package_never_writes_beside_the_script(self):
+        self.script_in(self.data / "share" / "pantheon")
+        self.with_env(XDG_DATA_HOME="", HOME="")
+        with self.assertRaises(SystemExit):
+            fetch_data.default_dest()
+
+    def test_a_folder_that_cant_be_made_is_a_failure_and_not_a_crash(self):
+        blocker = self.data / "spice"
+        blocker.write_bytes(b"a file where the folder should be")
+        ok, detail = self.get("/whole")
+        self.assertFalse(ok)
+        self.assertIn("Error", detail)
+
     def test_a_package_keeps_its_own_catalogs_and_fetches_the_rest(self):
         user, shipped = self.data / "user", self.data / "shipped"
         (shipped / "spice").mkdir(parents=True)
+        user.mkdir()
         (shipped / "stars.csv").write_bytes(b"source_id,ra\n1,2\n")
+        (shipped / "exo.csv").write_bytes(Misbehaving.body)
+        (user / "exo.csv").write_bytes(b"cut off")
         (shipped / "spice" / "kernel.bsp").write_bytes(Misbehaving.body)
         self.addCleanup(setattr, fetch_data, "default_dest", fetch_data.default_dest)
         fetch_data.default_dest = lambda: (user, shipped)
         catalog = ("catalogs", "stars.csv", self.base + "/nope", 0.01, b"source_id")
+        damaged = ("catalogs", "exo.csv", self.base + "/whole", 0.01, fetch_data.KERNEL)
         kernel = ("kernels", "spice/kernel.bsp", self.base + "/whole", 0.01, fetch_data.KERNEL)
         self.addCleanup(setattr, fetch_data, "manifest", fetch_data.manifest)
-        fetch_data.manifest = lambda: [catalog, kernel]
+        fetch_data.manifest = lambda: [catalog, damaged, kernel]
         self.addCleanup(setattr, sys, "argv", sys.argv)
         sys.argv = ["fetch_data.py"]
 
@@ -225,7 +252,8 @@ class Fetch(unittest.TestCase):
 
         self.assertEqual((user / "spice" / "kernel.bsp").read_bytes(), Misbehaving.body)
         self.assertFalse((user / "stars.csv").exists(), "the package's catalog was enough")
-        self.assertEqual(json.loads((user / "fetched.json").read_text()).keys(), {"spice/kernel.bsp"})
+        self.assertEqual((user / "exo.csv").read_bytes(), Misbehaving.body, "the user's damaged copy was replaced")
+        self.assertEqual(json.loads((user / "fetched.json").read_text()).keys(), {"spice/kernel.bsp", "exo.csv"})
 
     def test_the_moon_track_is_around_today(self):
         url = next(item[2] for item in fetch_data.manifest() if item[1] == "spacecraft/moon_geo.txt")
