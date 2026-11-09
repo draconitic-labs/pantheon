@@ -1,0 +1,37 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "pantheon-3d",
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "rpm"],
+    "homepage": "https://github.com/draconitic-labs/pantheon",
+    "shortDescription": "Free-flight universe explorer, from the ground to the cosmic web",
+    "longDescription": "Pantheon 3D shows the universe in true 3D in a native window, from a planet's surface out to the cosmic web, with real catalogs and JPL kernels where they exist and on-screen labels where they don't. The star, exoplanet and coastline catalogs are included. /usr/share/pantheon/tools/fetch_data.py downloads planet maps, spacecraft tracks and JPL kernels into ~/.local/share/pantheon.",
+    "linux": {
+      "deb": {
+        "depends": ["libasound2"],
+        "desktopTemplate": "packaging/pantheon-3d.desktop",
+        "files": {
+          "/usr/share/pantheon/assets": "../assets",
+          "/usr/share/pantheon/pantheon-web": "../pantheon-web",
+          "/usr/share/pantheon/tools/fetch_data.py": "../tools/fetch_data.py",
+          "/usr/share/doc/pantheon-3d/LICENSE": "../LICENSE",
+          "/usr/share/doc/pantheon-3d/NOTICE": "../NOTICE",
+          "/usr/share/doc/pantheon-3d/THIRD-PARTY-LICENSES.html": "THIRD-PARTY-LICENSES.html"
+        }
+      },
+      "rpm": {
+        "depends": ["libasound.so.2()(64bit)"],
+        "desktopTemplate": "packaging/pantheon-3d.desktop",
+        "files": {
+          "/usr/share/pantheon/assets": "../assets",
+          "/usr/share/pantheon/pantheon-web": "../pantheon-web",
+          "/usr/share/pantheon/tools/fetch_data.py": "../tools/fetch_data.py",
+          "/usr/share/doc/pantheon-3d/LICENSE": "../LICENSE",
+          "/usr/share/doc/pantheon-3d/NOTICE": "../NOTICE",
+          "/usr/share/doc/pantheon-3d/THIRD-PARTY-LICENSES.html": "THIRD-PARTY-LICENSES.html"
+        }
+      }
+    }
+  }
+}

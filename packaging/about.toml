@@ -1,0 +1,30 @@
+# cargo-about settings for THIRD-PARTY-LICENSES.html, the licence file that ships in
+# the release archive and the Pantheon 3D packages. `.github/workflows/release.yml`
+# runs `cargo about generate --fail` once per shipped binary, so a dependency licence
+# that is not listed here stops the release until someone reads it and adds it.
+
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT-0",
+    "0BSD",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+    # epaint_default_fonts embeds egui's fallback fonts (Hack, Ubuntu Light, Noto Emoji).
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+    # Pantheon 3D only: Servo's CSS and HTML crates, which Tauri uses. They are used
+    # unmodified, and their source is on crates.io.
+    "MPL-2.0",
+]
+
+# Build and dev dependencies are not in the binaries.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true

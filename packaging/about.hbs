@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<title>Pantheon: third-party licences</title>
+<style>
+body{font:15px/1.55 system-ui,sans-serif;margin:0 auto;padding:2rem 1.5rem;max-width:60rem}
+h1{font-size:1.5rem}
+h2{font-size:1.05rem;margin:2rem 0 .4rem;padding-bottom:.3rem;border-bottom:1px solid #8884}
+pre{border:1px solid #8884;border-radius:4px;padding:.8rem;font-size:12px;white-space:pre-wrap}
+.used-by{font-size:13px;margin:.2rem 0 .6rem}
+</style>
+</head>
+<body>
+<h1>Pantheon: third-party licences</h1>
+
+<p>The Pantheon binaries in this package are built from the Rust crates listed below.
+Each is used under the licence reproduced with it. Pantheon itself is under the MIT
+License in LICENSE. The datasets, imagery, fonts and vendored JavaScript that ship with
+it keep their own terms, listed in NOTICE.</p>
+
+<p>Licences in this file:
+{{#each overview}}{{name}} ({{count}}){{#unless @last}}, {{/unless}}{{/each}}.</p>
+
+{{#each licenses}}
+<h2>{{name}}</h2>
+<p class="used-by">Used by:
+{{#each used_by}}{{crate.name}} {{crate.version}}{{#unless @last}}, {{/unless}}{{/each}}</p>
+<pre>{{text}}</pre>
+{{/each}}
+
+<hr>
+<p><small>Pantheon &middot; Draconitic Labs &middot; https://github.com/draconitic-labs/pantheon</small></p>
+</body>
+</html>

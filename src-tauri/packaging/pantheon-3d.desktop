@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Pantheon 3D
+GenericName=Universe Explorer
+Comment=Free-flight universe explorer in a native window
+Exec={{exec}}
+Icon={{icon}}
+Terminal=false
+Categories=Science;Astronomy;
+Keywords=universe;space;planets;stars;galaxy;3d;
+StartupWMClass={{exec}}

@@ -8,6 +8,8 @@ edition = "2021"
 rust-version = "1.90"
 description = "Pantheon 3D: the free-flight universe explorer in a native Tauri window"
 license = "MIT"
+# the Maintainer field of the .deb
+authors = ["Draconitic Labs <support@draconitic.com>"]
 
 [workspace]
 

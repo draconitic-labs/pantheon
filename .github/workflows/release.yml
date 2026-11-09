@@ -1,0 +1,249 @@
+name: Release
+
+# A tag run builds every package, runs each one from where it was unpacked or installed,
+# and then creates a draft release with the files and SHA256SUMS. A manual run does the
+# same and stops at workflow artifacts.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: Linux archive (pantheon, pantheon-cli)
+    # 22.04, so the binaries run on older glibc than the current runner's
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libwayland-dev libxkbcommon-dev \
+            libx11-dev libxcursor-dev libxi-dev libxrandr-dev mesa-vulkan-drivers
+
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Check the tag names this version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          test "$GITHUB_REF_NAME" = "v$version"
+
+      - name: Build
+        run: cargo build --release --locked --bin pantheon --bin pantheon-cli
+
+      - name: Write the third-party licence file
+        run: |
+          cargo install cargo-about --version 0.9.2 --locked
+          cargo about generate --locked --fail --target x86_64-unknown-linux-gnu \
+            -c packaging/about.toml -o "$RUNNER_TEMP/THIRD-PARTY-LICENSES.html" packaging/about.hbs
+
+      - name: Assemble the archive
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          name="pantheon-$version-linux-x86_64"
+          stage="$RUNNER_TEMP/stage/$name"
+          mkdir -p "$stage/tools" "$stage/scripts" dist
+          install -m 755 target/release/pantheon target/release/pantheon-cli "$stage/"
+          cp -r assets "$stage/assets"
+          install -m 755 tools/fetch_data.py "$stage/tools/"
+          install -m 755 scripts/install-desktop.sh "$stage/scripts/"
+          cp LICENSE NOTICE README.md "$RUNNER_TEMP/THIRD-PARTY-LICENSES.html" "$stage/"
+          tar -C "$RUNNER_TEMP/stage" -czf "dist/$name.tar.gz" "$name"
+          tar -tzvf "dist/$name.tar.gz" | grep -v '/assets/'
+          echo "NAME=$name" >> "$GITHUB_ENV"
+
+      # The CI runner has no GPU, so the check renders on lavapipe, as ci.yml does.
+      - name: Run the unpacked archive from an empty folder
+        run: |
+          check="$RUNNER_TEMP/check"
+          mkdir "$check"
+          cd "$check"
+          tar -xzf "$GITHUB_WORKSPACE/dist/$NAME.tar.gz"
+          app="$check/$NAME"
+          "$app/pantheon-cli" --version
+          "$app/pantheon" --doctor | tee doctor.txt
+          grep '^gpu:' doctor.txt
+          grep -Fx "assets:   root = $app/assets" doctor.txt
+          "$app/pantheon" --shot earth --size 640x360 --out "$check/shots"
+          test -s "$check/shots/earth.png"
+          python3 "$app/tools/fetch_data.py" --list | tee fetch-list.txt | head -1
+          grep -Fx "data folder: $app/assets/data" fetch-list.txt
+          # the menu installer writes entries that run the unpacked binaries
+          HOME="$check/home" "$app/scripts/install-desktop.sh"
+          grep -Fx "Exec=\"$app/pantheon\"" "$check/home/.local/share/applications/pantheon.desktop"
+          HOME="$check/home" "$app/scripts/install-desktop.sh" --uninstall
+          test ! -e "$check/home/.local/share/applications/pantheon.desktop"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: package-linux
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  pantheon-3d:
+    name: Pantheon 3D packages (.deb, .rpm)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The window links WebKitGTK; the backend it embeds links the atlas's libraries
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev librsvg2-dev libasound2-dev libwayland-dev \
+            libxkbcommon-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev rpm xvfb
+
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Write the third-party licence file
+        run: |
+          cargo install cargo-about --version 0.9.2 --locked
+          cargo about generate --locked --fail --target x86_64-unknown-linux-gnu \
+            --manifest-path src-tauri/Cargo.toml -c packaging/about.toml \
+            -o src-tauri/THIRD-PARTY-LICENSES.html packaging/about.hbs
+
+      - name: Build the packages
+        working-directory: src-tauri
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target-3d
+        run: npx --yes @tauri-apps/cli@2.12.4 build --ci --config tauri.packages.json -- --locked
+
+      - name: Show what the packages hold
+        run: |
+          mkdir -p dist
+          cp target-3d/release/bundle/deb/*.deb target-3d/release/bundle/rpm/*.rpm dist/
+          ls -l dist
+          objdump -p target-3d/release/pantheon-3d | grep NEEDED
+          for deb in dist/*.deb; do dpkg-deb -I "$deb"; dpkg-deb -c "$deb" | grep -v '/assets/data/'; done
+          for rpm in dist/*.rpm; do rpm -qip "$rpm"; rpm -qpR "$rpm"; done
+
+      - name: Install the .deb and run Pantheon 3D from it
+        run: |
+          sudo apt-get install -y ./dist/*.deb
+          cd "$RUNNER_TEMP"
+          python3 /usr/share/pantheon/tools/fetch_data.py --list | head -1 | tee fetch-list.txt
+          grep -Fx "data folder: $HOME/.local/share/pantheon/assets/data" fetch-list.txt
+          "$GITHUB_WORKSPACE/packaging/check-pantheon-3d.sh" "$RUNNER_TEMP/check-deb"
+
+      - name: Install the .rpm on Fedora and run Pantheon 3D from it
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/src:ro" -v "$RUNNER_TEMP:/out" fedora:44 bash -euxc '
+            dnf install -y /src/dist/*.rpm xorg-x11-server-Xvfb xorg-x11-xauth mesa-dri-drivers \
+              curl python3 procps-ng which
+            export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
+            /src/packaging/check-pantheon-3d.sh /out/check-rpm
+          '
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: package-3d
+          path: |
+            dist/*.deb
+            dist/*.rpm
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: check-3d-window
+          path: |
+            ${{ runner.temp }}/check-deb
+            ${{ runner.temp }}/check-rpm
+
+  windows:
+    name: Windows archive (trial)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Build
+        run: cargo build --release --locked --bin pantheon --bin pantheon-cli
+
+      - name: Write the third-party licence file
+        run: |
+          cargo install cargo-about --version 0.9.2 --locked
+          cargo about generate --locked --fail --target x86_64-pc-windows-msvc \
+            -c packaging/about.toml -o "$RUNNER_TEMP/THIRD-PARTY-LICENSES.html" packaging/about.hbs
+
+      - name: Assemble the archive
+        run: |
+          tmp=$(cygpath -u "$RUNNER_TEMP")
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          name="pantheon-$version-windows-x86_64"
+          stage="$tmp/stage/$name"
+          mkdir -p "$stage/tools" dist
+          cp target/release/pantheon.exe target/release/pantheon-cli.exe "$stage/"
+          cp -r assets "$stage/assets"
+          cp tools/fetch_data.py "$stage/tools/"
+          cp LICENSE NOTICE README.md "$tmp/THIRD-PARTY-LICENSES.html" "$stage/"
+          (cd "$tmp/stage" && 7z a -tzip "$OLDPWD/dist/$name.zip" "$name" >/dev/null)
+          echo "NAME=$name" >> "$GITHUB_ENV"
+
+      - name: Run the unpacked archive from an empty folder
+        run: |
+          zip="$PWD/dist/$NAME.zip"
+          check="$(cygpath -u "$RUNNER_TEMP")/check"
+          mkdir "$check"
+          cd "$check"
+          7z x "$zip" >/dev/null
+          app="$check/$NAME"
+          "$app/pantheon-cli.exe" --version
+          "$app/pantheon-cli.exe" --doctor | tee doctor.txt
+          grep '^gpu:' doctor.txt
+          "$app/pantheon-cli.exe" --shot earth --size 640x360 --out "$check/shots"
+          test -s "$check/shots/earth.png"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: package-windows
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Draft release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, pantheon-3d, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: package-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft \
+            --title "$GITHUB_REF_NAME" --notes "Pantheon $GITHUB_REF_NAME. README.md says how to run each package." \
+            -- *

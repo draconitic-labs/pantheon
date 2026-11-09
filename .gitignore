@@ -9,3 +9,4 @@
 /src-tauri/gen/
 *.part
 __pycache__/
+/src-tauri/THIRD-PARTY-LICENSES.html
