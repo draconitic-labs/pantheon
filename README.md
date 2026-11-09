@@ -16,6 +16,38 @@ real data exists, and says so on screen when it doesn't.
 | ![The nearest stars](docs/screenshots/stars.jpg) | ![The Milky Way](docs/screenshots/milkyway.jpg) |
 | ![The Local Group](docs/screenshots/localgroup.jpg) | ![The cosmic web](docs/screenshots/cosmic.jpg) |
 
+## Download
+
+Each release's files are on the [Releases page](https://github.com/draconitic-labs/pantheon/releases),
+with their checksums in `SHA256SUMS`. They are built on Ubuntu 22.04 for x86_64 Linux.
+
+**The atlas**, `pantheon-<version>-linux-x86_64.tar.gz`, holds `pantheon`, `pantheon-cli`, the
+catalogs and fonts, and `tools/fetch_data.py`. It needs a Vulkan driver. Unpack it anywhere
+and run it from there:
+
+```sh
+tar -xzf pantheon-0.2.0-linux-x86_64.tar.gz
+cd pantheon-0.2.0-linux-x86_64
+./pantheon                         # the atlas
+./pantheon-cli --doctor            # GPU, kernels, datasets
+tools/fetch_data.py --no-kernels   # planet maps and spacecraft tracks, into assets/data here
+scripts/install-desktop.sh         # a menu entry for this folder; --uninstall removes it
+```
+
+**Pantheon 3D**, `pantheon-3d_<version>_amd64.deb` and `pantheon-3d-<version>-1.x86_64.rpm`,
+installs the window with the catalogs in `/usr/share/pantheon`:
+
+```sh
+sudo apt install ./pantheon-3d_0.2.0_amd64.deb     # Debian, Ubuntu
+sudo dnf install ./pantheon-3d-0.2.0-1.x86_64.rpm  # Fedora
+pantheon-3d
+python3 /usr/share/pantheon/tools/fetch_data.py --no-kernels
+```
+
+From the package, `fetch_data.py` downloads into `~/.local/share/pantheon/assets`, which the
+window reads before the package's own folder. WebKit's data goes in
+`~/.local/share/pantheon/webview-data`.
+
 ## Run it on Linux
 
 You need Rust ([rustup](https://rustup.rs) installs the pinned toolchain by
@@ -173,8 +205,9 @@ cd src-tauri && CARGO_TARGET_DIR=../target-3d cargo build --release
 ```
 
 `scripts/install-desktop.sh` builds it too and adds its own menu entry. The window keeps
-its small data (the first-run flag, WebKit's cache) beside the binary, in the checkout. Your
-GPU driver's own shader caches under `~/.cache` are the driver's.
+its small data (the first-run flag, WebKit's cache) beside the binary, in the checkout, and
+an installed package keeps it in `~/.local/share/pantheon/webview-data`. Your GPU driver's
+own shader caches under `~/.cache` are the driver's.
 
 **Getting around.** Drag to swing around what you are looking at. Scroll to zoom: one
 wheel goes from the ground to the cosmic web, and scrolling back returns you to where you
