@@ -1,0 +1,33 @@
+name: Dependency security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 8 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RUSTUP_TOOLCHAIN: 1.96.1
+
+jobs:
+  audit:
+    name: RustSec audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the audit toolchain
+        run: rustup toolchain install 1.96.1 --profile minimal
+      - name: Install the locked advisory checker
+        run: cargo install cargo-audit --version 0.23.0 --locked
+      - name: Audit all shipped dependency graphs
+        run: |
+          cargo audit --file Cargo.lock
+          cargo audit --file src-tauri/Cargo.lock
